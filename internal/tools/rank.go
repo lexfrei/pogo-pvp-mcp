@@ -22,6 +22,11 @@ var ErrUnknownSpecies = errors.New("unknown species")
 // to a CP cap (great / ultra / master).
 var ErrUnknownLeague = errors.New("unknown league")
 
+// ErrInvalidCPCap is returned when RankParams.CPCap is negative. A
+// typo like cp_cap:-1500 must not silently fall back to the league
+// default — failing loud surfaces the mistake at the client.
+var ErrInvalidCPCap = errors.New("invalid cp_cap")
+
 // ErrGamemasterNotLoaded is returned when a handler runs before the
 // Manager has any data — typically a race at start-up before the first
 // Refresh completes.
@@ -196,9 +201,14 @@ func buildRankResult(inputs rankInputs) (RankResult, error) {
 	}, nil
 }
 
-// resolveCPCap returns the override if set, otherwise the league
-// default. Unknown leagues surface ErrUnknownLeague.
+// resolveCPCap returns the override if positive, otherwise the league
+// default. Negative overrides are rejected as ErrInvalidCPCap; unknown
+// leagues surface ErrUnknownLeague.
 func resolveCPCap(league string, override int) (int, error) {
+	if override < 0 {
+		return 0, fmt.Errorf("%w: %d", ErrInvalidCPCap, override)
+	}
+
 	if override > 0 {
 		return override, nil
 	}

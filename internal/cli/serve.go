@@ -114,16 +114,12 @@ func primeGamemaster(ctx context.Context, logger *slog.Logger, mgr *gamemaster.M
 }
 
 // runRefreshLoop polls the gamemaster on the configured cadence until
-// the context is cancelled.
+// the context is cancelled. The caller must have loaded a config that
+// passed Config.Validate — which enforces a strictly positive
+// RefreshInterval — so no "disabled" branch is needed here.
 func runRefreshLoop(
 	ctx context.Context, logger *slog.Logger, mgr *gamemaster.Manager, interval time.Duration,
 ) {
-	if interval <= 0 {
-		logger.Info("refresh loop disabled (non-positive interval)")
-
-		return
-	}
-
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 

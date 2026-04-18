@@ -124,6 +124,57 @@ func TestMatchupTool_UnknownFastMove(t *testing.T) {
 	}
 }
 
+func TestMatchupTool_FastMoveUsedAsCharged(t *testing.T) {
+	t.Parallel()
+
+	mgr := newManagerWithFixture(t, matchupFixtureGamemaster)
+	handler := tools.NewMatchupTool(mgr).Handler()
+
+	_, _, err := handler(t.Context(), nil, tools.MatchupParams{
+		Attacker: tools.Combatant{
+			Species:      "medicham",
+			IV:           [3]int{15, 15, 15},
+			Level:        40,
+			FastMove:     "COUNTER",
+			ChargedMoves: []string{"COUNTER"}, // COUNTER is a fast move
+		},
+		Defender: tools.Combatant{
+			Species:  "machamp",
+			IV:       [3]int{10, 10, 10},
+			Level:    30,
+			FastMove: "COUNTER",
+		},
+	})
+	if !errors.Is(err, tools.ErrMoveCategoryMismatch) {
+		t.Errorf("error = %v, want wrapping ErrMoveCategoryMismatch", err)
+	}
+}
+
+func TestMatchupTool_ChargedMoveUsedAsFast(t *testing.T) {
+	t.Parallel()
+
+	mgr := newManagerWithFixture(t, matchupFixtureGamemaster)
+	handler := tools.NewMatchupTool(mgr).Handler()
+
+	_, _, err := handler(t.Context(), nil, tools.MatchupParams{
+		Attacker: tools.Combatant{
+			Species:  "medicham",
+			IV:       [3]int{15, 15, 15},
+			Level:    40,
+			FastMove: "ICE_PUNCH", // ICE_PUNCH is a charged move
+		},
+		Defender: tools.Combatant{
+			Species:  "machamp",
+			IV:       [3]int{10, 10, 10},
+			Level:    30,
+			FastMove: "COUNTER",
+		},
+	})
+	if !errors.Is(err, tools.ErrMoveCategoryMismatch) {
+		t.Errorf("error = %v, want wrapping ErrMoveCategoryMismatch", err)
+	}
+}
+
 func TestMatchupTool_ShieldsCountedInResult(t *testing.T) {
 	t.Parallel()
 

@@ -158,6 +158,23 @@ func TestRankTool_NoGamemasterLoaded(t *testing.T) {
 	}
 }
 
+func TestRankTool_NegativeCPCapRejected(t *testing.T) {
+	t.Parallel()
+
+	mgr := newManagerWithFixture(t, rankFixtureGamemaster)
+	handler := tools.NewRankTool(mgr).Handler()
+
+	_, _, err := handler(t.Context(), nil, tools.RankParams{
+		Species: "medicham",
+		IV:      [3]int{15, 15, 15},
+		League:  "great",
+		CPCap:   -1500,
+	})
+	if !errors.Is(err, tools.ErrInvalidCPCap) {
+		t.Errorf("error = %v, want wrapping ErrInvalidCPCap", err)
+	}
+}
+
 func TestRankTool_CPCapOverride(t *testing.T) {
 	t.Parallel()
 

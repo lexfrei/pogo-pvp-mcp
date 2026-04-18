@@ -14,6 +14,12 @@ import (
 // is not present in the currently loaded gamemaster.
 var ErrUnknownMove = errors.New("unknown move")
 
+// ErrMoveCategoryMismatch is returned when a caller passes a charged
+// move id in the fast slot or vice versa. Silent acceptance would
+// surface as a non-fire charged move or a spurious "EnergyGain=0"
+// engine error downstream.
+var ErrMoveCategoryMismatch = errors.New("move category mismatch")
+
 // Combatant is the MCP-visible input shape for one fighter in a
 // matchup. Shields is not here — it's specified once per side at the
 // MatchupParams level so callers can sweep (0, 1, 2)×(0, 1, 2) outside
@@ -130,12 +136,24 @@ func buildEngineCombatant(
 		return pogopvp.Combatant{}, fmt.Errorf("%w: fast %q", ErrUnknownMove, spec.FastMove)
 	}
 
+	if fast.Category != pogopvp.MoveCategoryFast {
+		return pogopvp.Combatant{}, fmt.Errorf(
+			"%w: %q is a charged move, but was passed as fast_move",
+			ErrMoveCategoryMismatch, spec.FastMove)
+	}
+
 	charged := make([]pogopvp.Move, 0, len(spec.ChargedMoves))
 
-	for _, id := range spec.ChargedMoves {
-		move, moveOK := snapshot.Moves[id]
+	for _, moveID := range spec.ChargedMoves {
+		move, moveOK := snapshot.Moves[moveID]
 		if !moveOK {
-			return pogopvp.Combatant{}, fmt.Errorf("%w: charged %q", ErrUnknownMove, id)
+			return pogopvp.Combatant{}, fmt.Errorf("%w: charged %q", ErrUnknownMove, moveID)
+		}
+
+		if move.Category != pogopvp.MoveCategoryCharged {
+			return pogopvp.Combatant{}, fmt.Errorf(
+				"%w: %q is a fast move, but was passed in charged_moves",
+				ErrMoveCategoryMismatch, moveID)
 		}
 
 		charged = append(charged, move)
@@ -152,14 +170,17 @@ func buildEngineCombatant(
 }
 
 // winnerLabel maps the engine's integer winner code to the JSON-facing
-// label: "attacker" (0), "defender" (1), "tie" (simultaneous faint or
-// timeout).
+// label: "attacker" (0), "defender" (1), "tie" (simultaneous faint),
+// "timeout" (MaxTurns elapsed with both alive). Callers therefore can
+// distinguish an undecided match from a deterministic tie.
 func winnerLabel(code int) string {
 	switch code {
 	case 0:
 		return "attacker"
 	case 1:
 		return "defender"
+	case pogopvp.BattleTimeout:
+		return "timeout"
 	default:
 		return "tie"
 	}
