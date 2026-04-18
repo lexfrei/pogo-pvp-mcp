@@ -95,8 +95,14 @@ tool list. If a tool returns "gamemaster not loaded", run
 ## Container image
 
 A `Containerfile` ships in the repo root; tagged builds produce
-`ghcr.io/lexfrei/pogo-pvp-mcp:vX.Y.Z` (multi-arch linux/amd64 +
-linux/arm64, cosign-signed). Note: the image build depends on
+multi-arch (linux/amd64 + linux/arm64, cosign-signed) images at
+`ghcr.io/${GITHUB_REPOSITORY}:vX.Y.Z`. Until the GitHub repo is
+renamed from `pvpoke-mcp` to `pogo-pvp-mcp`, the effective image
+coordinate is `ghcr.io/lexfrei/pvpoke-mcp:vX.Y.Z`; after the rename
+it flips to `ghcr.io/lexfrei/pogo-pvp-mcp:vX.Y.Z` without any
+workflow change (the release workflow reads `${{ github.repository }}`).
+
+Note: the image build depends on
 `github.com/lexfrei/pogo-pvp-engine` being resolvable by `go mod
 download` — during the engine-sibling development window (while the
 `replace` directive in `go.mod` points at a local `../pogo-pvp-engine`

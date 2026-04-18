@@ -38,6 +38,14 @@ const serverName = "pogo-pvp-mcp"
 //nolint:gochecknoglobals // ldflags injection target, must be a var
 var serverVersion = "dev"
 
+// serverRevision carries the VCS revision (git sha) of the build.
+// Populated via -ldflags "-X
+// github.com/lexfrei/pogo-pvp-mcp/internal/cli.serverRevision=...";
+// the default "unknown" applies to tests and go-run invocations.
+//
+//nolint:gochecknoglobals // ldflags injection target, must be a var
+var serverRevision = "unknown"
+
 // refreshGrace is how long Run waits for the background refresh loop
 // to exit during shutdown before giving up and returning.
 const refreshGrace = 2 * time.Second
@@ -106,7 +114,9 @@ func runServe(parent context.Context, rt *Runtime) error {
 	debugDone := startDebugServer(ctx, rt, managers.Gamemaster)
 
 	rt.Logger.Info("starting stdio transport",
-		slog.String("transport", rt.Config.Server.Transport))
+		slog.String("transport", rt.Config.Server.Transport),
+		slog.String("version", serverVersion),
+		slog.String("revision", serverRevision))
 
 	err = server.Run(ctx, &mcp.StdioTransport{})
 
@@ -311,8 +321,9 @@ func rankingsCacheDir(gamemasterLocalPath string) string {
 // startDebugServer spins up the debug HTTP surface when the
 // configured port is non-zero. Returns a channel that closes once the
 // server has shut down (either cleanly after ctx cancellation or due
-// to a Serve error). Returns nil when the server is disabled so the
-// caller can skip its wait step.
+// to a Serve error — so a failed listen does not leak a goroutine
+// blocked on ctx.Done). Returns nil when the server is disabled so
+// the caller can skip its wait step.
 func startDebugServer(
 	ctx context.Context, rt *Runtime, mgr *gamemaster.Manager,
 ) <-chan struct{} {
@@ -327,10 +338,15 @@ func startDebugServer(
 		ReadHeaderTimeout: debugServerReadHeaderTimeout,
 	}
 
+	// serverDone signals that ListenAndServe has returned. The
+	// shutdown-watcher uses it to bail when the server died before
+	// ctx cancellation — otherwise the watcher would block on
+	// ctx.Done indefinitely, leaking a goroutine.
+	serverDone := make(chan struct{})
 	done := make(chan struct{})
 
 	go func() {
-		defer close(done)
+		defer close(serverDone)
 
 		rt.Logger.Info("starting debug HTTP server", slog.String("addr", addr))
 
@@ -341,20 +357,32 @@ func startDebugServer(
 		}
 	}()
 
-	//nolint:gosec // G118: shutdownDebugServer intentionally runs on a fresh ctx; see its doc
-	go shutdownDebugServer(ctx, rt, server)
+	go func() {
+		defer close(done)
+
+		watchAndShutdown(ctx, rt, server, serverDone)
+	}()
 
 	return done
 }
 
-// shutdownDebugServer blocks until the parent context is cancelled,
-// then runs http.Server.Shutdown on a fresh context so in-flight
-// requests can drain. The fresh context is intentional: the parent
-// is already cancelled, and Shutdown needs a live ctx.
+// watchAndShutdown blocks until either the parent context is
+// cancelled or ListenAndServe returns on its own, then runs
+// http.Server.Shutdown on a fresh context so in-flight requests can
+// drain. The serverDone channel guards against a goroutine leak: if
+// the listener fails immediately (e.g. EADDRINUSE), this function
+// still unblocks and closes cleanly without waiting for ctx.Done.
 //
 //nolint:contextcheck // fresh ctx is required; parent is already cancelled by the time we run
-func shutdownDebugServer(ctx context.Context, rt *Runtime, server *http.Server) {
-	<-ctx.Done()
+func watchAndShutdown(
+	ctx context.Context, rt *Runtime, server *http.Server, serverDone <-chan struct{},
+) {
+	select {
+	case <-ctx.Done():
+	case <-serverDone:
+		// Server exited on its own; still call Shutdown to release
+		// any resources it may have partially acquired.
+	}
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), debugServerShutdownGrace)
 	defer cancel()

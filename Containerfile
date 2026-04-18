@@ -28,7 +28,9 @@ RUN go mod download
 
 COPY . .
 RUN CGO_ENABLED=0 go build \
-    -ldflags "-s -w -X github.com/lexfrei/pogo-pvp-mcp/internal/cli.serverVersion=${VERSION} -X main.revision=${REVISION}" \
+    -ldflags "-s -w \
+        -X github.com/lexfrei/pogo-pvp-mcp/internal/cli.serverVersion=${VERSION} \
+        -X github.com/lexfrei/pogo-pvp-mcp/internal/cli.serverRevision=${REVISION}" \
     -trimpath \
     -o /build/pogo-pvp-mcp \
     ./cmd/pogo-pvp-mcp
@@ -38,6 +40,7 @@ FROM scratch
 COPY --from=builder /tmp/passwd /etc/passwd
 COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
 COPY --from=builder --chmod=555 /build/pogo-pvp-mcp /pogo-pvp-mcp
+COPY --from=builder /build/LICENSE /LICENSE
 COPY --from=builder --chown=65534:65534 /home/nobody/.cache /home/nobody/.cache
 
 ENV XDG_CACHE_HOME=/home/nobody/.cache
