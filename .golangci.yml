@@ -8,6 +8,10 @@ linters:
     - ireturn
     - wsl
   settings:
+    gomoddirectives:
+      replace-local: true
+      replace-allow-list:
+        - github.com/lexfrei/pogo-pvp-engine
     dupl:
       threshold: 100
     goconst:
