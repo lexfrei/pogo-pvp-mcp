@@ -1,7 +1,10 @@
-// Package cache implements a byte-capped least-recently-used (LRU) cache
-// used by the MCP server to memoise rank/matchup/meta computations. The
-// cache is goroutine-safe and sized in bytes rather than entries so it
-// respects the process-level memory budget from --cache-size.
+// Package cache implements a byte-capped least-recently-used (LRU)
+// cache intended to back the MCP tool handlers once memoisation is
+// wired in. The cache is goroutine-safe and sized in bytes rather than
+// entries so it can respect a process-level memory budget. It is
+// currently unused by the tool pipeline; exposing a --cache-size flag
+// or config knob is deferred until the handlers actually consult the
+// cache.
 package cache
 
 import (

@@ -90,7 +90,7 @@ func NewRankTool(manager *gamemaster.Manager) *RankTool {
 }
 
 // Tool returns the MCP tool registration metadata.
-func (rt *RankTool) Tool() *mcp.Tool {
+func (tool *RankTool) Tool() *mcp.Tool {
 	return &mcp.Tool{
 		Name:        "pvp_rank",
 		Description: "Rank a Pokémon with given IVs in a PvP league by computing CP, stat product, and percent-of-best for the species.",
@@ -98,19 +98,25 @@ func (rt *RankTool) Tool() *mcp.Tool {
 }
 
 // Handler returns the MCP-typed handler function.
-func (rt *RankTool) Handler() mcp.ToolHandlerFor[RankParams, RankResult] {
-	return rt.handle
+func (tool *RankTool) Handler() mcp.ToolHandlerFor[RankParams, RankResult] {
+	return tool.handle
 }
 
 // handle orchestrates the pvp_rank computation: validate inputs, find
 // the per-IV level-capped spread, and compare it to the species-global
-// optimum to report percent_of_best.
-func (rt *RankTool) handle(
-	_ context.Context,
+// optimum to report percent_of_best. Checks context cancellation on
+// entry and after the search so a client disconnect stops the worker.
+func (tool *RankTool) handle(
+	ctx context.Context,
 	_ *mcp.CallToolRequest,
 	params RankParams,
 ) (*mcp.CallToolResult, RankResult, error) {
-	inputs, err := resolveRankInputs(rt.manager, &params)
+	err := ctx.Err()
+	if err != nil {
+		return nil, RankResult{}, fmt.Errorf("rank cancelled: %w", err)
+	}
+
+	inputs, err := resolveRankInputs(tool.manager, &params)
 	if err != nil {
 		return nil, RankResult{}, err
 	}
@@ -118,6 +124,11 @@ func (rt *RankTool) handle(
 	result, err := buildRankResult(inputs)
 	if err != nil {
 		return nil, RankResult{}, err
+	}
+
+	err = ctx.Err()
+	if err != nil {
+		return nil, RankResult{}, fmt.Errorf("rank cancelled: %w", err)
 	}
 
 	return nil, result, nil

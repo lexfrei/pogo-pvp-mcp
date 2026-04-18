@@ -111,6 +111,26 @@ func TestNewRootCommand_NonexistentConfigFlag(t *testing.T) {
 	}
 }
 
+// TestNewRootCommand_ConfigEnvDefault exercises the POGO_PVP_CONFIG
+// fallback: the env var supplies the default for --config, so the
+// user does not have to repeat the flag on every invocation.
+func TestNewRootCommand_ConfigEnvDefault(t *testing.T) {
+	t.Setenv("POGO_PVP_CONFIG", "/definitely/not/here.yaml")
+
+	var stdout, stderr bytes.Buffer
+
+	root := cli.NewRootCommand(&stdout, &stderr)
+	root.SetArgs([]string{"fetch-gm"})
+
+	err := root.Execute()
+	if err == nil {
+		t.Fatal("expected error for nonexistent POGO_PVP_CONFIG path")
+	}
+	if !strings.Contains(err.Error(), "load config") {
+		t.Errorf("error = %v, want to contain 'load config' (env path should have been honoured)", err)
+	}
+}
+
 // TestNewRootCommand_HelpDoesNotRequireConfig verifies that invoking
 // --help does not trigger the PersistentPreRunE config load, so a
 // broken config file cannot prevent users from seeing usage.

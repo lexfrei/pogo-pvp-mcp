@@ -123,13 +123,25 @@ func (m *Manager) Refresh(ctx context.Context) error {
 // during the upstream fetch that produced the cache file is not
 // recovered here, so the next [Refresh] after a cold start re-fetches
 // the full body instead of issuing a conditional request.
+//
+// The parsed copy is NOT persisted back to disk — it was just read
+// from there. Refresh remains the only write path.
 func (m *Manager) LoadLocal() error {
 	body, err := os.ReadFile(m.localPath)
 	if err != nil {
 		return fmt.Errorf("read local %s: %w", m.localPath, err)
 	}
 
-	return m.applyPayload(body, "")
+	parsed, err := pogopvp.ParseGamemaster(bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("parse gamemaster: %w", err)
+	}
+
+	m.mu.Lock()
+	m.current = parsed
+	m.mu.Unlock()
+
+	return nil
 }
 
 // applyPayload parses the JSON, updates the current snapshot under the

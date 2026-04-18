@@ -60,22 +60,24 @@ func newServeCommand() *cobra.Command {
 	}
 }
 
-// runServe orchestrates the full serve pipeline: load/refresh
-// gamemaster, register tools, install signal handlers, and run the
-// stdio transport until it errors or is cancelled.
+// runServe orchestrates the full serve pipeline: install signal
+// handlers up-front, load/refresh gamemaster (with retries), register
+// tools, and run the stdio transport until it errors or is cancelled.
+// Signal handling is installed BEFORE primeGamemaster so a user can
+// Ctrl+C out of a slow/failing cold-start fetch.
 func runServe(parent context.Context, rt *Runtime) error {
+	ctx, stop := signal.NotifyContext(parent, syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
 	mgr, err := gamemaster.NewManager(rt.Config.Gamemaster)
 	if err != nil {
 		return fmt.Errorf("gamemaster manager: %w", err)
 	}
 
-	err = primeGamemaster(parent, rt.Logger, mgr)
+	err = primeGamemaster(ctx, rt.Logger, mgr)
 	if err != nil {
 		return fmt.Errorf("prime gamemaster: %w", err)
 	}
-
-	ctx, stop := signal.NotifyContext(parent, syscall.SIGINT, syscall.SIGTERM)
-	defer stop()
 
 	server := buildMCPServer(mgr)
 

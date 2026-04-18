@@ -67,7 +67,7 @@ const matchupToolDescription = "Simulate a 1v1 PvP matchup between two Pokémon 
 	"shields used, and charged-move firing counts."
 
 // Tool returns the MCP tool registration.
-func (mt *MatchupTool) Tool() *mcp.Tool {
+func (tool *MatchupTool) Tool() *mcp.Tool {
 	return &mcp.Tool{
 		Name:        "pvp_matchup",
 		Description: matchupToolDescription,
@@ -75,17 +75,24 @@ func (mt *MatchupTool) Tool() *mcp.Tool {
 }
 
 // Handler returns the MCP-typed handler function.
-func (mt *MatchupTool) Handler() mcp.ToolHandlerFor[MatchupParams, MatchupResult] {
-	return mt.handle
+func (tool *MatchupTool) Handler() mcp.ToolHandlerFor[MatchupParams, MatchupResult] {
+	return tool.handle
 }
 
-// handle orchestrates the pvp_matchup simulation.
-func (mt *MatchupTool) handle(
-	_ context.Context,
+// handle orchestrates the pvp_matchup simulation. Honours context
+// cancellation on entry and after the engine Simulate returns so a
+// client disconnect releases the worker promptly.
+func (tool *MatchupTool) handle(
+	ctx context.Context,
 	_ *mcp.CallToolRequest,
 	params MatchupParams,
 ) (*mcp.CallToolResult, MatchupResult, error) {
-	snapshot := mt.manager.Current()
+	err := ctx.Err()
+	if err != nil {
+		return nil, MatchupResult{}, fmt.Errorf("matchup cancelled: %w", err)
+	}
+
+	snapshot := tool.manager.Current()
 	if snapshot == nil {
 		return nil, MatchupResult{}, ErrGamemasterNotLoaded
 	}
