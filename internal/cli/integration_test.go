@@ -81,6 +81,9 @@ func buildWiredServer(t *testing.T) *mcp.Server {
 	matchupTool := tools.NewMatchupTool(mgr)
 	mcp.AddTool(mcpServer, matchupTool.Tool(), matchupTool.Handler())
 
+	cpLimitsTool := tools.NewCPLimitsTool(mgr)
+	mcp.AddTool(mcpServer, cpLimitsTool.Tool(), cpLimitsTool.Handler())
+
 	metaTool := tools.NewMetaTool(ranks)
 	mcp.AddTool(mcpServer, metaTool.Tool(), metaTool.Handler())
 
@@ -132,6 +135,7 @@ func TestIntegration_ListTools(t *testing.T) {
 	expected := []string{
 		"pvp_rank",
 		"pvp_matchup",
+		"pvp_cp_limits",
 		"pvp_meta",
 		"pvp_team_analysis",
 		"pvp_team_builder",
