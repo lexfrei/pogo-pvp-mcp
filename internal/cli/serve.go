@@ -6,14 +6,23 @@ import (
 	"fmt"
 	"log/slog"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
 	"github.com/lexfrei/pogo-pvp-mcp/internal/gamemaster"
+	"github.com/lexfrei/pogo-pvp-mcp/internal/rankings"
 	"github.com/lexfrei/pogo-pvp-mcp/internal/tools"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/spf13/cobra"
 )
+
+// defaultRankingsBaseURL is the pvpoke rankings-folder root on GitHub.
+const defaultRankingsBaseURL = "https://raw.githubusercontent.com/pvpoke/pvpoke/master/src/data/rankings"
+
+// rankingsSubdir is the per-process cache subdirectory for the
+// rankings manager, sibling to the gamemaster cache file.
+const rankingsSubdir = "rankings"
 
 // serverName is what the server advertises to MCP clients.
 const serverName = "pogo-pvp-mcp"
@@ -74,12 +83,20 @@ func runServe(parent context.Context, rt *Runtime) error {
 		return fmt.Errorf("gamemaster manager: %w", err)
 	}
 
+	ranks, err := buildRankingsManager(rankings.Config{
+		BaseURL:  defaultRankingsBaseURL,
+		LocalDir: rankingsCacheDir(rt.Config.Gamemaster.LocalPath),
+	})
+	if err != nil {
+		return err
+	}
+
 	err = primeGamemaster(ctx, rt.Logger, mgr)
 	if err != nil {
 		return fmt.Errorf("prime gamemaster: %w", err)
 	}
 
-	server := buildMCPServer(mgr)
+	server := buildMCPServer(mgr, ranks)
 
 	refreshDone := make(chan struct{})
 
@@ -192,19 +209,46 @@ func runRefreshLoop(
 	}
 }
 
-// buildMCPServer constructs the mcp.Server with the two Phase 3 tools
-// (pvp_rank and pvp_matchup) registered.
-func buildMCPServer(mgr *gamemaster.Manager) *mcp.Server {
+// buildMCPServer constructs the mcp.Server with all five currently
+// implemented tools registered (pvp_rank, pvp_matchup, pvp_meta,
+// pvp_team_analysis, pvp_team_builder).
+func buildMCPServer(gamemasterMgr *gamemaster.Manager, ranks *rankings.Manager) *mcp.Server {
 	server := mcp.NewServer(&mcp.Implementation{
 		Name:    serverName,
 		Version: serverVersion,
 	}, nil)
 
-	rankTool := tools.NewRankTool(mgr)
+	rankTool := tools.NewRankTool(gamemasterMgr)
 	mcp.AddTool(server, rankTool.Tool(), rankTool.Handler())
 
-	matchupTool := tools.NewMatchupTool(mgr)
+	matchupTool := tools.NewMatchupTool(gamemasterMgr)
 	mcp.AddTool(server, matchupTool.Tool(), matchupTool.Handler())
 
+	metaTool := tools.NewMetaTool(ranks)
+	mcp.AddTool(server, metaTool.Tool(), metaTool.Handler())
+
+	teamAnalysisTool := tools.NewTeamAnalysisTool(gamemasterMgr, ranks)
+	mcp.AddTool(server, teamAnalysisTool.Tool(), teamAnalysisTool.Handler())
+
+	teamBuilderTool := tools.NewTeamBuilderTool(gamemasterMgr, ranks)
+	mcp.AddTool(server, teamBuilderTool.Tool(), teamBuilderTool.Handler())
+
 	return server
+}
+
+// buildRankingsManager constructs the shared rankings manager using
+// the configured cache directory (sibling to gamemaster cache).
+func buildRankingsManager(cfg rankings.Config) (*rankings.Manager, error) {
+	manager, err := rankings.NewManager(cfg)
+	if err != nil {
+		return nil, fmt.Errorf("rankings manager: %w", err)
+	}
+
+	return manager, nil
+}
+
+// rankingsCacheDir derives the per-process rankings cache directory
+// from the gamemaster.local_path — both caches share a parent.
+func rankingsCacheDir(gamemasterLocalPath string) string {
+	return filepath.Join(filepath.Dir(gamemasterLocalPath), rankingsSubdir)
 }

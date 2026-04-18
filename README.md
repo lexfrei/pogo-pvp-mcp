@@ -4,15 +4,22 @@ MCP server that will expose a Pokémon GO PvP battle simulator and ranker to
 LLM assistants. The simulation math will live in a companion engine module
 developed alongside this server.
 
-**Status**: early development. Two tools are implemented:
+**Status**: early development. Five tools are implemented:
 
 - `pvp_rank` — rank one Pokémon in a league/cup by IV and level, with
   percent-of-best vs the species' global stat-product optimum.
 - `pvp_matchup` — 1v1 simulation returning winner, turns, HP / energy /
   shields used, and charged-move firing counts.
+- `pvp_meta` — top-N species from pvpoke's overall rankings for a
+  league, including recommended moveset and display stats.
+- `pvp_team_analysis` — evaluate a 3-member team against the sampled
+  meta: per-member battle ratings, hard wins / losses, coverage
+  matrix, and uncovered threats.
+- `pvp_team_builder` — enumerate 3-member teams from a candidate pool,
+  score each against the meta, return the highest-scoring subset
+  (required / banned species filters honoured).
 
-`pvp_team_analysis`, `pvp_team_builder`, and `pvp_meta` are still
-planned. No tagged release exists yet. The GitHub repository rename
+No tagged release exists yet. The GitHub repository rename
 from `pvpoke-mcp` to `pogo-pvp-mcp` is pending, so
 `go install github.com/lexfrei/pogo-pvp-mcp/cmd/pogo-pvp-mcp@latest`
 does not yet resolve.
@@ -39,8 +46,16 @@ and the `POGO_PVP_*` environment prefix. `POGO_PVP_CONFIG` is honoured
 as the default for `--config`, so you can set it once in your shell
 instead of repeating the flag. There is no XDG or standard-path config
 lookup — either `--config`, `POGO_PVP_CONFIG`, or env overrides +
-hard-coded defaults. The gamemaster is cached under
-`$XDG_CACHE_HOME/pogo-pvp-mcp/gamemaster.json` by default.
+hard-coded defaults.
+
+Two filesystem caches live alongside each other by default:
+
+- `$XDG_CACHE_HOME/pogo-pvp-mcp/gamemaster.json` — the upstream
+  pvpoke gamemaster, refreshed every 24h or forced via `fetch-gm`.
+- `$XDG_CACHE_HOME/pogo-pvp-mcp/rankings/rankings-{500,1500,2500,10000}.json` —
+  per-league pvpoke rankings, fetched lazily the first time a meta-
+  driven tool (`pvp_meta`, `pvp_team_analysis`, `pvp_team_builder`)
+  touches that cap.
 
 ## Disclaimer
 
@@ -53,11 +68,12 @@ CPM values) fetched from the open-source [PvPoke][pvpoke] project (MIT
 licensed). No artwork, sprites, or audio is distributed. Pokémon are
 identified by string id only.
 
-## Planned tools
+## Roadmap
 
-- `pvp_team_analysis` — evaluate a 3-member team against the meta.
-- `pvp_team_builder` — Pareto-frontier team selection from a candidate pool.
-- `pvp_meta` — current meta for a given format.
+- Full battle-simulation-based ranker (engine-side) so `pvp_meta`
+  stops depending on pre-computed pvpoke JSONs.
+- CMP / shadow scaling in the battle engine.
+- Parallel `pvp_team_builder` worker pool for large pools.
 
 ## License
 

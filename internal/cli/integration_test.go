@@ -9,6 +9,7 @@ import (
 
 	"github.com/lexfrei/pogo-pvp-mcp/internal/config"
 	"github.com/lexfrei/pogo-pvp-mcp/internal/gamemaster"
+	"github.com/lexfrei/pogo-pvp-mcp/internal/rankings"
 	"github.com/lexfrei/pogo-pvp-mcp/internal/tools"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -34,19 +35,19 @@ const integrationFixtureGamemaster = `{
   ]
 }`
 
-// buildWiredServer stands up a fully-wired MCP server with the two
-// Phase 3 tools registered and a pre-populated gamemaster manager.
+// buildWiredServer stands up a fully-wired MCP server with all five
+// currently implemented tools registered and pre-populated managers.
 func buildWiredServer(t *testing.T) *mcp.Server {
 	t.Helper()
 
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	gmServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(integrationFixtureGamemaster))
 	}))
-	t.Cleanup(server.Close)
+	t.Cleanup(gmServer.Close)
 
 	mgr, err := gamemaster.NewManager(config.GamemasterConfig{
-		Source:    server.URL,
+		Source:    gmServer.URL,
 		LocalPath: filepath.Join(t.TempDir(), "gm.json"),
 	})
 	if err != nil {
@@ -58,6 +59,20 @@ func buildWiredServer(t *testing.T) *mcp.Server {
 		t.Fatalf("Refresh: %v", err)
 	}
 
+	rankingsServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte("[]"))
+	}))
+	t.Cleanup(rankingsServer.Close)
+
+	ranks, err := rankings.NewManager(rankings.Config{
+		BaseURL:  rankingsServer.URL,
+		LocalDir: filepath.Join(t.TempDir(), "rankings"),
+	})
+	if err != nil {
+		t.Fatalf("NewManager rankings: %v", err)
+	}
+
 	mcpServer := mcp.NewServer(&mcp.Implementation{Name: "pogo-pvp-mcp-test", Version: "test"}, nil)
 
 	rankTool := tools.NewRankTool(mgr)
@@ -66,11 +81,22 @@ func buildWiredServer(t *testing.T) *mcp.Server {
 	matchupTool := tools.NewMatchupTool(mgr)
 	mcp.AddTool(mcpServer, matchupTool.Tool(), matchupTool.Handler())
 
+	metaTool := tools.NewMetaTool(ranks)
+	mcp.AddTool(mcpServer, metaTool.Tool(), metaTool.Handler())
+
+	teamAnalysisTool := tools.NewTeamAnalysisTool(mgr, ranks)
+	mcp.AddTool(mcpServer, teamAnalysisTool.Tool(), teamAnalysisTool.Handler())
+
+	teamBuilderTool := tools.NewTeamBuilderTool(mgr, ranks)
+	mcp.AddTool(mcpServer, teamBuilderTool.Tool(), teamBuilderTool.Handler())
+
 	return mcpServer
 }
 
 // TestIntegration_ListTools verifies that a client connected via the
-// in-memory transport sees both Phase 3 tools advertised.
+// in-memory transport sees all five currently implemented tools
+// advertised. Guards against a silent drop of a registered tool from
+// buildMCPServer.
 func TestIntegration_ListTools(t *testing.T) {
 	t.Parallel()
 
@@ -103,11 +129,18 @@ func TestIntegration_ListTools(t *testing.T) {
 		names[tool.Name] = true
 	}
 
-	if !names["pvp_rank"] {
-		t.Error("pvp_rank missing from ListTools")
+	expected := []string{
+		"pvp_rank",
+		"pvp_matchup",
+		"pvp_meta",
+		"pvp_team_analysis",
+		"pvp_team_builder",
 	}
-	if !names["pvp_matchup"] {
-		t.Error("pvp_matchup missing from ListTools")
+
+	for _, name := range expected {
+		if !names[name] {
+			t.Errorf("%s missing from ListTools", name)
+		}
 	}
 }
 

@@ -1,6 +1,7 @@
-// Package tools implements the MCP tool handlers (pvp_rank,
-// pvp_matchup, …) on top of the engine primitives. Each handler is a
-// pure function of its params plus the Manager's current gamemaster.
+// Package tools implements the MCP tool handlers exposed by the
+// server: pvp_rank, pvp_matchup, pvp_meta, pvp_team_analysis, and
+// pvp_team_builder. Each handler is a pure function of its params
+// plus the state pulled from gamemaster.Manager and rankings.Manager.
 package tools
 
 import (
@@ -32,9 +33,10 @@ var ErrInvalidCPCap = errors.New("invalid cp_cap")
 // Refresh completes.
 var ErrGamemasterNotLoaded = errors.New("gamemaster not loaded")
 
-// Canonical CP caps for the three standard leagues. Overrides from
+// Canonical CP caps for the four standard leagues. Overrides from
 // RankParams.CPCap take priority.
 const (
+	littleLeagueCap = 500
 	greatLeagueCap  = 1500
 	ultraLeagueCap  = 2500
 	masterLeagueCap = 10000
@@ -45,6 +47,7 @@ const (
 //
 //nolint:gochecknoglobals // domain-constant lookup table
 var LeagueCP = map[string]int{
+	"little": littleLeagueCap,
 	"great":  greatLeagueCap,
 	"ultra":  ultraLeagueCap,
 	"master": masterLeagueCap,
@@ -59,7 +62,7 @@ var LeagueCP = map[string]int{
 type RankParams struct {
 	Species string `json:"species" jsonschema:"species id in the pvpoke gamemaster (e.g. \"medicham\")"`
 	IV      [3]int `json:"iv" jsonschema:"individual values in [atk, def, sta] order, each 0..15"`
-	League  string `json:"league" jsonschema:"great|ultra|master"`
+	League  string `json:"league" jsonschema:"little|great|ultra|master"`
 	CPCap   int    `json:"cp_cap,omitempty" jsonschema:"overrides the league default CP cap"`
 	XL      bool   `json:"xl,omitempty" jsonschema:"allow XL candy levels above 40"`
 }
