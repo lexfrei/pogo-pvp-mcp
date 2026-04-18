@@ -5,11 +5,15 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
+	"net/http"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"syscall"
 	"time"
 
+	"github.com/lexfrei/pogo-pvp-mcp/internal/debug"
 	"github.com/lexfrei/pogo-pvp-mcp/internal/gamemaster"
 	"github.com/lexfrei/pogo-pvp-mcp/internal/rankings"
 	"github.com/lexfrei/pogo-pvp-mcp/internal/tools"
@@ -34,9 +38,26 @@ const serverName = "pogo-pvp-mcp"
 //nolint:gochecknoglobals // ldflags injection target, must be a var
 var serverVersion = "dev"
 
+// serverRevision carries the VCS revision (git sha) of the build.
+// Populated via -ldflags "-X
+// github.com/lexfrei/pogo-pvp-mcp/internal/cli.serverRevision=...";
+// the default "unknown" applies to tests and go-run invocations.
+//
+//nolint:gochecknoglobals // ldflags injection target, must be a var
+var serverRevision = "unknown"
+
 // refreshGrace is how long Run waits for the background refresh loop
 // to exit during shutdown before giving up and returning.
 const refreshGrace = 2 * time.Second
+
+// debugServerShutdownGrace is the window the HTTP debug server gets
+// to finish in-flight requests after the main context is cancelled.
+const debugServerShutdownGrace = 5 * time.Second
+
+// debugServerReadHeaderTimeout is the read-header deadline for the
+// debug HTTP server; keeps pathological clients from tying up a
+// handler goroutine.
+const debugServerReadHeaderTimeout = 10 * time.Second
 
 // bootstrapRetries is how many times primeGamemaster retries the
 // upstream fetch during cold start before giving up and returning an
@@ -78,9 +99,51 @@ func runServe(parent context.Context, rt *Runtime) error {
 	ctx, stop := signal.NotifyContext(parent, syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
+	managers, err := buildManagers(rt)
+	if err != nil {
+		return err
+	}
+
+	err = primeGamemaster(ctx, rt.Logger, managers.Gamemaster)
+	if err != nil {
+		return fmt.Errorf("prime gamemaster: %w", err)
+	}
+
+	server := buildMCPServer(managers.Gamemaster, managers.Rankings)
+	refreshDone := startRefreshLoop(ctx, rt, managers.Gamemaster)
+	debugDone := startDebugServer(ctx, rt, managers.Gamemaster)
+
+	rt.Logger.Info("starting stdio transport",
+		slog.String("transport", rt.Config.Server.Transport),
+		slog.String("version", serverVersion),
+		slog.String("revision", serverRevision))
+
+	err = server.Run(ctx, &mcp.StdioTransport{})
+
+	stop()
+	waitForBackgroundShutdown(rt, refreshDone, debugDone)
+
+	if err != nil {
+		return fmt.Errorf("mcp transport: %w", err)
+	}
+
+	return nil
+}
+
+// managerBundle groups the gamemaster and rankings managers so
+// buildManagers can return them through a single typed value.
+type managerBundle struct {
+	Gamemaster *gamemaster.Manager
+	Rankings   *rankings.Manager
+}
+
+// buildManagers constructs the gamemaster + rankings managers from
+// the runtime config, placing the rankings cache next to the
+// gamemaster cache so they share a parent directory.
+func buildManagers(rt *Runtime) (*managerBundle, error) {
 	mgr, err := gamemaster.NewManager(rt.Config.Gamemaster)
 	if err != nil {
-		return fmt.Errorf("gamemaster manager: %w", err)
+		return nil, fmt.Errorf("gamemaster manager: %w", err)
 	}
 
 	ranks, err := buildRankingsManager(rankings.Config{
@@ -88,42 +151,45 @@ func runServe(parent context.Context, rt *Runtime) error {
 		LocalDir: rankingsCacheDir(rt.Config.Gamemaster.LocalPath),
 	})
 	if err != nil {
-		return err
+		return nil, err
 	}
 
-	err = primeGamemaster(ctx, rt.Logger, mgr)
-	if err != nil {
-		return fmt.Errorf("prime gamemaster: %w", err)
-	}
+	return &managerBundle{Gamemaster: mgr, Rankings: ranks}, nil
+}
 
-	server := buildMCPServer(mgr, ranks)
-
-	refreshDone := make(chan struct{})
+// startRefreshLoop launches the periodic gamemaster refresh goroutine
+// and returns a channel that closes when the loop exits.
+func startRefreshLoop(ctx context.Context, rt *Runtime, mgr *gamemaster.Manager) <-chan struct{} {
+	done := make(chan struct{})
 
 	go func() {
-		defer close(refreshDone)
+		defer close(done)
 
 		runRefreshLoop(ctx, rt.Logger, mgr, rt.Config.Gamemaster.RefreshInterval)
 	}()
 
-	rt.Logger.Info("starting stdio transport",
-		slog.String("transport", rt.Config.Server.Transport))
+	return done
+}
 
-	err = server.Run(ctx, &mcp.StdioTransport{})
-
-	stop()
-
+// waitForBackgroundShutdown blocks until the refresh loop and the
+// optional debug HTTP server have exited, each under its own grace
+// window, and warns when either misses its deadline.
+func waitForBackgroundShutdown(rt *Runtime, refreshDone, debugDone <-chan struct{}) {
 	select {
 	case <-refreshDone:
 	case <-time.After(refreshGrace):
 		rt.Logger.Warn("refresh loop did not exit within grace window")
 	}
 
-	if err != nil {
-		return fmt.Errorf("mcp transport: %w", err)
+	if debugDone == nil {
+		return
 	}
 
-	return nil
+	select {
+	case <-debugDone:
+	case <-time.After(debugServerShutdownGrace):
+		rt.Logger.Warn("debug HTTP server did not exit within grace window")
+	}
 }
 
 // primeGamemaster tries the local cache first (fast, no network) and
@@ -251,4 +317,80 @@ func buildRankingsManager(cfg rankings.Config) (*rankings.Manager, error) {
 // from the gamemaster.local_path — both caches share a parent.
 func rankingsCacheDir(gamemasterLocalPath string) string {
 	return filepath.Join(filepath.Dir(gamemasterLocalPath), rankingsSubdir)
+}
+
+// startDebugServer spins up the debug HTTP surface when the
+// configured port is non-zero. Returns a channel that closes once the
+// server has shut down (either cleanly after ctx cancellation or due
+// to a Serve error — so a failed listen does not leak a goroutine
+// blocked on ctx.Done). Returns nil when the server is disabled so
+// the caller can skip its wait step.
+func startDebugServer(
+	ctx context.Context, rt *Runtime, mgr *gamemaster.Manager,
+) <-chan struct{} {
+	if rt.Config.Server.HTTPPort == 0 {
+		return nil
+	}
+
+	addr := net.JoinHostPort(rt.Config.Server.HTTPHost, strconv.Itoa(rt.Config.Server.HTTPPort))
+	server := &http.Server{
+		Addr:              addr,
+		Handler:           debug.NewHandler(mgr),
+		ReadHeaderTimeout: debugServerReadHeaderTimeout,
+	}
+
+	// serverDone signals that ListenAndServe has returned. The
+	// shutdown-watcher uses it to bail when the server died before
+	// ctx cancellation — otherwise the watcher would block on
+	// ctx.Done indefinitely, leaking a goroutine.
+	serverDone := make(chan struct{})
+	done := make(chan struct{})
+
+	go func() {
+		defer close(serverDone)
+
+		rt.Logger.Info("starting debug HTTP server", slog.String("addr", addr))
+
+		err := server.ListenAndServe()
+		if err != nil && !errors.Is(err, http.ErrServerClosed) {
+			rt.Logger.Error("debug HTTP server failed",
+				slog.String("error", err.Error()))
+		}
+	}()
+
+	go func() {
+		defer close(done)
+
+		watchAndShutdown(ctx, rt, server, serverDone)
+	}()
+
+	return done
+}
+
+// watchAndShutdown blocks until either the parent context is
+// cancelled or ListenAndServe returns on its own, then runs
+// http.Server.Shutdown on a fresh context so in-flight requests can
+// drain. The serverDone channel guards against a goroutine leak: if
+// the listener fails immediately (e.g. EADDRINUSE), this function
+// still unblocks and closes cleanly without waiting for ctx.Done.
+//
+//nolint:contextcheck // fresh ctx is required; parent is already cancelled by the time we run
+func watchAndShutdown(
+	ctx context.Context, rt *Runtime, server *http.Server, serverDone <-chan struct{},
+) {
+	select {
+	case <-ctx.Done():
+	case <-serverDone:
+		// Server exited on its own; still call Shutdown to release
+		// any resources it may have partially acquired.
+	}
+
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), debugServerShutdownGrace)
+	defer cancel()
+
+	err := server.Shutdown(shutdownCtx)
+	if err != nil {
+		rt.Logger.Warn("debug HTTP server shutdown error",
+			slog.String("error", err.Error()))
+	}
 }
