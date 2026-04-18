@@ -62,7 +62,7 @@ var LeagueCP = map[string]int{
 type RankParams struct {
 	Species string `json:"species" jsonschema:"species id in the pvpoke gamemaster (e.g. \"medicham\")"`
 	IV      [3]int `json:"iv" jsonschema:"individual values in [atk, def, sta] order, each 0..15"`
-	League  string `json:"league" jsonschema:"great|ultra|master"`
+	League  string `json:"league" jsonschema:"little|great|ultra|master"`
 	CPCap   int    `json:"cp_cap,omitempty" jsonschema:"overrides the league default CP cap"`
 	XL      bool   `json:"xl,omitempty" jsonschema:"allow XL candy levels above 40"`
 }

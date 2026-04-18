@@ -41,7 +41,7 @@ const MaxPoolSize = 50
 // explicitly.
 type TeamBuilderParams struct {
 	Pool       []Combatant `json:"pool" jsonschema:"candidate combatants to draw the team from"`
-	League     string      `json:"league" jsonschema:"great|ultra|master"`
+	League     string      `json:"league" jsonschema:"little|great|ultra|master"`
 	TopN       int         `json:"top_n,omitempty" jsonschema:"meta size for scoring (default 30)"`
 	Shields    []int       `json:"shields,omitempty" jsonschema:"[team, meta] shield counts; omit for [1, 1]; each 0..2"`
 	MaxResults int         `json:"max_results,omitempty" jsonschema:"how many top teams to return (default 5)"`
@@ -277,6 +277,11 @@ func (tool *TeamBuilderTool) preparePool(
 
 // prepareMeta fetches the ranking slice for the cap, trims to the
 // configured top-N, and converts entries to engine combatants.
+// Species missing from the current gamemaster (kept/rankings can
+// diverge by up to a day during the refresh windows) are silently
+// dropped from the returned combatants slice — the team_builder only
+// consumes the combatants, never the entry metadata, so the skipped
+// list is not surfaced separately here.
 func (tool *TeamBuilderTool) prepareMeta(
 	ctx context.Context, snapshot *pogopvp.Gamemaster,
 	cpCap int, defaults teamAnalysisDefaults,
@@ -288,7 +293,9 @@ func (tool *TeamBuilderTool) prepareMeta(
 
 	metaEntries := entries[:min(defaults.TopN, len(entries))]
 
-	return buildMetaCombatants(snapshot, metaEntries, cpCap, defaults.MetaShields)
+	combatants, _, _, err := buildMetaCombatants(snapshot, metaEntries, cpCap, defaults.MetaShields)
+
+	return combatants, err
 }
 
 // filterPool drops any entries whose species appears in banned.

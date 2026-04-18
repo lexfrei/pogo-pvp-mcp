@@ -19,7 +19,7 @@ const defaultMetaTopN = 30
 
 // MetaParams is the JSON input contract for pvp_meta.
 type MetaParams struct {
-	League string `json:"league" jsonschema:"great|ultra|master"`
+	League string `json:"league" jsonschema:"little|great|ultra|master"`
 	TopN   int    `json:"top_n,omitempty" jsonschema:"how many entries to return (default 30)"`
 }
 

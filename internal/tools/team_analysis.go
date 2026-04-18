@@ -84,7 +84,7 @@ const rankingsMaxLevelCap = 50
 // field must be present or omitted together.
 type TeamAnalysisParams struct {
 	Team    []Combatant `json:"team" jsonschema:"exactly 3 team members"`
-	League  string      `json:"league" jsonschema:"great|ultra|master"`
+	League  string      `json:"league" jsonschema:"little|great|ultra|master"`
 	TopN    int         `json:"top_n,omitempty" jsonschema:"how many meta species to sweep (default 30)"`
 	Shields []int       `json:"shields,omitempty" jsonschema:"[team, meta] shield counts; omit for [1, 1]; each 0..2"`
 }
@@ -103,14 +103,19 @@ type TeamMemberAnalysis struct {
 
 // TeamAnalysisResult is the JSON output contract for pvp_team_analysis.
 // SimulationFailures counts (member, meta) pairs whose engine call
-// returned an error and were treated as ties for aggregation purposes;
-// a non-zero value means the team score is less trustworthy.
+// returned an error and were skipped for aggregation purposes; a
+// non-zero value means the team score is less trustworthy.
+// SkippedMetaSpecies lists meta entries whose species / moves were
+// not found in the current gamemaster snapshot and were therefore
+// dropped from the simulation (typical for a post-balance-patch
+// cache race between gamemaster and rankings).
 type TeamAnalysisResult struct {
 	League             string               `json:"league"`
 	CPCap              int                  `json:"cp_cap"`
 	MetaSize           int                  `json:"meta_size"`
 	TeamScore          float64              `json:"team_score"`
 	SimulationFailures int                  `json:"simulation_failures"`
+	SkippedMetaSpecies []string             `json:"skipped_meta_species,omitempty"`
 	PerMember          []TeamMemberAnalysis `json:"per_member"`
 	Coverage           map[string]int       `json:"coverage_matrix"`
 	Uncovered          []string             `json:"uncovered_threats"`
@@ -178,7 +183,8 @@ func (tool *TeamAnalysisTool) handle(
 	topN := min(defaults.TopN, len(entries))
 	metaEntries := entries[:topN]
 
-	metaCombatants, err := buildMetaCombatants(snapshot, metaEntries, cpCap, defaults.MetaShields)
+	metaCombatants, keptEntries, skipped, err := buildMetaCombatants(
+		snapshot, metaEntries, cpCap, defaults.MetaShields)
 	if err != nil {
 		return nil, TeamAnalysisResult{}, err
 	}
@@ -188,8 +194,9 @@ func (tool *TeamAnalysisTool) handle(
 		return nil, TeamAnalysisResult{}, err
 	}
 
-	result := runTeamAnalysis(ctx, teamCombatants, metaCombatants, metaEntries,
-		params.League, cpCap, topN)
+	result := runTeamAnalysis(ctx, teamCombatants, metaCombatants, keptEntries,
+		params.League, cpCap, len(keptEntries))
+	result.SkippedMetaSpecies = skipped
 
 	if ctx.Err() != nil {
 		return nil, TeamAnalysisResult{}, fmt.Errorf("team_analysis cancelled: %w", ctx.Err())
@@ -272,22 +279,39 @@ func buildTeamCombatants(
 // buildMetaCombatants converts ranking entries into engine combatants
 // by locating the species in the gamemaster, running the IV finder to
 // get the optimal spread under the CP cap, and using the ranking's
-// recommended moveset (first element fast, remainder charged).
+// recommended moveset (first element fast, remainder charged). Meta
+// entries that cannot be resolved (species missing from the gamemaster
+// snapshot, malformed moveset, etc.) are skipped — the rankings cache
+// and the gamemaster cache refresh on independent 24h cadences and may
+// diverge for a day at a time, so one stale entry should not fail the
+// whole request. The returned filtered entries slice keeps the caller
+// in sync with the combatants slice for downstream indexing.
 func buildMetaCombatants(
 	snapshot *pogopvp.Gamemaster, entries []rankings.RankingEntry, cpCap, shields int,
-) ([]pogopvp.Combatant, error) {
+) ([]pogopvp.Combatant, []rankings.RankingEntry, []string, error) {
 	out := make([]pogopvp.Combatant, 0, len(entries))
+	kept := make([]rankings.RankingEntry, 0, len(entries))
+
+	var skipped []string
 
 	for i := range entries {
 		combatant, err := buildOneMetaCombatant(snapshot, &entries[i], cpCap, shields)
 		if err != nil {
-			return nil, fmt.Errorf("meta entry %d (%s): %w", i, entries[i].SpeciesID, err)
+			if errors.Is(err, ErrUnknownSpecies) || errors.Is(err, ErrUnknownMove) ||
+				errors.Is(err, ErrMoveCategoryMismatch) {
+				skipped = append(skipped, entries[i].SpeciesID)
+
+				continue
+			}
+
+			return nil, nil, nil, fmt.Errorf("meta entry %d (%s): %w", i, entries[i].SpeciesID, err)
 		}
 
 		out = append(out, combatant)
+		kept = append(kept, entries[i])
 	}
 
-	return out, nil
+	return out, kept, skipped, nil
 }
 
 // buildOneMetaCombatant is the per-entry helper for buildMetaCombatants.
