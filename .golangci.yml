@@ -8,6 +8,10 @@ linters:
     - ireturn
     - wsl
   settings:
+    gomoddirectives:
+      replace-local: true
+      replace-allow-list:
+        - github.com/lexfrei/pogo-pvp-engine
     dupl:
       threshold: 100
     goconst:
@@ -57,6 +61,7 @@ linters:
         - wg *sync.WaitGroup
         - mu sync.Mutex
         - ok bool
+        - rt *Runtime
       ignore-names:
         - i
         - w
@@ -115,6 +120,14 @@ linters:
           - noinlineerr
           - mnd
         path: cmd/
+      - linters:
+          - tagalign
+          - tagliatelle
+        path: internal/tools/
+      - linters:
+          - gocritic
+        text: hugeParam
+        path: internal/tools/
       - linters:
           - nilnil
           - revive
