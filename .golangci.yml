@@ -120,6 +120,14 @@ linters:
           - mnd
         path: cmd/
       - linters:
+          - tagalign
+          - tagliatelle
+        path: internal/tools/
+      - linters:
+          - gocritic
+        text: hugeParam
+        path: internal/tools/
+      - linters:
           - nilnil
           - revive
         path: internal/testutil/
