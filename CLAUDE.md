@@ -56,9 +56,10 @@ The MCP server is a thin wrapper around the engine. The hot shape: an MCP tool h
 
 1. `pvp_rank` — CP, stat product, percent-of-best for a given species at a given IV/level under a league cap.
 2. `pvp_matchup` — 1v1 simulation via `pogopvp.Simulate`; returns winner/turns/HP/energy/shield counts.
-3. `pvp_meta` — trimmed top-N rankings slice from pvpoke's pre-computed JSON.
-4. `pvp_team_analysis` — simulates team × top-N-meta, aggregates per-member rating, coverage matrix, uncovered threats.
-5. `pvp_team_builder` — enumerates C(pool, 3) triples from a candidate pool, scores each against meta, returns top-K.
+3. `pvp_cp_limits` — highest level and CP a species with given IVs can reach under each standard league cap (Little/Great/Ultra). Honours the same `XL` flag as `pvp_rank`; Master is omitted because its cap is unreachable.
+4. `pvp_meta` — trimmed top-N rankings slice from pvpoke's pre-computed JSON.
+5. `pvp_team_analysis` — simulates team × top-N-meta, aggregates per-member rating, coverage matrix, uncovered threats.
+6. `pvp_team_builder` — enumerates C(pool, 3) triples from a candidate pool, scores each against meta, returns top-K.
 
 ### Non-obvious invariants (you will break these)
 

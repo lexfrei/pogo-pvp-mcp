@@ -35,7 +35,7 @@ const integrationFixtureGamemaster = `{
   ]
 }`
 
-// buildWiredServer stands up a fully-wired MCP server with all five
+// buildWiredServer stands up a fully-wired MCP server with all six
 // currently implemented tools registered and pre-populated managers.
 func buildWiredServer(t *testing.T) *mcp.Server {
 	t.Helper()
@@ -97,7 +97,7 @@ func buildWiredServer(t *testing.T) *mcp.Server {
 }
 
 // TestIntegration_ListTools verifies that a client connected via the
-// in-memory transport sees all five currently implemented tools
+// in-memory transport sees all six currently implemented tools
 // advertised. Guards against a silent drop of a registered tool from
 // buildMCPServer.
 func TestIntegration_ListTools(t *testing.T) {
