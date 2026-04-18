@@ -1,10 +1,13 @@
 # pogo-pvp-mcp
 
-MCP server exposing a Pokémon GO PvP battle simulator and ranker to LLM
-assistants. Backed by [`pogo-pvp-engine`][engine] — a pure Go reimplementation
-of the PvP math.
+MCP server that will expose a Pokémon GO PvP battle simulator and ranker to
+LLM assistants. The simulation math will live in a companion engine module
+developed alongside this server.
 
-**Status**: early development. No stable release yet.
+**Status**: early development. The repository contains only scaffolding at
+this point — no tools are implemented yet, and no tagged release exists. The
+GitHub repository rename from `pvpoke-mcp` to `pogo-pvp-mcp` is pending, so
+`go install github.com/lexfrei/pogo-pvp-mcp/...` does not yet resolve.
 
 ## Disclaimer
 
@@ -17,7 +20,10 @@ CPM values) fetched from the open-source [PvPoke][pvpoke] project (MIT
 licensed). No artwork, sprites, or audio is distributed. Pokémon are
 identified by string id only.
 
-## Tools
+## Planned tools
+
+None of the tools below are implemented yet. This section records the design
+target so that tool names stay stable across planning documents.
 
 - `pvp_rank` — rank one Pokémon in a league/cup by IV and level.
 - `pvp_matchup` — 1v1 simulation with shield scenarios.
@@ -29,5 +35,4 @@ identified by string id only.
 
 BSD 3-Clause. See [LICENSE](LICENSE).
 
-[engine]: https://github.com/lexfrei/pogo-pvp-engine
 [pvpoke]: https://github.com/pvpoke/pvpoke
