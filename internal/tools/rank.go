@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 
 	pogopvp "github.com/lexfrei/pogo-pvp-engine"
 	"github.com/lexfrei/pogo-pvp-mcp/internal/gamemaster"
@@ -44,13 +45,17 @@ var LeagueCP = map[string]int{
 	"master": masterLeagueCap,
 }
 
-// RankParams is the JSON input contract for the pvp_rank tool.
+// RankParams is the JSON input contract for the pvp_rank tool. Shadow
+// and purified forms are not exposed yet — the engine carries a Form
+// enum but the tool pipeline treats every Pokémon as regular until the
+// shadow atk/def multipliers are applied. The parameter will reappear
+// once that wiring is in place so callers get a different CP / SP when
+// they ask for shadow.
 type RankParams struct {
 	Species string `json:"species" jsonschema:"species id in the pvpoke gamemaster (e.g. \"medicham\")"`
 	IV      [3]int `json:"iv" jsonschema:"individual values in [atk, def, sta] order, each 0..15"`
 	League  string `json:"league" jsonschema:"great|ultra|master"`
 	CPCap   int    `json:"cp_cap,omitempty" jsonschema:"overrides the league default CP cap"`
-	Form    string `json:"form,omitempty" jsonschema:"regular|shadow|purified (default regular)"`
 	XL      bool   `json:"xl,omitempty" jsonschema:"allow XL candy levels above 40"`
 }
 
@@ -218,7 +223,10 @@ func findSpreadForSpecies(
 		maxLevel = pogopvp.MaxLevel
 	}
 
-	for doubled := int(maxLevel * 2); doubled >= int(pogopvp.MinLevel*2); doubled-- {
+	doubledMax := int(math.Round(maxLevel * 2))
+	doubledMin := int(math.Round(pogopvp.MinLevel * 2))
+
+	for doubled := doubledMax; doubled >= doubledMin; doubled-- {
 		level := float64(doubled) / 2
 
 		cpm, err := pogopvp.CPMAt(level)

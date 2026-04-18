@@ -9,6 +9,8 @@ import (
 	"github.com/lexfrei/pogo-pvp-mcp/internal/config"
 )
 
+const transportStdio = "stdio"
+
 func TestLoad_Defaults(t *testing.T) {
 	t.Parallel()
 
@@ -17,8 +19,8 @@ func TestLoad_Defaults(t *testing.T) {
 		t.Fatalf("Load: %v", err)
 	}
 
-	if cfg.Server.Transport != "stdio" {
-		t.Errorf("Server.Transport = %q, want \"stdio\"", cfg.Server.Transport)
+	if cfg.Server.Transport != transportStdio {
+		t.Errorf("Server.Transport = %q, want %q", cfg.Server.Transport, transportStdio)
 	}
 	if cfg.Server.HTTPHost != "127.0.0.1" {
 		t.Errorf("Server.HTTPHost = %q, want \"127.0.0.1\"", cfg.Server.HTTPHost)
@@ -47,7 +49,7 @@ func TestLoad_YAMLFile(t *testing.T) {
 	path := filepath.Join(dir, "config.yaml")
 	yaml := `
 server:
-  transport: http
+  transport: stdio
   http_port: 9090
 log:
   level: debug
@@ -69,8 +71,8 @@ engine:
 		t.Fatalf("Load: %v", err)
 	}
 
-	if cfg.Server.Transport != "http" {
-		t.Errorf("Server.Transport = %q, want \"http\"", cfg.Server.Transport)
+	if cfg.Server.Transport != transportStdio {
+		t.Errorf("Server.Transport = %q, want %q", cfg.Server.Transport, transportStdio)
 	}
 	if cfg.Server.HTTPPort != 9090 {
 		t.Errorf("Server.HTTPPort = %d, want 9090", cfg.Server.HTTPPort)
@@ -200,6 +202,70 @@ func TestValidate_NegativeGoroutines(t *testing.T) {
 	err = cfg.Validate()
 	if !errors.Is(err, config.ErrInvalidConfig) {
 		t.Errorf("Validate() = %v, want wrapping ErrInvalidConfig", err)
+	}
+}
+
+func TestValidate_ZeroRefreshInterval(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := config.Load("")
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	cfg.Gamemaster.RefreshInterval = 0
+
+	err = cfg.Validate()
+	if !errors.Is(err, config.ErrInvalidConfig) {
+		t.Errorf("Validate() = %v, want wrapping ErrInvalidConfig", err)
+	}
+}
+
+func TestValidate_EmptyLocalPath(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := config.Load("")
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	cfg.Gamemaster.LocalPath = ""
+
+	err = cfg.Validate()
+	if !errors.Is(err, config.ErrInvalidConfig) {
+		t.Errorf("Validate() = %v, want wrapping ErrInvalidConfig", err)
+	}
+}
+
+func TestValidate_EmptyGamemasterSource(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := config.Load("")
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	cfg.Gamemaster.Source = ""
+
+	err = cfg.Validate()
+	if !errors.Is(err, config.ErrInvalidConfig) {
+		t.Errorf("Validate() = %v, want wrapping ErrInvalidConfig", err)
+	}
+}
+
+// TestLoad_DefaultLocalPathIsNotEmpty pins the contract that out-of-
+// the-box Load() returns a non-empty LocalPath so the gamemaster
+// manager can start without requiring env/yaml overrides.
+func TestLoad_DefaultLocalPathIsNotEmpty(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := config.Load("")
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	if cfg.Gamemaster.LocalPath == "" {
+		t.Error("default Gamemaster.LocalPath is empty — zero-config startup broken")
 	}
 }
 

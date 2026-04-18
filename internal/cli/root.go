@@ -29,8 +29,9 @@ type rootFlags struct {
 	configPath string
 }
 
-// NewRootCommand builds the cobra command tree: the root command, a
-// default serve action, and the fetch-gm and bench subcommands.
+// NewRootCommand builds the cobra command tree: the root command plus
+// the serve and fetch-gm subcommands. Running the bare binary prints
+// usage; there is no implicit default subcommand.
 func NewRootCommand(stdout, stderr io.Writer) *cobra.Command {
 	flags := &rootFlags{}
 

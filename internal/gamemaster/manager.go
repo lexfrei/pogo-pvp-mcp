@@ -119,7 +119,10 @@ func (m *Manager) Refresh(ctx context.Context) error {
 
 // LoadLocal parses the cached file at LocalPath into the current
 // snapshot. Useful on start-up to serve requests with the previous
-// gamemaster copy while an async refresh runs.
+// gamemaster copy while an async refresh runs. Note: the ETag used
+// during the upstream fetch that produced the cache file is not
+// recovered here, so the next [Refresh] after a cold start re-fetches
+// the full body instead of issuing a conditional request.
 func (m *Manager) LoadLocal() error {
 	body, err := os.ReadFile(m.localPath)
 	if err != nil {

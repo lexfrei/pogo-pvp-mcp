@@ -17,18 +17,20 @@ import (
 // serverName is what the server advertises to MCP clients.
 const serverName = "pogo-pvp-mcp"
 
-// serverVersion is populated from the build-time ldflags in production;
-// stays "dev" for tests and go-run invocations.
-const serverVersion = "dev"
+// serverVersion is settable via -ldflags "-X
+// github.com/lexfrei/pogo-pvp-mcp/internal/cli.serverVersion=..." at
+// build time; the default "dev" applies to tests and go-run invocations.
+//
+//nolint:gochecknoglobals // ldflags injection target, must be a var
+var serverVersion = "dev"
 
 // refreshGrace is how long Run waits for the background refresh loop
 // to exit during shutdown before giving up and returning.
 const refreshGrace = 2 * time.Second
 
-// newServeCommand returns the "serve" subcommand — the default action
-// when no subcommand is given. It sets up the gamemaster manager, the
-// MCP server, and the stdio transport, then blocks until SIGINT /
-// SIGTERM or a transport error.
+// newServeCommand returns the "serve" subcommand. It sets up the
+// gamemaster manager, the MCP server, and the stdio transport, then
+// blocks until SIGINT / SIGTERM or a transport error.
 func newServeCommand() *cobra.Command {
 	return &cobra.Command{
 		Use:   "serve",

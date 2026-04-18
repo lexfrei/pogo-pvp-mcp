@@ -107,6 +107,29 @@ func TestLRU_RejectsValueLargerThanCapacity(t *testing.T) {
 	}
 }
 
+func TestLRU_OversizedOverwriteEvictsExisting(t *testing.T) {
+	t.Parallel()
+
+	// Set a small value, then write a too-large value under the same
+	// key. The docstring promises "values larger than the capacity are
+	// silently dropped"; this test pins the stronger guarantee that the
+	// previously-stored value under that key is also gone, so Get does
+	// not return a stale hit.
+	lru := cache.NewLRU(5)
+
+	lru.Set("k", []byte("aaa"))
+
+	if _, ok := lru.Get("k"); !ok {
+		t.Fatal("small value not stored")
+	}
+
+	lru.Set("k", []byte("way too large for the capacity"))
+
+	if _, ok := lru.Get("k"); ok {
+		t.Error("oversized overwrite left a stale entry under the same key")
+	}
+}
+
 func TestLRU_ZeroCapacityDisables(t *testing.T) {
 	t.Parallel()
 

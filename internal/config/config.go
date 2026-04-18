@@ -1,5 +1,5 @@
 // Package config loads and validates the MCP server's runtime
-// configuration. Inputs are merged in the order dfeaults → YAML →
+// configuration. Inputs are merged in the order defaults → YAML →
 // environment (prefix POGO_PVP_) so higher-priority sources override
 // lower ones. CLI flag binding is the caller's responsibility (the
 // cobra setup in internal/cli).
@@ -8,6 +8,8 @@ package config
 import (
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"time"
@@ -34,6 +36,34 @@ const defaultRefreshInterval = 24 * time.Hour
 
 // defaultGamemasterURL is the canonical pvpoke gamemaster location.
 const defaultGamemasterURL = "https://raw.githubusercontent.com/pvpoke/pvpoke/master/src/data/gamemaster.json"
+
+// defaultGamemasterFile is the filename used under the XDG cache
+// directory when no local_path is configured.
+const defaultGamemasterFile = "gamemaster.json"
+
+// defaultCacheDirName is the subdirectory inside the XDG cache root.
+const defaultCacheDirName = "pogo-pvp-mcp"
+
+// defaultLocalPath returns the XDG-style cache path for the gamemaster
+// file. Falls back to ~/.cache/pogo-pvp-mcp/gamemaster.json when
+// XDG_CACHE_HOME is unset, and to the current working directory's
+// ./gamemaster.json if the home directory is also unknown. The function
+// never returns an empty string so NewManager's invariant stays intact.
+func defaultLocalPath() string {
+	cacheRoot := os.Getenv("XDG_CACHE_HOME")
+	if cacheRoot == "" {
+		home, err := os.UserHomeDir()
+		if err == nil {
+			cacheRoot = filepath.Join(home, ".cache")
+		}
+	}
+
+	if cacheRoot == "" {
+		return defaultGamemasterFile
+	}
+
+	return filepath.Join(cacheRoot, defaultCacheDirName, defaultGamemasterFile)
+}
 
 // Config is the full runtime configuration consumed by the server. The
 // mapstructure tags let viper unmarshal YAML and env sources into the
@@ -128,16 +158,19 @@ func applyDefaults(view *viper.Viper) {
 	view.SetDefault("cache.size", defaultCacheSize)
 
 	view.SetDefault("gamemaster.source", defaultGamemasterURL)
-	view.SetDefault("gamemaster.local_path", "")
+	view.SetDefault("gamemaster.local_path", defaultLocalPath())
 	view.SetDefault("gamemaster.refresh_interval", defaultRefreshInterval)
 
 	view.SetDefault("engine.goroutines", 0)
 }
 
 // validTransports lists the supported [ServerConfig.Transport] values.
+// Only stdio is wired today; http will be added when the debug HTTP
+// transport lands. Listing unimplemented options here would silently
+// mis-wire the server, so the list stays minimal.
 //
 //nolint:gochecknoglobals // read-only lookup table
-var validTransports = []string{"stdio", "http"}
+var validTransports = []string{"stdio"}
 
 // validLogLevels lists the slog level names accepted by [LogConfig.Level].
 //
@@ -156,6 +189,16 @@ const maxPort = 65535
 // receive this via [Load]; hand calls exist for tests that mutate a
 // loaded [Config] in-place.
 func (c *Config) Validate() error {
+	err := c.validateServerAndLog()
+	if err != nil {
+		return err
+	}
+
+	return c.validateDataPlane()
+}
+
+// validateServerAndLog covers the transport/log/port enum checks.
+func (c *Config) validateServerAndLog() error {
 	if !slices.Contains(validTransports, c.Server.Transport) {
 		return fmt.Errorf("%w: server.transport=%q, want one of %v",
 			ErrInvalidConfig, c.Server.Transport, validTransports)
@@ -176,6 +219,11 @@ func (c *Config) Validate() error {
 			ErrInvalidConfig, c.Log.Format, validLogFormats)
 	}
 
+	return nil
+}
+
+// validateDataPlane covers the cache / engine / gamemaster invariants.
+func (c *Config) validateDataPlane() error {
 	if c.Cache.Size < 0 {
 		return fmt.Errorf("%w: cache.size=%d must be non-negative",
 			ErrInvalidConfig, c.Cache.Size)
@@ -184,6 +232,19 @@ func (c *Config) Validate() error {
 	if c.Engine.Goroutines < 0 {
 		return fmt.Errorf("%w: engine.goroutines=%d must be non-negative",
 			ErrInvalidConfig, c.Engine.Goroutines)
+	}
+
+	if c.Gamemaster.RefreshInterval <= 0 {
+		return fmt.Errorf("%w: gamemaster.refresh_interval=%v must be positive",
+			ErrInvalidConfig, c.Gamemaster.RefreshInterval)
+	}
+
+	if c.Gamemaster.Source == "" {
+		return fmt.Errorf("%w: gamemaster.source must not be empty", ErrInvalidConfig)
+	}
+
+	if c.Gamemaster.LocalPath == "" {
+		return fmt.Errorf("%w: gamemaster.local_path must not be empty", ErrInvalidConfig)
 	}
 
 	return nil
