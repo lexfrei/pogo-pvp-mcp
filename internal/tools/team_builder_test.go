@@ -164,6 +164,120 @@ func TestTeamBuilderTool_RequiredAnchor(t *testing.T) {
 	}
 }
 
+func TestTeamBuilderTool_RequiredNotInPool(t *testing.T) {
+	t.Parallel()
+
+	tool := newTeamBuilderTool(t)
+	handler := tool.Handler()
+
+	pool := []tools.Combatant{
+		baseCombatant("a"),
+		baseCombatant("b"),
+		baseCombatant("c"),
+	}
+
+	_, _, err := handler(t.Context(), nil, tools.TeamBuilderParams{
+		Pool:     pool,
+		League:   leagueGreat,
+		Required: []string{"not_in_pool"},
+	})
+	if !errors.Is(err, tools.ErrRequiredNotInPool) {
+		t.Errorf("error = %v, want wrapping ErrRequiredNotInPool", err)
+	}
+}
+
+func TestTeamBuilderTool_RequiredWithDuplicateSpecies(t *testing.T) {
+	t.Parallel()
+
+	tool := newTeamBuilderTool(t)
+	handler := tool.Handler()
+
+	aHigh := baseCombatant("a")
+	aLow := baseCombatant("a")
+	aLow.IV = [3]int{0, 15, 15}
+
+	pool := []tools.Combatant{
+		aHigh,
+		aLow,
+		baseCombatant("b"),
+		baseCombatant("c"),
+	}
+
+	_, result, err := handler(t.Context(), nil, tools.TeamBuilderParams{
+		Pool:     pool,
+		League:   leagueGreat,
+		Required: []string{"a"},
+	})
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+
+	// With "a" appearing twice in the pool and only one required, the
+	// team-builder must produce at least one triple that contains
+	// exactly one "a" (not forced to take both copies).
+	sawSingleA := false
+
+	for _, team := range result.Teams {
+		count := 0
+
+		for _, member := range team.Members {
+			if member == "a" {
+				count++
+			}
+		}
+
+		if count == 1 {
+			sawSingleA = true
+
+			break
+		}
+	}
+
+	if !sawSingleA {
+		t.Error("no triple containing exactly one 'a' — duplicates were probably both forced in")
+	}
+}
+
+func TestTeamBuilderTool_NegativeTopN(t *testing.T) {
+	t.Parallel()
+
+	tool := newTeamBuilderTool(t)
+	handler := tool.Handler()
+
+	_, _, err := handler(t.Context(), nil, tools.TeamBuilderParams{
+		Pool: []tools.Combatant{
+			baseCombatant("a"),
+			baseCombatant("b"),
+			baseCombatant("c"),
+		},
+		League: leagueGreat,
+		TopN:   -1,
+	})
+	if !errors.Is(err, tools.ErrInvalidTopN) {
+		t.Errorf("error = %v, want wrapping ErrInvalidTopN", err)
+	}
+}
+
+func TestTeamBuilderTool_InvalidShields(t *testing.T) {
+	t.Parallel()
+
+	tool := newTeamBuilderTool(t)
+	handler := tool.Handler()
+
+	_, _, err := handler(t.Context(), nil, tools.TeamBuilderParams{
+		Pool: []tools.Combatant{
+			baseCombatant("a"),
+			baseCombatant("b"),
+			baseCombatant("c"),
+		},
+		League:  leagueGreat,
+		Shields: []int{3, 1},
+	})
+	if !errors.Is(err, tools.ErrInvalidShields) {
+		t.Errorf("error = %v, want wrapping ErrInvalidShields", err)
+	}
+}
+
 func TestTeamBuilderTool_NegativeMaxResults(t *testing.T) {
 	t.Parallel()
 

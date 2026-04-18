@@ -25,11 +25,14 @@ var ErrMaxResultsInvalid = errors.New("max_results must be non-negative")
 const defaultMaxResults = 5
 
 // TeamBuilderParams is the JSON input contract for pvp_team_builder.
+// Shields follows the same convention as [TeamAnalysisParams.Shields]:
+// omit the field for the [1, 1] default, or supply both slots
+// explicitly.
 type TeamBuilderParams struct {
 	Pool       []Combatant `json:"pool" jsonschema:"candidate combatants to draw the team from"`
 	League     string      `json:"league" jsonschema:"great|ultra|master"`
 	TopN       int         `json:"top_n,omitempty" jsonschema:"meta size for scoring (default 30)"`
-	Shields    [2]int      `json:"shields,omitempty" jsonschema:"[team, meta] shields per match; defaults [1, 1]"`
+	Shields    []int       `json:"shields,omitempty" jsonschema:"[team, meta] shield counts; omit for [1, 1]; each 0..2"`
 	MaxResults int         `json:"max_results,omitempty" jsonschema:"how many top teams to return (default 5)"`
 	Required   []string    `json:"required,omitempty" jsonschema:"species ids that must appear in the returned team"`
 	Banned     []string    `json:"banned,omitempty" jsonschema:"species ids to exclude from the pool"`
@@ -80,12 +83,14 @@ func (tool *TeamBuilderTool) Handler() mcp.ToolHandlerFor[TeamBuilderParams, Tea
 }
 
 // teamBuilderInputs bundles the state the search helpers consume so
-// handle stays under the funlen budget.
+// handle stays under the funlen budget. required is keyed by species
+// id so duplicate pool entries for the same species still satisfy an
+// "at least one" anchor without forcing both into the team.
 type teamBuilderInputs struct {
 	pool           []Combatant
 	poolCombatants []pogopvp.Combatant
 	metaCombatants []pogopvp.Combatant
-	required       []int
+	required       map[string]struct{}
 	cpCap          int
 	league         string
 	maxResults     int
@@ -137,8 +142,9 @@ func (tool *TeamBuilderTool) handle(
 func (tool *TeamBuilderTool) resolveTeamBuilderInputs(
 	ctx context.Context, params *TeamBuilderParams,
 ) (*teamBuilderInputs, error) {
-	if params.MaxResults < 0 {
-		return nil, fmt.Errorf("%w: %d", ErrMaxResultsInvalid, params.MaxResults)
+	err := validateTeamBuilderParams(params)
+	if err != nil {
+		return nil, err
 	}
 
 	snapshot := tool.gm.Current()
@@ -151,12 +157,14 @@ func (tool *TeamBuilderTool) resolveTeamBuilderInputs(
 		return nil, err
 	}
 
-	defaults := resolveTeamDefaults(&TeamAnalysisParams{
-		TopN:    params.TopN,
-		Shields: params.Shields,
-	})
+	defaults := resolveTeamDefaults(params.Shields, params.TopN)
 
 	pool, err := tool.preparePool(snapshot, params, defaults.TeamShields)
+	if err != nil {
+		return nil, err
+	}
+
+	required, err := resolveRequired(pool.Specs, params.Required)
 	if err != nil {
 		return nil, err
 	}
@@ -175,11 +183,25 @@ func (tool *TeamBuilderTool) resolveTeamBuilderInputs(
 		pool:           pool.Specs,
 		poolCombatants: pool.Combatants,
 		metaCombatants: metaCombatants,
-		required:       requiredIndices(pool.Specs, params.Required),
+		required:       required,
 		cpCap:          cpCap,
 		league:         params.League,
 		maxResults:     maxResults,
 	}, nil
+}
+
+// validateTeamBuilderParams runs the cheap pre-flight checks before any
+// gamemaster or rankings lookups.
+func validateTeamBuilderParams(params *TeamBuilderParams) error {
+	if params.MaxResults < 0 {
+		return fmt.Errorf("%w: %d", ErrMaxResultsInvalid, params.MaxResults)
+	}
+
+	if params.TopN < 0 {
+		return fmt.Errorf("%w: %d must be non-negative", ErrInvalidTopN, params.TopN)
+	}
+
+	return validateShields(params.Shields)
 }
 
 // preparedPool bundles the pool after filtering plus its matching
@@ -249,45 +271,57 @@ func filterPool(pool []Combatant, banned []string) []Combatant {
 	return out
 }
 
-// requiredIndices returns the subset of pool indices whose species
-// matches one of the required ids. Each required id must match at
-// least one pool entry; missing ids are silently skipped because the
-// eventual team-search will naturally fail to include them.
-func requiredIndices(pool []Combatant, required []string) []int {
+// ErrRequiredNotInPool is returned when a species listed in
+// TeamBuilderParams.Required does not match any pool entry. Silent
+// acceptance would run the search without the intended constraint and
+// return teams that violate the caller's contract.
+var ErrRequiredNotInPool = errors.New("required species missing from pool")
+
+// resolveRequired validates that every required species id has at
+// least one matching pool entry and returns the set of required
+// species. The returned set drives triple filtering at the species
+// level so a pool containing two copies of the same species still
+// honours the "at least one of this species" semantic without forcing
+// both copies into the team.
+func resolveRequired(pool []Combatant, required []string) (map[string]struct{}, error) {
+	out := make(map[string]struct{}, len(required))
+
 	if len(required) == 0 {
-		return nil
+		return out, nil
 	}
 
-	requiredSet := make(map[string]bool, len(required))
-	for _, id := range required {
-		requiredSet[id] = true
-	}
-
-	out := make([]int, 0, len(required))
-
+	present := make(map[string]struct{}, len(pool))
 	for i := range pool {
-		if requiredSet[pool[i].Species] {
-			out = append(out, i)
-		}
+		present[pool[i].Species] = struct{}{}
 	}
 
-	return out
+	for _, speciesID := range required {
+		_, ok := present[speciesID]
+		if !ok {
+			return nil, fmt.Errorf("%w: %q", ErrRequiredNotInPool, speciesID)
+		}
+
+		out[speciesID] = struct{}{}
+	}
+
+	return out, nil
 }
 
 // evaluateTeams enumerates all 3-combinations of the pool that satisfy
-// the required-indices constraint and returns them annotated with
+// the required-species constraint and returns them annotated with
 // team_score. Scoring uses the shared ratingFor helper.
 func evaluateTeams(
 	pool []Combatant,
 	poolCombatants, meta []pogopvp.Combatant,
-	required []int,
+	required map[string]struct{},
 ) evaluationResult {
 	var out evaluationResult
 
 	for i := range pool {
 		for jIdx := i + 1; jIdx < len(pool); jIdx++ {
 			for kIdx := jIdx + 1; kIdx < len(pool); kIdx++ {
-				if !containsAllIndices([]int{i, jIdx, kIdx}, required) {
+				members := []string{pool[i].Species, pool[jIdx].Species, pool[kIdx].Species}
+				if !containsAllSpecies(members, required) {
 					continue
 				}
 
@@ -298,9 +332,7 @@ func evaluateTeams(
 				out.Evaluated++
 
 				out.Teams = append(out.Teams, TeamBuilderTeam{
-					Members: []string{
-						pool[i].Species, pool[jIdx].Species, pool[kIdx].Species,
-					},
+					Members:   members,
 					TeamScore: score,
 					Reason:    "highest average battle rating across the sampled meta",
 				})
@@ -311,11 +343,11 @@ func evaluateTeams(
 	return out
 }
 
-// containsAllIndices reports whether every element of required is
-// present in picked. Empty required accepts any triple.
-func containsAllIndices(picked, required []int) bool {
-	for _, need := range required {
-		if !slices.Contains(picked, need) {
+// containsAllSpecies reports whether every id in required is present
+// in members. Empty required accepts any triple.
+func containsAllSpecies(members []string, required map[string]struct{}) bool {
+	for speciesID := range required {
+		if !slices.Contains(members, speciesID) {
 			return false
 		}
 	}

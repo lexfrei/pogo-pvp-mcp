@@ -15,8 +15,38 @@ import (
 // exactly [TeamSize] combatants.
 var ErrTeamSizeMismatch = errors.New("team must have exactly 3 members")
 
+// ErrInvalidShields is returned when the shields slice is neither nil
+// nor of length 2 with values in [0, MaxShields].
+var ErrInvalidShields = errors.New("invalid shields")
+
 // TeamSize is the fixed number of combatants in a PvP team.
 const TeamSize = 3
+
+// maxShieldCount mirrors pogopvp.MaxShields without a direct import
+// dependency; kept in sync with the engine constant.
+const maxShieldCount = 2
+
+// validateShields rejects nil (accepted as default) elsewhere, but
+// any provided slice must have exactly two entries, each in
+// [0, maxShieldCount].
+func validateShields(shields []int) error {
+	if len(shields) == 0 {
+		return nil
+	}
+
+	if len(shields) != 2 {
+		return fmt.Errorf("%w: shields length %d, want 2", ErrInvalidShields, len(shields))
+	}
+
+	for i, value := range shields {
+		if value < 0 || value > maxShieldCount {
+			return fmt.Errorf("%w: shields[%d]=%d outside [0, %d]",
+				ErrInvalidShields, i, value, maxShieldCount)
+		}
+	}
+
+	return nil
+}
 
 // defaultTeamTopN is how many meta species the analysis sweeps when
 // the caller does not pick a value.
@@ -42,11 +72,15 @@ const ratingMidpoint = 500
 const uncoveredThreshold = 400
 
 // TeamAnalysisParams is the JSON input contract for pvp_team_analysis.
+// Shields is an optional 2-slot slice; an omitted/empty value defaults
+// to [1, 1]. An explicit [0, 2] is honoured literally — setting
+// individual 0s would be ambiguous with the zero value, so the whole
+// field must be present or omitted together.
 type TeamAnalysisParams struct {
 	Team    []Combatant `json:"team" jsonschema:"exactly 3 team members"`
 	League  string      `json:"league" jsonschema:"great|ultra|master"`
 	TopN    int         `json:"top_n,omitempty" jsonschema:"how many meta species to sweep (default 30)"`
-	Shields [2]int      `json:"shields,omitempty" jsonschema:"[team, meta] shields per match; defaults [1, 1]"`
+	Shields []int       `json:"shields,omitempty" jsonschema:"[team, meta] shield counts; omit for [1, 1]; each 0..2"`
 }
 
 // TeamMemberAnalysis describes one team member's performance against
@@ -109,13 +143,9 @@ func (tool *TeamAnalysisTool) handle(
 	_ *mcp.CallToolRequest,
 	params TeamAnalysisParams,
 ) (*mcp.CallToolResult, TeamAnalysisResult, error) {
-	err := ctx.Err()
+	err := validateTeamAnalysisParams(ctx, &params)
 	if err != nil {
-		return nil, TeamAnalysisResult{}, fmt.Errorf("team_analysis cancelled: %w", err)
-	}
-
-	if len(params.Team) != TeamSize {
-		return nil, TeamAnalysisResult{}, fmt.Errorf("%w: got %d", ErrTeamSizeMismatch, len(params.Team))
+		return nil, TeamAnalysisResult{}, err
 	}
 
 	snapshot := tool.gm.Current()
@@ -128,7 +158,7 @@ func (tool *TeamAnalysisTool) handle(
 		return nil, TeamAnalysisResult{}, err
 	}
 
-	defaults := resolveTeamDefaults(&params)
+	defaults := resolveTeamDefaults(params.Shields, params.TopN)
 
 	entries, err := tool.rankings.Get(ctx, cpCap)
 	if err != nil {
@@ -151,6 +181,25 @@ func (tool *TeamAnalysisTool) handle(
 	return nil, runTeamAnalysis(teamCombatants, metaCombatants, metaEntries, params.League, cpCap, topN), nil
 }
 
+// validateTeamAnalysisParams runs the cheap pre-flight checks (cancel,
+// team size, top_n, shields) before any gamemaster or rankings calls.
+func validateTeamAnalysisParams(ctx context.Context, params *TeamAnalysisParams) error {
+	err := ctx.Err()
+	if err != nil {
+		return fmt.Errorf("team_analysis cancelled: %w", err)
+	}
+
+	if len(params.Team) != TeamSize {
+		return fmt.Errorf("%w: got %d", ErrTeamSizeMismatch, len(params.Team))
+	}
+
+	if params.TopN < 0 {
+		return fmt.Errorf("%w: %d must be non-negative", ErrInvalidTopN, params.TopN)
+	}
+
+	return validateShields(params.Shields)
+}
+
 // teamAnalysisDefaults bundles the three values resolveTeamDefaults
 // applies when the caller leaves them zeroed.
 type teamAnalysisDefaults struct {
@@ -159,24 +208,25 @@ type teamAnalysisDefaults struct {
 	MetaShields int
 }
 
-// resolveTeamDefaults applies the defaults for TopN and shields.
-func resolveTeamDefaults(params *TeamAnalysisParams) teamAnalysisDefaults {
+// resolveTeamDefaults applies the defaults for TopN and shields. An
+// omitted Shields field (nil / empty slice) falls back to
+// [defaultShieldsPerSide, defaultShieldsPerSide]; a present slice is
+// taken literally so [0, 2] means "no shields on our side, two on the
+// opponent".
+func resolveTeamDefaults(shields []int, topN int) teamAnalysisDefaults {
 	out := teamAnalysisDefaults{
-		TopN:        params.TopN,
-		TeamShields: params.Shields[0],
-		MetaShields: params.Shields[1],
+		TopN:        topN,
+		TeamShields: defaultShieldsPerSide,
+		MetaShields: defaultShieldsPerSide,
 	}
 
 	if out.TopN == 0 {
 		out.TopN = defaultTeamTopN
 	}
 
-	if out.TeamShields == 0 {
-		out.TeamShields = defaultShieldsPerSide
-	}
-
-	if out.MetaShields == 0 {
-		out.MetaShields = defaultShieldsPerSide
+	if len(shields) == 2 {
+		out.TeamShields = shields[0]
+		out.MetaShields = shields[1]
 	}
 
 	return out
@@ -284,7 +334,9 @@ func resolveChargedMoves(snapshot *pogopvp.Gamemaster, ids []string) ([]pogopvp.
 }
 
 // runTeamAnalysis simulates the full cartesian product of user team ×
-// meta, aggregates ratings, and builds the output struct.
+// meta, aggregates ratings, and builds the output struct. Each
+// (member, meta) pair is simulated exactly once; the rating feeds
+// both the per-member stats and the team-wide coverage map.
 func runTeamAnalysis(
 	team, meta []pogopvp.Combatant,
 	metaEntries []rankings.RankingEntry,
@@ -292,26 +344,14 @@ func runTeamAnalysis(
 ) TeamAnalysisResult {
 	perMember := make([]TeamMemberAnalysis, len(team))
 	coverage := make(map[string]int, len(meta))
-	bestRatings := make(map[string]int, len(meta))
 
 	var overallSum float64
 
 	for memberIdx := range team {
-		perMember[memberIdx] = simulateMemberVsMeta(&team[memberIdx], meta, metaEntries)
-
-		for oppIdx := range meta {
-			rating := ratingFor(&team[memberIdx], &meta[oppIdx])
-			overallSum += float64(rating)
-
-			opp := metaEntries[oppIdx].SpeciesID
-			if rating > bestRatings[opp] {
-				bestRatings[opp] = rating
-				coverage[opp] = rating
-			}
-		}
+		tally := analyzeMember(&team[memberIdx], meta, metaEntries, coverage)
+		perMember[memberIdx] = tally.Analysis
+		overallSum += tally.RatingSum
 	}
-
-	uncovered := findUncoveredThreats(bestRatings, metaEntries)
 
 	denom := len(team) * len(meta)
 
@@ -327,51 +367,69 @@ func runTeamAnalysis(
 		TeamScore: teamScore,
 		PerMember: perMember,
 		Coverage:  coverage,
-		Uncovered: uncovered,
+		Uncovered: findUncoveredThreats(coverage, metaEntries),
 	}
 }
 
-// simulateMemberVsMeta returns the aggregate rating stats for one team
-// member against the full meta slice.
-func simulateMemberVsMeta(
+// memberTally bundles the per-member analysis with the raw sum of
+// ratings so runTeamAnalysis can aggregate the team-wide score without
+// re-running any simulations.
+type memberTally struct {
+	Analysis  TeamMemberAnalysis
+	RatingSum float64
+}
+
+// analyzeMember simulates one team member against the full meta slice
+// and returns its memberTally. The caller-supplied coverage map is
+// updated in place with the best rating-per-opponent seen so far.
+func analyzeMember(
 	member *pogopvp.Combatant,
 	meta []pogopvp.Combatant,
 	metaEntries []rankings.RankingEntry,
-) TeamMemberAnalysis {
-	analysis := TeamMemberAnalysis{
-		Species: member.Species.ID,
-	}
+	coverage map[string]int,
+) memberTally {
+	analysis := TeamMemberAnalysis{Species: member.Species.ID}
 
-	var sum float64
+	var memberSum float64
 
-	for i := range meta {
-		rating := ratingFor(member, &meta[i])
-		sum += float64(rating)
+	for oppIdx := range meta {
+		rating := ratingFor(member, &meta[oppIdx])
+		memberSum += float64(rating)
 
-		opponent := metaEntries[i].SpeciesID
+		opp := metaEntries[oppIdx].SpeciesID
+		tallyMatchup(&analysis, opp, rating)
 
-		switch {
-		case rating > hardWinRating:
-			analysis.HardWins = append(analysis.HardWins, opponent)
-		case rating < hardLossRating:
-			analysis.HardLosses = append(analysis.HardLosses, opponent)
-		}
-
-		switch {
-		case rating > ratingMidpoint:
-			analysis.Wins++
-		case rating < ratingMidpoint:
-			analysis.Losses++
-		default:
-			analysis.Ties++
+		if rating > coverage[opp] {
+			coverage[opp] = rating
 		}
 	}
 
 	if len(meta) > 0 {
-		analysis.AvgRating = sum / float64(len(meta))
+		analysis.AvgRating = memberSum / float64(len(meta))
 	}
 
-	return analysis
+	return memberTally{Analysis: analysis, RatingSum: memberSum}
+}
+
+// tallyMatchup updates a per-member analysis with one matchup rating:
+// bumps the win/loss/tie counters and appends to HardWins / HardLosses
+// when the rating crosses the threshold.
+func tallyMatchup(analysis *TeamMemberAnalysis, opponent string, rating int) {
+	switch {
+	case rating > hardWinRating:
+		analysis.HardWins = append(analysis.HardWins, opponent)
+	case rating < hardLossRating:
+		analysis.HardLosses = append(analysis.HardLosses, opponent)
+	}
+
+	switch {
+	case rating > ratingMidpoint:
+		analysis.Wins++
+	case rating < ratingMidpoint:
+		analysis.Losses++
+	default:
+		analysis.Ties++
+	}
 }
 
 // findUncoveredThreats returns meta species whose best-of-team rating

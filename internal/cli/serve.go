@@ -209,9 +209,9 @@ func runRefreshLoop(
 	}
 }
 
-// buildMCPServer constructs the mcp.Server with all four currently
+// buildMCPServer constructs the mcp.Server with all five currently
 // implemented tools registered (pvp_rank, pvp_matchup, pvp_meta,
-// pvp_team_analysis).
+// pvp_team_analysis, pvp_team_builder).
 func buildMCPServer(gamemasterMgr *gamemaster.Manager, ranks *rankings.Manager) *mcp.Server {
 	server := mcp.NewServer(&mcp.Implementation{
 		Name:    serverName,

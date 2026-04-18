@@ -153,6 +153,85 @@ func TestTeamAnalysisTool_WrongTeamSize(t *testing.T) {
 	}
 }
 
+func TestTeamAnalysisTool_NegativeTopN(t *testing.T) {
+	t.Parallel()
+
+	tool := newTeamAnalysisTool(t)
+	handler := tool.Handler()
+
+	valid := tools.Combatant{
+		Species: "a", IV: [3]int{15, 15, 15}, Level: 40,
+		FastMove: "FAST1", ChargedMoves: []string{"CH1"},
+	}
+
+	_, _, err := handler(t.Context(), nil, tools.TeamAnalysisParams{
+		Team:   []tools.Combatant{valid, valid, valid},
+		League: leagueGreat,
+		TopN:   -1,
+	})
+	if !errors.Is(err, tools.ErrInvalidTopN) {
+		t.Errorf("error = %v, want wrapping ErrInvalidTopN", err)
+	}
+}
+
+func TestTeamAnalysisTool_ZeroShieldsHonoured(t *testing.T) {
+	t.Parallel()
+
+	tool := newTeamAnalysisTool(t)
+	handler := tool.Handler()
+
+	valid := tools.Combatant{
+		Species: "a", IV: [3]int{15, 15, 15}, Level: 40,
+		FastMove: "FAST1", ChargedMoves: []string{"CH1"},
+	}
+	team := []tools.Combatant{valid, valid, valid}
+
+	_, withOneShield, err := handler(t.Context(), nil, tools.TeamAnalysisParams{
+		Team: team, League: leagueGreat,
+		Shields: []int{1, 1},
+	})
+	if err != nil {
+		t.Fatalf("with 1 shield: %v", err)
+	}
+
+	_, withZeroShields, err := handler(t.Context(), nil, tools.TeamAnalysisParams{
+		Team: team, League: leagueGreat,
+		Shields: []int{0, 0},
+	})
+	if err != nil {
+		t.Fatalf("with 0 shields: %v", err)
+	}
+
+	// Different shield counts must produce a different team_score;
+	// if the two runs collapse onto the same aggregate the "shields=0
+	// silently becomes 1" regression would be back.
+	if withOneShield.TeamScore == withZeroShields.TeamScore {
+		t.Errorf("team_score unchanged across shield counts (%.2f) — zero likely coerced to default",
+			withOneShield.TeamScore)
+	}
+}
+
+func TestTeamAnalysisTool_InvalidShieldsLength(t *testing.T) {
+	t.Parallel()
+
+	tool := newTeamAnalysisTool(t)
+	handler := tool.Handler()
+
+	valid := tools.Combatant{
+		Species: "a", IV: [3]int{15, 15, 15}, Level: 40,
+		FastMove: "FAST1", ChargedMoves: []string{"CH1"},
+	}
+
+	_, _, err := handler(t.Context(), nil, tools.TeamAnalysisParams{
+		Team:    []tools.Combatant{valid, valid, valid},
+		League:  leagueGreat,
+		Shields: []int{1},
+	})
+	if !errors.Is(err, tools.ErrInvalidShields) {
+		t.Errorf("error = %v, want wrapping ErrInvalidShields", err)
+	}
+}
+
 func TestTeamAnalysisTool_UnknownLeague(t *testing.T) {
 	t.Parallel()
 
