@@ -4,15 +4,22 @@ MCP server that will expose a Pokémon GO PvP battle simulator and ranker to
 LLM assistants. The simulation math will live in a companion engine module
 developed alongside this server.
 
-**Status**: early development. Two tools are implemented:
+**Status**: early development. Five tools are implemented:
 
 - `pvp_rank` — rank one Pokémon in a league/cup by IV and level, with
   percent-of-best vs the species' global stat-product optimum.
 - `pvp_matchup` — 1v1 simulation returning winner, turns, HP / energy /
   shields used, and charged-move firing counts.
+- `pvp_meta` — top-N species from pvpoke's overall rankings for a
+  league, including recommended moveset and display stats.
+- `pvp_team_analysis` — evaluate a 3-member team against the sampled
+  meta: per-member battle ratings, hard wins / losses, coverage
+  matrix, and uncovered threats.
+- `pvp_team_builder` — enumerate 3-member teams from a candidate pool,
+  score each against the meta, return the highest-scoring subset
+  (required / banned species filters honoured).
 
-`pvp_team_analysis`, `pvp_team_builder`, and `pvp_meta` are still
-planned. No tagged release exists yet. The GitHub repository rename
+No tagged release exists yet. The GitHub repository rename
 from `pvpoke-mcp` to `pogo-pvp-mcp` is pending, so
 `go install github.com/lexfrei/pogo-pvp-mcp/cmd/pogo-pvp-mcp@latest`
 does not yet resolve.
@@ -53,11 +60,12 @@ CPM values) fetched from the open-source [PvPoke][pvpoke] project (MIT
 licensed). No artwork, sprites, or audio is distributed. Pokémon are
 identified by string id only.
 
-## Planned tools
+## Roadmap
 
-- `pvp_team_analysis` — evaluate a 3-member team against the meta.
-- `pvp_team_builder` — Pareto-frontier team selection from a candidate pool.
-- `pvp_meta` — current meta for a given format.
+- Full battle-simulation-based ranker (engine-side) so `pvp_meta`
+  stops depending on pre-computed pvpoke JSONs.
+- CMP / shadow scaling in the battle engine.
+- Parallel `pvp_team_builder` worker pool for large pools.
 
 ## License
 
