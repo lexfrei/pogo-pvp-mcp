@@ -96,14 +96,18 @@ type TeamMemberAnalysis struct {
 }
 
 // TeamAnalysisResult is the JSON output contract for pvp_team_analysis.
+// SimulationFailures counts (member, meta) pairs whose engine call
+// returned an error and were treated as ties for aggregation purposes;
+// a non-zero value means the team score is less trustworthy.
 type TeamAnalysisResult struct {
-	League    string               `json:"league"`
-	CPCap     int                  `json:"cp_cap"`
-	MetaSize  int                  `json:"meta_size"`
-	TeamScore float64              `json:"team_score"`
-	PerMember []TeamMemberAnalysis `json:"per_member"`
-	Coverage  map[string]int       `json:"coverage_matrix"`
-	Uncovered []string             `json:"uncovered_threats"`
+	League             string               `json:"league"`
+	CPCap              int                  `json:"cp_cap"`
+	MetaSize           int                  `json:"meta_size"`
+	TeamScore          float64              `json:"team_score"`
+	SimulationFailures int                  `json:"simulation_failures"`
+	PerMember          []TeamMemberAnalysis `json:"per_member"`
+	Coverage           map[string]int       `json:"coverage_matrix"`
+	Uncovered          []string             `json:"uncovered_threats"`
 }
 
 // TeamAnalysisTool wraps the gamemaster and rankings managers.
@@ -178,7 +182,8 @@ func (tool *TeamAnalysisTool) handle(
 		return nil, TeamAnalysisResult{}, err
 	}
 
-	return nil, runTeamAnalysis(teamCombatants, metaCombatants, metaEntries, params.League, cpCap, topN), nil
+	return nil, runTeamAnalysis(ctx, teamCombatants, metaCombatants, metaEntries,
+		params.League, cpCap, topN), nil
 }
 
 // validateTeamAnalysisParams runs the cheap pre-flight checks (cancel,
@@ -301,6 +306,12 @@ func buildOneMetaCombatant(
 		return pogopvp.Combatant{}, fmt.Errorf("%w: fast %q", ErrUnknownMove, entry.Moveset[0])
 	}
 
+	if fast.Category != pogopvp.MoveCategoryFast {
+		return pogopvp.Combatant{}, fmt.Errorf(
+			"%w: %q is a charged move but appears in moveset[0]",
+			ErrMoveCategoryMismatch, entry.Moveset[0])
+	}
+
 	charged, err := resolveChargedMoves(snapshot, entry.Moveset[1:])
 	if err != nil {
 		return pogopvp.Combatant{}, err
@@ -316,15 +327,21 @@ func buildOneMetaCombatant(
 	}, nil
 }
 
-// resolveChargedMoves looks up each id in the gamemaster moves map and
-// returns the corresponding slice.
+// resolveChargedMoves looks up each id in the gamemaster moves map,
+// verifies its category, and returns the corresponding slice.
 func resolveChargedMoves(snapshot *pogopvp.Gamemaster, ids []string) ([]pogopvp.Move, error) {
 	out := make([]pogopvp.Move, 0, len(ids))
 
-	for _, id := range ids {
-		move, ok := snapshot.Moves[id]
+	for _, moveID := range ids {
+		move, ok := snapshot.Moves[moveID]
 		if !ok {
-			return nil, fmt.Errorf("%w: charged %q", ErrUnknownMove, id)
+			return nil, fmt.Errorf("%w: charged %q", ErrUnknownMove, moveID)
+		}
+
+		if move.Category != pogopvp.MoveCategoryCharged {
+			return nil, fmt.Errorf(
+				"%w: %q is a fast move but appears in charged slot",
+				ErrMoveCategoryMismatch, moveID)
 		}
 
 		out = append(out, move)
@@ -336,8 +353,11 @@ func resolveChargedMoves(snapshot *pogopvp.Gamemaster, ids []string) ([]pogopvp.
 // runTeamAnalysis simulates the full cartesian product of user team ×
 // meta, aggregates ratings, and builds the output struct. Each
 // (member, meta) pair is simulated exactly once; the rating feeds
-// both the per-member stats and the team-wide coverage map.
+// both the per-member stats and the team-wide coverage map. Checks
+// ctx.Err() at each outer iteration so a client disconnect aborts
+// the sweep.
 func runTeamAnalysis(
+	ctx context.Context,
 	team, meta []pogopvp.Combatant,
 	metaEntries []rankings.RankingEntry,
 	league string, cpCap, topN int,
@@ -345,12 +365,20 @@ func runTeamAnalysis(
 	perMember := make([]TeamMemberAnalysis, len(team))
 	coverage := make(map[string]int, len(meta))
 
-	var overallSum float64
+	var (
+		overallSum float64
+		failures   int
+	)
 
 	for memberIdx := range team {
+		if ctx.Err() != nil {
+			break
+		}
+
 		tally := analyzeMember(&team[memberIdx], meta, metaEntries, coverage)
 		perMember[memberIdx] = tally.Analysis
 		overallSum += tally.RatingSum
+		failures += tally.Failures
 	}
 
 	denom := len(team) * len(meta)
@@ -361,22 +389,25 @@ func runTeamAnalysis(
 	}
 
 	return TeamAnalysisResult{
-		League:    league,
-		CPCap:     cpCap,
-		MetaSize:  topN,
-		TeamScore: teamScore,
-		PerMember: perMember,
-		Coverage:  coverage,
-		Uncovered: findUncoveredThreats(coverage, metaEntries),
+		League:             league,
+		CPCap:              cpCap,
+		MetaSize:           topN,
+		TeamScore:          teamScore,
+		SimulationFailures: failures,
+		PerMember:          perMember,
+		Coverage:           coverage,
+		Uncovered:          findUncoveredThreats(coverage, metaEntries),
 	}
 }
 
-// memberTally bundles the per-member analysis with the raw sum of
-// ratings so runTeamAnalysis can aggregate the team-wide score without
-// re-running any simulations.
+// memberTally bundles the per-member analysis, the raw sum of ratings
+// (for the overall team score), and the count of failed Simulate
+// calls so runTeamAnalysis can surface simulation issues rather than
+// burying them behind the tie-midpoint fallback.
 type memberTally struct {
 	Analysis  TeamMemberAnalysis
 	RatingSum float64
+	Failures  int
 }
 
 // analyzeMember simulates one team member against the full meta slice
@@ -390,10 +421,17 @@ func analyzeMember(
 ) memberTally {
 	analysis := TeamMemberAnalysis{Species: member.Species.ID}
 
-	var memberSum float64
+	var (
+		memberSum float64
+		failures  int
+	)
 
 	for oppIdx := range meta {
-		rating := ratingFor(member, &meta[oppIdx])
+		rating, err := ratingFor(member, &meta[oppIdx])
+		if err != nil {
+			failures++
+		}
+
 		memberSum += float64(rating)
 
 		opp := metaEntries[oppIdx].SpeciesID
@@ -408,7 +446,7 @@ func analyzeMember(
 		analysis.AvgRating = memberSum / float64(len(meta))
 	}
 
-	return memberTally{Analysis: analysis, RatingSum: memberSum}
+	return memberTally{Analysis: analysis, RatingSum: memberSum, Failures: failures}
 }
 
 // tallyMatchup updates a per-member analysis with one matchup rating:
@@ -451,11 +489,14 @@ func findUncoveredThreats(
 
 // ratingFor returns the 0..1000 battle rating from the attacker's POV
 // for a single match. 500 is a tie/timeout midpoint; every HP point
-// above zero on either side nudges the rating toward the winner.
-func ratingFor(attacker, defender *pogopvp.Combatant) int {
+// above zero on either side nudges the rating toward the winner. The
+// second return value is the error surface from [pogopvp.Simulate];
+// callers (team_analysis / team_builder) use it to count broken
+// matchups rather than silently inflating the team score with ties.
+func ratingFor(attacker, defender *pogopvp.Combatant) (int, error) {
 	result, err := pogopvp.Simulate(attacker, defender, pogopvp.BattleOptions{})
 	if err != nil {
-		return ratingMidpoint
+		return ratingMidpoint, fmt.Errorf("simulate: %w", err)
 	}
 
 	attMax := initialHP(attacker)
@@ -463,11 +504,11 @@ func ratingFor(attacker, defender *pogopvp.Combatant) int {
 
 	switch result.Winner {
 	case 0:
-		return ratingMidpoint + scaleHP(result.HPRemaining[0], attMax)
+		return ratingMidpoint + scaleHP(result.HPRemaining[0], attMax), nil
 	case 1:
-		return ratingMidpoint - scaleHP(result.HPRemaining[1], defMax)
+		return ratingMidpoint - scaleHP(result.HPRemaining[1], defMax), nil
 	default:
-		return ratingMidpoint
+		return ratingMidpoint, nil
 	}
 }
 

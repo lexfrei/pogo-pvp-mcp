@@ -46,12 +46,16 @@ type TeamBuilderTeam struct {
 }
 
 // TeamBuilderResult is the JSON output for pvp_team_builder.
+// SimulationFailures counts simulate calls that errored across the
+// entire search; non-zero means some triples were scored with tie
+// fallbacks and the ranking is less reliable.
 type TeamBuilderResult struct {
-	League    string            `json:"league"`
-	CPCap     int               `json:"cp_cap"`
-	PoolSize  int               `json:"pool_size"`
-	Evaluated int               `json:"evaluated_combinations"`
-	Teams     []TeamBuilderTeam `json:"teams"`
+	League             string            `json:"league"`
+	CPCap              int               `json:"cp_cap"`
+	PoolSize           int               `json:"pool_size"`
+	Evaluated          int               `json:"evaluated_combinations"`
+	SimulationFailures int               `json:"simulation_failures"`
+	Teams              []TeamBuilderTeam `json:"teams"`
 }
 
 // TeamBuilderTool wraps the gamemaster and rankings managers.
@@ -97,10 +101,12 @@ type teamBuilderInputs struct {
 }
 
 // evaluationResult pairs the evaluated-combinations counter with the
-// sorted candidate teams.
+// sorted candidate teams and the total number of failed simulate
+// calls observed during the sweep.
 type evaluationResult struct {
 	Teams     []TeamBuilderTeam
 	Evaluated int
+	Failures  int
 }
 
 // handle orchestrates the team-builder search. It validates params,
@@ -120,7 +126,7 @@ func (tool *TeamBuilderTool) handle(
 		return nil, TeamBuilderResult{}, err
 	}
 
-	result := evaluateTeams(inputs.pool, inputs.poolCombatants, inputs.metaCombatants, inputs.required)
+	result := evaluateTeams(ctx, inputs.pool, inputs.poolCombatants, inputs.metaCombatants, inputs.required)
 
 	sort.SliceStable(result.Teams, func(i, j int) bool {
 		return result.Teams[i].TeamScore > result.Teams[j].TeamScore
@@ -129,11 +135,12 @@ func (tool *TeamBuilderTool) handle(
 	result.Teams = result.Teams[:min(inputs.maxResults, len(result.Teams))]
 
 	return nil, TeamBuilderResult{
-		League:    inputs.league,
-		CPCap:     inputs.cpCap,
-		PoolSize:  len(inputs.pool),
-		Evaluated: result.Evaluated,
-		Teams:     result.Teams,
+		League:             inputs.league,
+		CPCap:              inputs.cpCap,
+		PoolSize:           len(inputs.pool),
+		Evaluated:          result.Evaluated,
+		SimulationFailures: result.Failures,
+		Teams:              result.Teams,
 	}, nil
 }
 
@@ -309,8 +316,11 @@ func resolveRequired(pool []Combatant, required []string) (map[string]struct{}, 
 
 // evaluateTeams enumerates all 3-combinations of the pool that satisfy
 // the required-species constraint and returns them annotated with
-// team_score. Scoring uses the shared ratingFor helper.
+// team_score. Scoring uses the shared ratingFor helper. Honours ctx
+// cancellation on every outer iteration so long searches can be
+// aborted by a client disconnect.
 func evaluateTeams(
+	ctx context.Context,
 	pool []Combatant,
 	poolCombatants, meta []pogopvp.Combatant,
 	required map[string]struct{},
@@ -318,6 +328,10 @@ func evaluateTeams(
 	var out evaluationResult
 
 	for i := range pool {
+		if ctx.Err() != nil {
+			return out
+		}
+
 		for jIdx := i + 1; jIdx < len(pool); jIdx++ {
 			for kIdx := jIdx + 1; kIdx < len(pool); kIdx++ {
 				members := []string{pool[i].Species, pool[jIdx].Species, pool[kIdx].Species}
@@ -330,10 +344,11 @@ func evaluateTeams(
 				}
 				score := scoreTeam(teamCombatants, meta)
 				out.Evaluated++
+				out.Failures += score.Failures
 
 				out.Teams = append(out.Teams, TeamBuilderTeam{
 					Members:   members,
-					TeamScore: score,
+					TeamScore: score.Average,
 					Reason:    "highest average battle rating across the sampled meta",
 				})
 			}
@@ -355,20 +370,38 @@ func containsAllSpecies(members []string, required map[string]struct{}) bool {
 	return true
 }
 
+// teamScore bundles the average rating across a team × meta sweep
+// with the count of failed simulate calls that happened inside it.
+type teamScore struct {
+	Average  float64
+	Failures int
+}
+
 // scoreTeam returns the average battle rating across the cartesian
-// product of team × meta.
-func scoreTeam(team, meta []pogopvp.Combatant) float64 {
+// product of team × meta plus the failure count.
+func scoreTeam(team, meta []pogopvp.Combatant) teamScore {
 	if len(team) == 0 || len(meta) == 0 {
-		return 0
+		return teamScore{}
 	}
 
-	var sum float64
+	var (
+		sum      float64
+		failures int
+	)
 
 	for memberIdx := range team {
 		for oppIdx := range meta {
-			sum += float64(ratingFor(&team[memberIdx], &meta[oppIdx]))
+			rating, err := ratingFor(&team[memberIdx], &meta[oppIdx])
+			if err != nil {
+				failures++
+			}
+
+			sum += float64(rating)
 		}
 	}
 
-	return sum / float64(len(team)*len(meta))
+	return teamScore{
+		Average:  sum / float64(len(team)*len(meta)),
+		Failures: failures,
+	}
 }

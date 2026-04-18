@@ -9,7 +9,8 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-// ErrInvalidTopN is returned when MetaParams.TopN is negative.
+// ErrInvalidTopN is returned when the TopN field on MetaParams,
+// TeamAnalysisParams, or TeamBuilderParams is negative.
 var ErrInvalidTopN = errors.New("invalid top_n")
 
 // defaultMetaTopN is the number of species returned when the caller
