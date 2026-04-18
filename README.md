@@ -4,12 +4,14 @@ MCP server that will expose a Pokémon GO PvP battle simulator and ranker to
 LLM assistants. The simulation math will live in a companion engine module
 developed alongside this server.
 
-**Status**: early development. Five tools are implemented:
+**Status**: early development. Six tools are implemented:
 
 - `pvp_rank` — rank one Pokémon in a league/cup by IV and level, with
   percent-of-best vs the species' global stat-product optimum.
 - `pvp_matchup` — 1v1 simulation returning winner, turns, HP / energy /
   shields used, and charged-move firing counts.
+- `pvp_cp_limits` — given species + IVs, return the highest level and
+  CP reachable while staying under each PvP league's CP cap.
 - `pvp_meta` — top-N species from pvpoke's overall rankings for a
   league, including recommended moveset and display stats.
 - `pvp_team_analysis` — evaluate a 3-member team against the sampled
@@ -88,7 +90,7 @@ Add the server to `~/Library/Application Support/Claude/claude_desktop_config.js
 }
 ```
 
-Restart Claude Desktop. The five `pvp_*` tools will appear in the
+Restart Claude Desktop. The six `pvp_*` tools will appear in the
 tool list. If a tool returns "gamemaster not loaded", run
 `pogo-pvp-mcp fetch-gm` once to warm the cache.
 

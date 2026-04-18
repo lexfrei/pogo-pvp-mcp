@@ -35,7 +35,7 @@ const integrationFixtureGamemaster = `{
   ]
 }`
 
-// buildWiredServer stands up a fully-wired MCP server with all five
+// buildWiredServer stands up a fully-wired MCP server with all six
 // currently implemented tools registered and pre-populated managers.
 func buildWiredServer(t *testing.T) *mcp.Server {
 	t.Helper()
@@ -81,6 +81,9 @@ func buildWiredServer(t *testing.T) *mcp.Server {
 	matchupTool := tools.NewMatchupTool(mgr)
 	mcp.AddTool(mcpServer, matchupTool.Tool(), matchupTool.Handler())
 
+	cpLimitsTool := tools.NewCPLimitsTool(mgr)
+	mcp.AddTool(mcpServer, cpLimitsTool.Tool(), cpLimitsTool.Handler())
+
 	metaTool := tools.NewMetaTool(ranks)
 	mcp.AddTool(mcpServer, metaTool.Tool(), metaTool.Handler())
 
@@ -94,7 +97,7 @@ func buildWiredServer(t *testing.T) *mcp.Server {
 }
 
 // TestIntegration_ListTools verifies that a client connected via the
-// in-memory transport sees all five currently implemented tools
+// in-memory transport sees all six currently implemented tools
 // advertised. Guards against a silent drop of a registered tool from
 // buildMCPServer.
 func TestIntegration_ListTools(t *testing.T) {
@@ -132,6 +135,7 @@ func TestIntegration_ListTools(t *testing.T) {
 	expected := []string{
 		"pvp_rank",
 		"pvp_matchup",
+		"pvp_cp_limits",
 		"pvp_meta",
 		"pvp_team_analysis",
 		"pvp_team_builder",
