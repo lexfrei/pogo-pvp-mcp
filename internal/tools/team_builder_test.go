@@ -301,6 +301,66 @@ func TestTeamBuilderTool_PoolTooLarge(t *testing.T) {
 	}
 }
 
+func TestTeamBuilderTool_TooManyRequired(t *testing.T) {
+	t.Parallel()
+
+	tool := newTeamBuilderTool(t)
+	handler := tool.Handler()
+
+	_, _, err := handler(t.Context(), nil, tools.TeamBuilderParams{
+		Pool: []tools.Combatant{
+			baseCombatant("a"),
+			baseCombatant("b"),
+			baseCombatant("c"),
+		},
+		League:   leagueGreat,
+		Required: []string{"a", "b", "c", "d"},
+	})
+	if !errors.Is(err, tools.ErrTooManyRequired) {
+		t.Errorf("error = %v, want wrapping ErrTooManyRequired", err)
+	}
+}
+
+func TestTeamBuilderTool_ReturnsPoolIndices(t *testing.T) {
+	t.Parallel()
+
+	tool := newTeamBuilderTool(t)
+	handler := tool.Handler()
+
+	pool := []tools.Combatant{
+		baseCombatant("a"),
+		baseCombatant("b"),
+		baseCombatant("c"),
+	}
+
+	_, result, err := handler(t.Context(), nil, tools.TeamBuilderParams{
+		Pool:   pool,
+		League: leagueGreat,
+	})
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+	if len(result.Teams) == 0 {
+		t.Fatal("no teams returned")
+	}
+
+	team := result.Teams[0]
+	if len(team.PoolIndices) != 3 {
+		t.Errorf("PoolIndices len = %d, want 3", len(team.PoolIndices))
+	}
+
+	for idx, poolIdx := range team.PoolIndices {
+		if poolIdx < 0 || poolIdx >= len(pool) {
+			t.Errorf("PoolIndices[%d] = %d out of pool range", idx, poolIdx)
+		}
+
+		if pool[poolIdx].Species != team.Members[idx] {
+			t.Errorf("PoolIndices[%d]->%s does not match Members[%d]=%s",
+				idx, pool[poolIdx].Species, idx, team.Members[idx])
+		}
+	}
+}
+
 func TestTeamBuilderTool_NegativeMaxResults(t *testing.T) {
 	t.Parallel()
 

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"sync"
 	"sync/atomic"
@@ -248,6 +249,63 @@ func TestManager_GetSingleflight(t *testing.T) {
 
 	if got := hits.Load(); got != 1 {
 		t.Errorf("upstream hit count = %d, want 1 (singleflight)", got)
+	}
+}
+
+// TestManager_StaleCacheTriggersRefetch pins the 24h TTL invariant:
+// when the on-disk cache is older than cacheTTL, Get must go to the
+// upstream for a fresh copy rather than serving the stale snapshot.
+func TestManager_StaleCacheTriggersRefetch(t *testing.T) {
+	t.Parallel()
+
+	hits := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hits++
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(minimalRankings))
+	}))
+	t.Cleanup(server.Close)
+
+	dir := t.TempDir()
+
+	mgr, err := rankings.NewManager(rankings.Config{
+		BaseURL:  server.URL,
+		LocalDir: dir,
+	})
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+
+	_, err = mgr.Get(t.Context(), 1500)
+	if err != nil {
+		t.Fatalf("first Get: %v", err)
+	}
+
+	// Back-date the cache file past the 24h TTL and use a fresh
+	// manager so the in-memory cache does not short-circuit.
+	path := filepath.Join(dir, "rankings-1500.json")
+	old := time.Now().Add(-72 * time.Hour)
+
+	err = os.Chtimes(path, old, old)
+	if err != nil {
+		t.Fatalf("Chtimes: %v", err)
+	}
+
+	mgr2, err := rankings.NewManager(rankings.Config{
+		BaseURL:  server.URL,
+		LocalDir: dir,
+	})
+	if err != nil {
+		t.Fatalf("NewManager #2: %v", err)
+	}
+
+	_, err = mgr2.Get(t.Context(), 1500)
+	if err != nil {
+		t.Fatalf("second Get: %v", err)
+	}
+
+	if hits != 2 {
+		t.Errorf("server hits = %d, want 2 (stale cache must re-fetch)", hits)
 	}
 }
 

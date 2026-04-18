@@ -396,11 +396,15 @@ func runTeamAnalysis(
 		failures += tally.Failures
 	}
 
-	denom := len(team) * len(meta)
+	// Successful matchups count — failures are excluded from both
+	// numerator (analyzeMember skipped them) and denominator so the
+	// team_score is the average over pairs that actually produced a
+	// rating, not depressed toward zero by engine errors.
+	successful := len(team)*len(meta) - failures
 
 	var teamScore float64
-	if denom > 0 {
-		teamScore = overallSum / float64(denom)
+	if successful > 0 {
+		teamScore = overallSum / float64(successful)
 	}
 
 	return TeamAnalysisResult{

@@ -36,6 +36,11 @@ const fetchTimeout = 30 * time.Second
 // cacheDirPerm is the permission bits used for the local cache dir.
 const cacheDirPerm = 0o750
 
+// cacheTTL is how long a cached rankings file stays fresh before the
+// manager re-fetches from upstream. 24h matches the gamemaster
+// refresh interval so both datasets move together.
+const cacheTTL = 24 * time.Hour
+
 // supportedCaps enumerates the CP caps pvpoke publishes rankings for.
 //
 //nolint:gochecknoglobals // domain-constant lookup table
@@ -193,15 +198,33 @@ func (m *Manager) storeInMemory(cpCap int, entries []RankingEntry) {
 	m.mu.Unlock()
 }
 
-// loadLocal reads the cached JSON for the given cap from disk.
+// loadLocal reads the cached JSON for the given cap from disk. The
+// file is rejected if its mtime is older than [cacheTTL], so a stale
+// cache forces a fresh upstream fetch instead of being served forever.
 func (m *Manager) loadLocal(cpCap int) ([]RankingEntry, error) {
-	body, err := os.ReadFile(m.localPath(cpCap))
+	path := m.localPath(cpCap)
+
+	info, err := os.Stat(path)
+	if err != nil {
+		return nil, fmt.Errorf("stat local rankings: %w", err)
+	}
+
+	if time.Since(info.ModTime()) > cacheTTL {
+		return nil, fmt.Errorf("%w: %s older than %v", errStaleCache, path, cacheTTL)
+	}
+
+	body, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("read local rankings: %w", err)
 	}
 
 	return parseEntries(body)
 }
+
+// errStaleCache is a private sentinel used by loadLocal so Get can
+// distinguish "cache does not exist" from "cache is too old" and both
+// paths fall through to fetchUpstream.
+var errStaleCache = errors.New("rankings cache stale")
 
 // fetchUpstream hits the pvpoke rankings URL for the given cap and
 // persists the payload to disk. The parsed entries are returned.

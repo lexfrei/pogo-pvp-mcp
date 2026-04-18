@@ -50,10 +50,15 @@ type TeamBuilderParams struct {
 }
 
 // TeamBuilderTeam is one candidate team plus its aggregated score.
+// PoolIndices points back into TeamBuilderParams.Pool so callers can
+// disambiguate duplicate species entries (same species id, different
+// IV/moveset) — Members alone cannot identify which variant was
+// chosen when a species appears more than once in the pool.
 type TeamBuilderTeam struct {
-	Members   []string `json:"members"`
-	TeamScore float64  `json:"team_score"`
-	Reason    string   `json:"reason"`
+	Members     []string `json:"members"`
+	PoolIndices []int    `json:"pool_indices"`
+	TeamScore   float64  `json:"team_score"`
+	Reason      string   `json:"reason"`
 }
 
 // TeamBuilderResult is the JSON output for pvp_team_builder.
@@ -223,8 +228,18 @@ func validateTeamBuilderParams(params *TeamBuilderParams) error {
 		return fmt.Errorf("%w: %d must be non-negative", ErrInvalidTopN, params.TopN)
 	}
 
+	if len(params.Required) > TeamSize {
+		return fmt.Errorf("%w: %d required species, only %d team slots",
+			ErrTooManyRequired, len(params.Required), TeamSize)
+	}
+
 	return validateShields(params.Shields)
 }
+
+// ErrTooManyRequired is returned when Required has more entries than
+// the team can fit — every triple fails the filter, which would
+// otherwise produce an empty teams[] with no explanation.
+var ErrTooManyRequired = errors.New("too many required species")
 
 // preparedPool bundles the pool after filtering plus its matching
 // engine-combatant slice so preparePool can return both without an
@@ -368,9 +383,10 @@ func evaluateTeams(
 				out.Evaluated++
 
 				out.Teams = append(out.Teams, TeamBuilderTeam{
-					Members:   members,
-					TeamScore: score,
-					Reason:    "highest average battle rating across the sampled meta",
+					Members:     members,
+					PoolIndices: []int{i, jIdx, kIdx},
+					TeamScore:   score,
+					Reason:      "highest average battle rating across the sampled meta",
 				})
 			}
 		}

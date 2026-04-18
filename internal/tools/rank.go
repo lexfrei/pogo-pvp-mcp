@@ -33,9 +33,10 @@ var ErrInvalidCPCap = errors.New("invalid cp_cap")
 // Refresh completes.
 var ErrGamemasterNotLoaded = errors.New("gamemaster not loaded")
 
-// Canonical CP caps for the three standard leagues. Overrides from
+// Canonical CP caps for the four standard leagues. Overrides from
 // RankParams.CPCap take priority.
 const (
+	littleLeagueCap = 500
 	greatLeagueCap  = 1500
 	ultraLeagueCap  = 2500
 	masterLeagueCap = 10000
@@ -46,6 +47,7 @@ const (
 //
 //nolint:gochecknoglobals // domain-constant lookup table
 var LeagueCP = map[string]int{
+	"little": littleLeagueCap,
 	"great":  greatLeagueCap,
 	"ultra":  ultraLeagueCap,
 	"master": masterLeagueCap,
