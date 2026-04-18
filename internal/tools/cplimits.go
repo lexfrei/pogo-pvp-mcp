@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"fmt"
+	"math"
 
 	pogopvp "github.com/lexfrei/pogo-pvp-engine"
 	"github.com/lexfrei/pogo-pvp-mcp/internal/gamemaster"
@@ -27,6 +28,7 @@ var cpLimitLeagues = []struct {
 type CPLimitsParams struct {
 	Species string `json:"species" jsonschema:"species id in the pvpoke gamemaster (shadow variants use e.g. \"medicham_shadow\")"`
 	IV      [3]int `json:"iv" jsonschema:"individual values in [atk, def, sta] order, each 0..15"`
+	XL      bool   `json:"xl,omitempty" jsonschema:"allow XL candy levels above 40 — matches pvp_rank's XL flag semantics"`
 }
 
 // LeagueCPLimit reports the best level + CP a Pokémon with given IVs
@@ -42,10 +44,14 @@ type LeagueCPLimit struct {
 	MaxLevel float64 `json:"max_level"`
 }
 
-// CPLimitsResult is the JSON output contract for pvp_cp_limits.
+// CPLimitsResult is the JSON output contract for pvp_cp_limits. XL
+// echoes the request flag so callers can distinguish "level 40, no XL
+// candy" from "level 40, XL allowed but nothing above 40 fit" without
+// keeping the request context around.
 type CPLimitsResult struct {
 	Species string          `json:"species"`
 	IV      [3]int          `json:"iv"`
+	XL      bool            `json:"xl"`
 	Leagues []LeagueCPLimit `json:"leagues"`
 }
 
@@ -63,7 +69,7 @@ func NewCPLimitsTool(manager *gamemaster.Manager) *CPLimitsTool {
 // cpLimitsToolDescription keeps the Tool struct literal within lll.
 const cpLimitsToolDescription = "Return the highest level and CP a Pokémon with given IVs can reach " +
 	"while staying under each PvP league's CP cap (Little 500, Great 1500, Ultra 2500). " +
-	"Walks the 0.5 level grid up to the game's max level (51)."
+	"Walks the 0.5 level grid up to level 40 by default, or level 51 when xl=true."
 
 // Tool returns the MCP tool registration.
 func (tool *CPLimitsTool) Tool() *mcp.Tool {
@@ -106,29 +112,38 @@ func (tool *CPLimitsTool) handle(
 		return nil, CPLimitsResult{}, fmt.Errorf("invalid IV: %w", err)
 	}
 
+	maxLevel := pogopvp.NoXLMaxLevel
+	if params.XL {
+		maxLevel = pogopvp.MaxLevel
+	}
+
 	leagues := make([]LeagueCPLimit, len(cpLimitLeagues))
 	for i, league := range cpLimitLeagues {
-		leagues[i] = computeLeagueLimit(species.BaseStats, ivs, league.Name, league.Cap)
+		leagues[i] = computeLeagueLimit(species.BaseStats, ivs, league.Name, league.Cap, maxLevel)
 	}
 
 	return nil, CPLimitsResult{
 		Species: params.Species,
 		IV:      params.IV,
+		XL:      params.XL,
 		Leagues: leagues,
 	}, nil
 }
 
-// computeLeagueLimit walks the 0.5 level grid downward from MaxLevel
-// and returns the first level whose CP fits under the cap. If even
-// level 1 exceeds the cap, Fits=false and MaxCP/MaxLevel describe the
-// level-1 baseline so callers see how far over the species is.
+// computeLeagueLimit walks the 0.5 level grid downward from maxLevel
+// and returns the first level whose CP fits under the cap. maxLevel is
+// supplied by the caller so the XL flag can flip between
+// pogopvp.NoXLMaxLevel (40) and pogopvp.MaxLevel (51) without
+// duplicating the loop. If even level 1 exceeds the cap, Fits=false
+// and MaxCP/MaxLevel describe the level-1 baseline so callers see how
+// far over the species is.
 func computeLeagueLimit(
-	base pogopvp.BaseStats, ivs pogopvp.IV, leagueName string, cpCap int,
+	base pogopvp.BaseStats, ivs pogopvp.IV, leagueName string, cpCap int, maxLevel float64,
 ) LeagueCPLimit {
 	out := LeagueCPLimit{League: leagueName, CPCap: cpCap}
 
-	doubledMax := int(pogopvp.MaxLevel * 2)
-	doubledMin := int(pogopvp.MinLevel * 2)
+	doubledMax := int(math.Round(maxLevel * 2))
+	doubledMin := int(math.Round(pogopvp.MinLevel * 2))
 
 	for doubled := doubledMax; doubled >= doubledMin; doubled-- {
 		level := float64(doubled) / 2
@@ -150,8 +165,10 @@ func computeLeagueLimit(
 		return out
 	}
 
-	// Nothing fit — even level 1 exceeds the cap. Report the level-1
-	// baseline so the response still carries useful numbers.
+	// Unreachable in practice given the pogopvp.ComputeCP floor of 10
+	// and the 500-CP Little Cup floor, but keeps the function total so
+	// a future cap lowered below the CP floor still returns a sensible
+	// level-1 baseline instead of a zero value.
 	cpm, _ := pogopvp.CPMAt(pogopvp.MinLevel)
 	out.MaxCP = pogopvp.ComputeCP(base, ivs, cpm)
 	out.MaxLevel = pogopvp.MinLevel

@@ -116,7 +116,12 @@ func TestCPLimitsTool_MedichamThreeLeagues(t *testing.T) {
 
 // TestCPLimitsTool_MonotonicAcrossCaps pins the obvious invariant:
 // a bigger cap cannot yield a smaller max_cp or a lower max_level
-// (the same IV walking the same level grid can only go higher).
+// (the same IV walking the same level grid can only go at-least-as
+// high). Equality is legal when both leagues cap at the MaxLevel
+// ceiling rather than the CP cap — for Medicham 15/15/15 with
+// XL=false, Great and Ultra both top out at level 40. The strict
+// inequality between Little and Great holds because 500-CP Little is
+// almost always CP-bound, not level-bound, for standard species.
 func TestCPLimitsTool_MonotonicAcrossCaps(t *testing.T) {
 	t.Parallel()
 
@@ -140,14 +145,18 @@ func TestCPLimitsTool_MonotonicAcrossCaps(t *testing.T) {
 		t.Errorf("great MaxCP (%d) should exceed little (%d)",
 			byLeague["great"].MaxCP, byLeague["little"].MaxCP)
 	}
-	if byLeague["ultra"].MaxCP <= byLeague["great"].MaxCP {
-		t.Errorf("ultra MaxCP (%d) should exceed great (%d)",
+	if byLeague["ultra"].MaxCP < byLeague["great"].MaxCP {
+		t.Errorf("ultra MaxCP (%d) regressed vs great (%d)",
 			byLeague["ultra"].MaxCP, byLeague["great"].MaxCP)
 	}
 
 	if byLeague["great"].MaxLevel < byLeague["little"].MaxLevel {
 		t.Errorf("great MaxLevel regressed vs little: %f < %f",
 			byLeague["great"].MaxLevel, byLeague["little"].MaxLevel)
+	}
+	if byLeague["ultra"].MaxLevel < byLeague["great"].MaxLevel {
+		t.Errorf("ultra MaxLevel regressed vs great: %f < %f",
+			byLeague["ultra"].MaxLevel, byLeague["great"].MaxLevel)
 	}
 }
 
@@ -185,6 +194,68 @@ func TestCPLimitsTool_DragoniteHigherLevelInUltra(t *testing.T) {
 	if byLeague["ultra"].MaxLevel <= byLeague["great"].MaxLevel {
 		t.Errorf("dragonite ultra.MaxLevel (%.1f) should exceed great (%.1f)",
 			byLeague["ultra"].MaxLevel, byLeague["great"].MaxLevel)
+	}
+}
+
+// TestCPLimitsTool_XLFlagRaisesCeiling pins the XL contract alignment
+// with pvp_rank: XL=false caps MaxLevel at pogopvp.NoXLMaxLevel (40),
+// XL=true extends it to pogopvp.MaxLevel (51). For a 10/10/10 Medicham
+// under Ultra the 500-cap headroom is enormous, so the no-XL answer
+// must be exactly level 40 and the XL answer must be strictly higher.
+func TestCPLimitsTool_XLFlagRaisesCeiling(t *testing.T) {
+	t.Parallel()
+
+	mgr := newCPLimitsTestManager(t)
+	handler := tools.NewCPLimitsTool(mgr).Handler()
+
+	_, noXL, err := handler(t.Context(), nil, tools.CPLimitsParams{
+		Species: speciesMedicham,
+		IV:      [3]int{10, 10, 10},
+		XL:      false,
+	})
+	if err != nil {
+		t.Fatalf("handler noXL: %v", err)
+	}
+
+	_, withXL, err := handler(t.Context(), nil, tools.CPLimitsParams{
+		Species: speciesMedicham,
+		IV:      [3]int{10, 10, 10},
+		XL:      true,
+	})
+	if err != nil {
+		t.Fatalf("handler withXL: %v", err)
+	}
+
+	if noXL.XL {
+		t.Errorf("noXL.XL = true, want false (echoes request flag)")
+	}
+	if !withXL.XL {
+		t.Errorf("withXL.XL = false, want true (echoes request flag)")
+	}
+
+	byLeagueNoXL := map[string]tools.LeagueCPLimit{}
+	for _, entry := range noXL.Leagues {
+		byLeagueNoXL[entry.League] = entry
+	}
+
+	byLeagueXL := map[string]tools.LeagueCPLimit{}
+	for _, entry := range withXL.Leagues {
+		byLeagueXL[entry.League] = entry
+	}
+
+	if byLeagueNoXL["ultra"].MaxLevel != 40.0 {
+		t.Errorf("noXL ultra.MaxLevel = %.1f, want 40.0 (hard cap without XL candy)",
+			byLeagueNoXL["ultra"].MaxLevel)
+	}
+
+	if byLeagueXL["ultra"].MaxLevel <= byLeagueNoXL["ultra"].MaxLevel {
+		t.Errorf("XL ultra.MaxLevel (%.1f) should exceed noXL (%.1f)",
+			byLeagueXL["ultra"].MaxLevel, byLeagueNoXL["ultra"].MaxLevel)
+	}
+
+	if byLeagueXL["ultra"].MaxCP <= byLeagueNoXL["ultra"].MaxCP {
+		t.Errorf("XL ultra.MaxCP (%d) should exceed noXL (%d)",
+			byLeagueXL["ultra"].MaxCP, byLeagueNoXL["ultra"].MaxCP)
 	}
 }
 
