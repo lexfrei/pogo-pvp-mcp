@@ -35,9 +35,11 @@ go build ./cmd/pogo-pvp-mcp
 ```
 
 Configuration flows through `--config path/to/config.yaml` (optional)
-and the `POGO_PVP_*` environment prefix. There is no implicit config-
-file lookup — point `--config` at a file explicitly, or rely on env
-overrides + hard-coded defaults. The gamemaster is cached under
+and the `POGO_PVP_*` environment prefix. `POGO_PVP_CONFIG` is honoured
+as the default for `--config`, so you can set it once in your shell
+instead of repeating the flag. There is no XDG or standard-path config
+lookup — either `--config`, `POGO_PVP_CONFIG`, or env overrides +
+hard-coded defaults. The gamemaster is cached under
 `$XDG_CACHE_HOME/pogo-pvp-mcp/gamemaster.json` by default.
 
 ## Disclaimer
