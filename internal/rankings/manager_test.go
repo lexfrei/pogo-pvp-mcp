@@ -5,7 +5,10 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/lexfrei/pogo-pvp-mcp/internal/rankings"
 )
@@ -193,6 +196,58 @@ func TestManager_InvalidConfig(t *testing.T) {
 				t.Errorf("error = %v, want wrapping ErrInvalidConfig", err)
 			}
 		})
+	}
+}
+
+// TestManager_GetSingleflight verifies that concurrent first-time
+// calls coalesce into a single upstream fetch. Without the per-cap
+// mutex guard a race between two Get(1500) could double-fetch.
+func TestManager_GetSingleflight(t *testing.T) {
+	t.Parallel()
+
+	var (
+		hits    atomic.Int64
+		release = make(chan struct{})
+	)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hits.Add(1)
+		<-release
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(minimalRankings))
+	}))
+	t.Cleanup(server.Close)
+
+	mgr, err := rankings.NewManager(rankings.Config{
+		BaseURL:  server.URL,
+		LocalDir: t.TempDir(),
+	})
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+
+	const callers = 4
+
+	var wg sync.WaitGroup
+
+	wg.Add(callers)
+
+	for range callers {
+		go func() {
+			defer wg.Done()
+
+			_, _ = mgr.Get(t.Context(), 1500)
+		}()
+	}
+
+	// Release after the test's goroutine scheduler has had a chance
+	// to park every caller on the per-cap mutex / HTTP roundtrip.
+	time.Sleep(50 * time.Millisecond)
+	close(release)
+	wg.Wait()
+
+	if got := hits.Load(); got != 1 {
+		t.Errorf("upstream hit count = %d, want 1 (singleflight)", got)
 	}
 }
 

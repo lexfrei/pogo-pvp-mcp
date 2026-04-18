@@ -46,8 +46,16 @@ and the `POGO_PVP_*` environment prefix. `POGO_PVP_CONFIG` is honoured
 as the default for `--config`, so you can set it once in your shell
 instead of repeating the flag. There is no XDG or standard-path config
 lookup — either `--config`, `POGO_PVP_CONFIG`, or env overrides +
-hard-coded defaults. The gamemaster is cached under
-`$XDG_CACHE_HOME/pogo-pvp-mcp/gamemaster.json` by default.
+hard-coded defaults.
+
+Two filesystem caches live alongside each other by default:
+
+- `$XDG_CACHE_HOME/pogo-pvp-mcp/gamemaster.json` — the upstream
+  pvpoke gamemaster, refreshed every 24h or forced via `fetch-gm`.
+- `$XDG_CACHE_HOME/pogo-pvp-mcp/rankings/rankings-{500,1500,2500,10000}.json` —
+  per-league pvpoke rankings, fetched lazily the first time a meta-
+  driven tool (`pvp_meta`, `pvp_team_analysis`, `pvp_team_builder`)
+  touches that cap.
 
 ## Disclaimer
 

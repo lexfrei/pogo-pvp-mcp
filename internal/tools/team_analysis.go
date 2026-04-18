@@ -182,8 +182,14 @@ func (tool *TeamAnalysisTool) handle(
 		return nil, TeamAnalysisResult{}, err
 	}
 
-	return nil, runTeamAnalysis(ctx, teamCombatants, metaCombatants, metaEntries,
-		params.League, cpCap, topN), nil
+	result := runTeamAnalysis(ctx, teamCombatants, metaCombatants, metaEntries,
+		params.League, cpCap, topN)
+
+	if ctx.Err() != nil {
+		return nil, TeamAnalysisResult{}, fmt.Errorf("team_analysis cancelled: %w", ctx.Err())
+	}
+
+	return nil, result, nil
 }
 
 // validateTeamAnalysisParams runs the cheap pre-flight checks (cancel,
@@ -430,6 +436,8 @@ func analyzeMember(
 		rating, err := ratingFor(member, &meta[oppIdx])
 		if err != nil {
 			failures++
+
+			continue
 		}
 
 		memberSum += float64(rating)
@@ -442,8 +450,9 @@ func analyzeMember(
 		}
 	}
 
-	if len(meta) > 0 {
-		analysis.AvgRating = memberSum / float64(len(meta))
+	successful := len(meta) - failures
+	if successful > 0 {
+		analysis.AvgRating = memberSum / float64(successful)
 	}
 
 	return memberTally{Analysis: analysis, RatingSum: memberSum, Failures: failures}

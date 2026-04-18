@@ -128,6 +128,10 @@ func (tool *TeamBuilderTool) handle(
 
 	result := evaluateTeams(ctx, inputs.pool, inputs.poolCombatants, inputs.metaCombatants, inputs.required)
 
+	if ctx.Err() != nil {
+		return nil, TeamBuilderResult{}, fmt.Errorf("team_builder cancelled: %w", ctx.Err())
+	}
+
 	sort.SliceStable(result.Teams, func(i, j int) bool {
 		return result.Teams[i].TeamScore > result.Teams[j].TeamScore
 	})

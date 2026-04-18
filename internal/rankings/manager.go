@@ -84,14 +84,17 @@ type RankingEntry struct {
 
 // Manager owns the per-cap ranking snapshots. Get lazily fetches and
 // caches on first access; subsequent calls return the in-memory
-// snapshot. Thread-safe.
+// snapshot. Concurrent Get calls for the same cap coalesce into a
+// single fetch via per-cap mutexes. Thread-safe.
 type Manager struct {
 	baseURL  string
 	localDir string
 	client   *http.Client
 
-	mu    sync.RWMutex
-	cache map[int][]RankingEntry
+	mu       sync.RWMutex
+	cache    map[int][]RankingEntry
+	fetchMu  map[int]*sync.Mutex
+	fetchMuG sync.Mutex
 }
 
 // NewManager validates the config and returns a ready Manager.
@@ -109,21 +112,33 @@ func NewManager(cfg Config) (*Manager, error) {
 		localDir: cfg.LocalDir,
 		client:   &http.Client{Timeout: fetchTimeout},
 		cache:    make(map[int][]RankingEntry),
+		fetchMu:  make(map[int]*sync.Mutex),
 	}, nil
 }
 
 // Get returns the rankings for the given CP cap. On first call the
 // manager tries the local cache; on miss it fetches from upstream and
 // persists to disk. Subsequent calls return the in-memory snapshot.
+// Concurrent first-time calls for the same cap coalesce into a single
+// fetch via per-cap mutexes, so cold-start traffic from multiple
+// tools does not trigger duplicate HTTP requests.
 func (m *Manager) Get(ctx context.Context, cpCap int) ([]RankingEntry, error) {
 	if !supportedCaps[cpCap] {
 		return nil, fmt.Errorf("%w: %d not in {500, 1500, 2500, 10000}", ErrUnsupportedCap, cpCap)
 	}
 
-	m.mu.RLock()
-	entries, ok := m.cache[cpCap]
-	m.mu.RUnlock()
+	entries, ok := m.lookup(cpCap)
+	if ok {
+		return entries, nil
+	}
 
+	perCap := m.lockFor(cpCap)
+	perCap.Lock()
+	defer perCap.Unlock()
+
+	// Re-check under the per-cap lock: a concurrent winner may have
+	// populated the cache while we were waiting.
+	entries, ok = m.lookup(cpCap)
 	if ok {
 		return entries, nil
 	}
@@ -143,6 +158,32 @@ func (m *Manager) Get(ctx context.Context, cpCap int) ([]RankingEntry, error) {
 	m.storeInMemory(cpCap, entries)
 
 	return entries, nil
+}
+
+// lookup returns the cached entries under a shared read lock; the
+// second return value reports whether the cap was populated.
+func (m *Manager) lookup(cpCap int) ([]RankingEntry, bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	entries, ok := m.cache[cpCap]
+
+	return entries, ok
+}
+
+// lockFor returns (creating if necessary) the per-cap mutex used to
+// serialize first-time fetches.
+func (m *Manager) lockFor(cpCap int) *sync.Mutex {
+	m.fetchMuG.Lock()
+	defer m.fetchMuG.Unlock()
+
+	fetchMu, ok := m.fetchMu[cpCap]
+	if !ok {
+		fetchMu = &sync.Mutex{}
+		m.fetchMu[cpCap] = fetchMu
+	}
+
+	return fetchMu
 }
 
 // storeInMemory caches the parsed entries under the write lock.

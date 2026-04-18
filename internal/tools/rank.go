@@ -1,6 +1,7 @@
-// Package tools implements the MCP tool handlers (pvp_rank,
-// pvp_matchup, …) on top of the engine primitives. Each handler is a
-// pure function of its params plus the Manager's current gamemaster.
+// Package tools implements the MCP tool handlers exposed by the
+// server: pvp_rank, pvp_matchup, pvp_meta, pvp_team_analysis, and
+// pvp_team_builder. Each handler is a pure function of its params
+// plus the state pulled from gamemaster.Manager and rankings.Manager.
 package tools
 
 import (
