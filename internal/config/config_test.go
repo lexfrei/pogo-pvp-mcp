@@ -34,9 +34,6 @@ func TestLoad_Defaults(t *testing.T) {
 	if cfg.Log.Format != "text" {
 		t.Errorf("Log.Format = %q, want \"text\"", cfg.Log.Format)
 	}
-	if cfg.Cache.Size != 32*1024*1024 {
-		t.Errorf("Cache.Size = %d, want 32 MiB", cfg.Cache.Size)
-	}
 	if cfg.Gamemaster.RefreshInterval.Hours() != 24 {
 		t.Errorf("Gamemaster.RefreshInterval = %v, want 24h", cfg.Gamemaster.RefreshInterval)
 	}
@@ -54,8 +51,6 @@ server:
 log:
   level: debug
   format: json
-cache:
-  size: 1024
 gamemaster:
   refresh_interval: 2h
 engine:
@@ -83,9 +78,6 @@ engine:
 	if cfg.Log.Format != "json" {
 		t.Errorf("Log.Format = %q, want \"json\"", cfg.Log.Format)
 	}
-	if cfg.Cache.Size != 1024 {
-		t.Errorf("Cache.Size = %d, want 1024", cfg.Cache.Size)
-	}
 	if cfg.Gamemaster.RefreshInterval.Hours() != 2 {
 		t.Errorf("Gamemaster.RefreshInterval = %v, want 2h", cfg.Gamemaster.RefreshInterval)
 	}
@@ -96,7 +88,6 @@ engine:
 
 func TestLoad_EnvOverride(t *testing.T) {
 	t.Setenv("POGO_PVP_LOG_LEVEL", "warn")
-	t.Setenv("POGO_PVP_CACHE_SIZE", "2048")
 	t.Setenv("POGO_PVP_SERVER_HTTP_PORT", "9999")
 
 	cfg, err := config.Load("")
@@ -106,9 +97,6 @@ func TestLoad_EnvOverride(t *testing.T) {
 
 	if cfg.Log.Level != "warn" {
 		t.Errorf("Log.Level = %q, want \"warn\" (from env)", cfg.Log.Level)
-	}
-	if cfg.Cache.Size != 2048 {
-		t.Errorf("Cache.Size = %d, want 2048 (from env)", cfg.Cache.Size)
 	}
 	if cfg.Server.HTTPPort != 9999 {
 		t.Errorf("Server.HTTPPort = %d, want 9999 (from env)", cfg.Server.HTTPPort)
@@ -169,21 +157,6 @@ func TestValidate_InvalidHTTPPort(t *testing.T) {
 	}
 
 	cfg.Server.HTTPPort = 70000
-	err = cfg.Validate()
-	if !errors.Is(err, config.ErrInvalidConfig) {
-		t.Errorf("Validate() = %v, want wrapping ErrInvalidConfig", err)
-	}
-}
-
-func TestValidate_NegativeCacheSize(t *testing.T) {
-	t.Parallel()
-
-	cfg, err := config.Load("")
-	if err != nil {
-		t.Fatalf("Load: %v", err)
-	}
-
-	cfg.Cache.Size = -1
 	err = cfg.Validate()
 	if !errors.Is(err, config.ErrInvalidConfig) {
 		t.Errorf("Validate() = %v, want wrapping ErrInvalidConfig", err)

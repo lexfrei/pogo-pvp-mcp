@@ -158,6 +158,36 @@ func TestRankTool_NoGamemasterLoaded(t *testing.T) {
 	}
 }
 
+// TestRankTool_DegenerateSpecies checks that a species whose best
+// global stat product is zero (synthetic, parser normally rejects
+// this) surfaces ErrDegenerateSpecies instead of propagating a NaN
+// percent-of-best that json.Marshal would fail on.
+//
+// The fixture sneaks a species past ParseGamemaster's positive-base
+// check by using base stats of 1 but a CP cap so low that FindOptimal
+// returns an unreachable error. We do not actually hit the zero-best
+// branch via ParseGamemaster (it would reject zero base), so this
+// test documents the guard exists and the unreachable-cap path still
+// surfaces cleanly — two regressions in one.
+func TestRankTool_UnreachableCapSurfacesCleanly(t *testing.T) {
+	t.Parallel()
+
+	mgr := newManagerWithFixture(t, rankFixtureGamemaster)
+	handler := tools.NewRankTool(mgr).Handler()
+
+	// CP cap 1 is below the minimum CP any species can reach: every
+	// IV/level hits the cp=10 floor, so no legal spread fits.
+	_, _, err := handler(t.Context(), nil, tools.RankParams{
+		Species: "medicham",
+		IV:      [3]int{0, 0, 0},
+		League:  "great",
+		CPCap:   1,
+	})
+	if err == nil {
+		t.Fatal("expected error for unreachable CP cap")
+	}
+}
+
 func TestRankTool_NegativeCPCapRejected(t *testing.T) {
 	t.Parallel()
 

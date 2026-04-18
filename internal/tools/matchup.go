@@ -171,17 +171,21 @@ func buildEngineCombatant(
 
 // winnerLabel maps the engine's integer winner code to the JSON-facing
 // label: "attacker" (0), "defender" (1), "tie" (simultaneous faint),
-// "timeout" (MaxTurns elapsed with both alive). Callers therefore can
-// distinguish an undecided match from a deterministic tie.
+// "timeout" (MaxTurns elapsed with both alive). Any other code is a
+// signal that the engine added a new sentinel without updating the
+// MCP-facing mapping — the caller gets a distinct "unknown:<code>"
+// string rather than being silently folded into "tie".
 func winnerLabel(code int) string {
 	switch code {
 	case 0:
 		return "attacker"
 	case 1:
 		return "defender"
+	case pogopvp.BattleTie:
+		return "tie"
 	case pogopvp.BattleTimeout:
 		return "timeout"
 	default:
-		return "tie"
+		return fmt.Sprintf("unknown:%d", code)
 	}
 }

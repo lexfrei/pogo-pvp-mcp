@@ -26,10 +26,6 @@ var ErrInvalidConfig = errors.New("invalid config")
 // tools sharing the same shell.
 const envPrefix = "POGO_PVP"
 
-// defaultCacheSize is 32 MiB, enough to hold a few thousand rank /
-// matchup entries at typical payload sizes.
-const defaultCacheSize = 32 * 1024 * 1024
-
 // defaultRefreshInterval is how often the gamemaster fetcher polls
 // upstream for a fresh copy.
 const defaultRefreshInterval = 24 * time.Hour
@@ -67,11 +63,14 @@ func defaultLocalPath() string {
 
 // Config is the full runtime configuration consumed by the server. The
 // mapstructure tags let viper unmarshal YAML and env sources into the
-// same struct without hand-written glue.
+// same struct without hand-written glue. Caching is deliberately not a
+// configured field yet: the LRU implementation in internal/cache is
+// ready but not wired into the tool handlers. When caching lands the
+// config will grow a cache.size knob; exposing one prematurely would be
+// documentation drift.
 type Config struct {
 	Server     ServerConfig     `mapstructure:"server"`
 	Log        LogConfig        `mapstructure:"log"`
-	Cache      CacheConfig      `mapstructure:"cache"`
 	Gamemaster GamemasterConfig `mapstructure:"gamemaster"`
 	Engine     EngineConfig     `mapstructure:"engine"`
 }
@@ -87,11 +86,6 @@ type ServerConfig struct {
 type LogConfig struct {
 	Level  string `mapstructure:"level"`
 	Format string `mapstructure:"format"`
-}
-
-// CacheConfig bounds the in-memory LRU in bytes. Zero disables.
-type CacheConfig struct {
-	Size int `mapstructure:"size"`
 }
 
 // GamemasterConfig drives the upstream fetcher.
@@ -154,8 +148,6 @@ func applyDefaults(view *viper.Viper) {
 
 	view.SetDefault("log.level", "info")
 	view.SetDefault("log.format", "text")
-
-	view.SetDefault("cache.size", defaultCacheSize)
 
 	view.SetDefault("gamemaster.source", defaultGamemasterURL)
 	view.SetDefault("gamemaster.local_path", defaultLocalPath())
@@ -222,13 +214,8 @@ func (c *Config) validateServerAndLog() error {
 	return nil
 }
 
-// validateDataPlane covers the cache / engine / gamemaster invariants.
+// validateDataPlane covers the engine / gamemaster invariants.
 func (c *Config) validateDataPlane() error {
-	if c.Cache.Size < 0 {
-		return fmt.Errorf("%w: cache.size=%d must be non-negative",
-			ErrInvalidConfig, c.Cache.Size)
-	}
-
 	if c.Engine.Goroutines < 0 {
 		return fmt.Errorf("%w: engine.goroutines=%d must be non-negative",
 			ErrInvalidConfig, c.Engine.Goroutines)

@@ -43,8 +43,13 @@ func NewRootCommand(stdout, stderr io.Writer) *cobra.Command {
 		SilenceErrors: true,
 	}
 
-	root.PersistentFlags().StringVar(&flags.configPath, "config", "",
-		"path to config.yaml; defaults to POGO_PVP_ env + hard-coded defaults")
+	// POGO_PVP_CONFIG env overrides the default empty config path when
+	// the flag is not passed. This matches the user-facing promise in
+	// the README that every setting has a POGO_PVP_* equivalent.
+	defaultConfigPath := os.Getenv("POGO_PVP_CONFIG")
+
+	root.PersistentFlags().StringVar(&flags.configPath, "config", defaultConfigPath,
+		"path to config.yaml; overrides POGO_PVP_CONFIG env var")
 
 	runtimeBuilder := func(cmd *cobra.Command, _ []string) error {
 		rt, err := buildRuntime(flags.configPath, stdout, stderr)

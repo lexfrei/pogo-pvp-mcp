@@ -187,6 +187,11 @@ func buildRankResult(inputs rankInputs) (RankResult, error) {
 
 	stats := pogopvp.ComputeStats(inputs.species.BaseStats, inputs.ivs, cpm)
 
+	percentOfBest, err := percentOfBest(spread.StatProduct, best.StatProduct)
+	if err != nil {
+		return RankResult{}, err
+	}
+
 	return RankResult{
 		Species:       inputs.speciesID,
 		CP:            spread.CP,
@@ -195,10 +200,25 @@ func buildRankResult(inputs rankInputs) (RankResult, error) {
 		Atk:           stats.Atk,
 		Def:           stats.Def,
 		HP:            stats.HP,
-		PercentOfBest: spread.StatProduct / best.StatProduct * 100,
+		PercentOfBest: percentOfBest,
 		League:        inputs.league,
 		CPCap:         inputs.cpCap,
 	}, nil
+}
+
+// ErrDegenerateSpecies is returned when the gamemaster supplies a
+// species whose best-possible stat product is zero — division by zero
+// would produce NaN / Inf and json.Marshal then fails with a typeless
+// error, so the tool surfaces it explicitly instead.
+var ErrDegenerateSpecies = errors.New("species has zero global stat product")
+
+// percentOfBest computes spread / best * 100 with a zero-divisor guard.
+func percentOfBest(spread, best float64) (float64, error) {
+	if best == 0 {
+		return 0, ErrDegenerateSpecies
+	}
+
+	return spread / best * 100, nil
 }
 
 // resolveCPCap returns the override if positive, otherwise the league

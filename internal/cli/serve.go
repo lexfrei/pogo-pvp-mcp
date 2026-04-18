@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os/signal"
@@ -28,6 +29,22 @@ var serverVersion = "dev"
 // to exit during shutdown before giving up and returning.
 const refreshGrace = 2 * time.Second
 
+// bootstrapRetries is how many times primeGamemaster retries the
+// upstream fetch during cold start before giving up and returning an
+// error. Bootstrap failures are fatal because the main RefreshInterval
+// (24h by default) is way too long to wait for a first successful
+// fetch; better to surface the problem at start-up than silently serve
+// "gamemaster not loaded" for a day.
+const bootstrapRetries = 3
+
+// bootstrapBackoffBase is the first retry delay; each subsequent retry
+// multiplies by bootstrapBackoffFactor.
+const bootstrapBackoffBase = 2 * time.Second
+
+// bootstrapBackoffFactor is the multiplier applied to the retry delay
+// on each successive attempt.
+const bootstrapBackoffFactor = 4
+
 // newServeCommand returns the "serve" subcommand. It sets up the
 // gamemaster manager, the MCP server, and the stdio transport, then
 // blocks until SIGINT / SIGTERM or a transport error.
@@ -52,7 +69,10 @@ func runServe(parent context.Context, rt *Runtime) error {
 		return fmt.Errorf("gamemaster manager: %w", err)
 	}
 
-	primeGamemaster(parent, rt.Logger, mgr)
+	err = primeGamemaster(parent, rt.Logger, mgr)
+	if err != nil {
+		return fmt.Errorf("prime gamemaster: %w", err)
+	}
 
 	ctx, stop := signal.NotifyContext(parent, syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
@@ -88,29 +108,54 @@ func runServe(parent context.Context, rt *Runtime) error {
 }
 
 // primeGamemaster tries the local cache first (fast, no network) and
-// falls back to a fresh upstream fetch. Either failing is logged but
-// not fatal — the server starts anyway and the refresh loop will
-// retry.
-func primeGamemaster(ctx context.Context, logger *slog.Logger, mgr *gamemaster.Manager) {
+// falls back to upstream fetch with bounded exponential backoff. A
+// cold start with no cache and a failing upstream would otherwise
+// leave the server returning ErrGamemasterNotLoaded until the next
+// background refresh tick (24h by default), so a hard failure at
+// start-up is preferable.
+func primeGamemaster(ctx context.Context, logger *slog.Logger, mgr *gamemaster.Manager) error {
 	err := mgr.LoadLocal()
 	if err == nil {
 		logger.Info("loaded gamemaster from local cache")
 
-		return
+		return nil
 	}
 
 	logger.Warn("local cache miss, falling back to upstream refresh",
 		slog.String("error", err.Error()))
 
-	err = mgr.Refresh(ctx)
-	if err != nil {
-		logger.Error("initial gamemaster refresh failed",
-			slog.String("error", err.Error()))
+	delay := bootstrapBackoffBase
 
-		return
+	var lastErr error
+
+	for attempt := 1; attempt <= bootstrapRetries; attempt++ {
+		lastErr = mgr.Refresh(ctx)
+		if lastErr == nil {
+			logger.Info("primed gamemaster from upstream",
+				slog.Int("attempt", attempt))
+
+			return nil
+		}
+
+		logger.Warn("bootstrap refresh attempt failed",
+			slog.Int("attempt", attempt),
+			slog.Int("max_attempts", bootstrapRetries),
+			slog.String("error", lastErr.Error()))
+
+		if attempt == bootstrapRetries {
+			break
+		}
+
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("bootstrap cancelled: %w", ctx.Err())
+		case <-time.After(delay):
+			delay *= bootstrapBackoffFactor
+		}
 	}
 
-	logger.Info("primed gamemaster from upstream")
+	return fmt.Errorf("initial refresh failed after %d attempts: %w",
+		bootstrapRetries, lastErr)
 }
 
 // runRefreshLoop polls the gamemaster on the configured cadence until
@@ -129,14 +174,18 @@ func runRefreshLoop(
 			return
 		case <-ticker.C:
 			err := mgr.Refresh(ctx)
-			if err != nil {
-				logger.Warn("gamemaster refresh failed",
-					slog.String("error", err.Error()))
+			if err == nil {
+				logger.Debug("gamemaster refreshed")
 
 				continue
 			}
 
-			logger.Debug("gamemaster refreshed")
+			if errors.Is(err, context.Canceled) {
+				return
+			}
+
+			logger.Warn("gamemaster refresh failed",
+				slog.String("error", err.Error()))
 		}
 	}
 }
