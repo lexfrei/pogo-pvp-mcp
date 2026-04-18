@@ -17,12 +17,23 @@ import (
 // the team size ([TeamSize]).
 var ErrPoolTooSmall = errors.New("pool too small")
 
+// ErrPoolTooLarge is returned when the pool exceeds [MaxPoolSize] —
+// the enumerator would otherwise run up to C(pool, 3) × meta
+// simulations and can DOS the stdio server.
+var ErrPoolTooLarge = errors.New("pool too large")
+
 // ErrMaxResultsInvalid is returned when MaxResults is negative.
 var ErrMaxResultsInvalid = errors.New("max_results must be non-negative")
 
 // defaultMaxResults is the number of teams returned when the caller
 // leaves MaxResults at zero.
 const defaultMaxResults = 5
+
+// MaxPoolSize caps the pool size for pvp_team_builder. The
+// enumeration is O(pool^3 × meta) simulations; 50 keeps a worst-case
+// top-30 request at ~600k sims — well under a second on the hot path
+// with the precomputed ratings matrix.
+const MaxPoolSize = 50
 
 // TeamBuilderParams is the JSON input contract for pvp_team_builder.
 // Shields follows the same convention as [TeamAnalysisParams.Shields]:
@@ -224,10 +235,17 @@ type preparedPool struct {
 }
 
 // preparePool applies the banned filter and builds engine combatants
-// for the surviving pool entries.
+// for the surviving pool entries. Rejects inputs that are too small
+// (below [TeamSize]) or too large (above [MaxPoolSize]) so the
+// enumeration stays bounded.
 func (tool *TeamBuilderTool) preparePool(
 	snapshot *pogopvp.Gamemaster, params *TeamBuilderParams, shields int,
 ) (preparedPool, error) {
+	if len(params.Pool) > MaxPoolSize {
+		return preparedPool{}, fmt.Errorf("%w: have %d, max %d",
+			ErrPoolTooLarge, len(params.Pool), MaxPoolSize)
+	}
+
 	specs := filterPool(params.Pool, params.Banned)
 	if len(specs) < TeamSize {
 		return preparedPool{}, fmt.Errorf("%w: have %d, need %d",
@@ -320,16 +338,19 @@ func resolveRequired(pool []Combatant, required []string) (map[string]struct{}, 
 
 // evaluateTeams enumerates all 3-combinations of the pool that satisfy
 // the required-species constraint and returns them annotated with
-// team_score. Scoring uses the shared ratingFor helper. Honours ctx
-// cancellation on every outer iteration so long searches can be
-// aborted by a client disconnect.
+// team_score. Precomputes the pool × meta rating matrix once so the
+// triple loop is O(pool^3) index ops instead of O(pool^3 × meta)
+// Simulate calls. Honours ctx cancellation at both the matrix
+// precompute step and each outer iteration of the triple loop.
 func evaluateTeams(
 	ctx context.Context,
 	pool []Combatant,
 	poolCombatants, meta []pogopvp.Combatant,
 	required map[string]struct{},
 ) evaluationResult {
-	var out evaluationResult
+	matrix := precomputeRatingMatrix(ctx, poolCombatants, meta)
+
+	out := evaluationResult{Failures: matrix.Failures}
 
 	for i := range pool {
 		if ctx.Err() != nil {
@@ -343,16 +364,12 @@ func evaluateTeams(
 					continue
 				}
 
-				teamCombatants := []pogopvp.Combatant{
-					poolCombatants[i], poolCombatants[jIdx], poolCombatants[kIdx],
-				}
-				score := scoreTeam(teamCombatants, meta)
+				score := scoreTripleFromMatrix(matrix.Entries, i, jIdx, kIdx)
 				out.Evaluated++
-				out.Failures += score.Failures
 
 				out.Teams = append(out.Teams, TeamBuilderTeam{
 					Members:   members,
-					TeamScore: score.Average,
+					TeamScore: score,
 					Reason:    "highest average battle rating across the sampled meta",
 				})
 			}
@@ -360,6 +377,88 @@ func evaluateTeams(
 	}
 
 	return out
+}
+
+// ratingMatrixEntry pairs the rating with a flag that distinguishes a
+// genuine tie/computed rating from a simulate failure. Failed entries
+// are excluded from the score averages so a bad matchup does not
+// pull the score toward the 500 midpoint.
+type ratingMatrixEntry struct {
+	Rating int
+	OK     bool
+}
+
+// ratingMatrix is the result of a full (pool, meta) precompute: the
+// matrix itself plus the count of failed simulate calls observed.
+type ratingMatrix struct {
+	Entries  [][]ratingMatrixEntry
+	Failures int
+}
+
+// precomputeRatingMatrix simulates every (pool_i, meta_j) pair exactly
+// once, storing the rating for reuse across every triple that uses
+// pool_i. ctx cancellation short-circuits the computation.
+func precomputeRatingMatrix(
+	ctx context.Context, poolCombatants, meta []pogopvp.Combatant,
+) ratingMatrix {
+	result := ratingMatrix{
+		Entries: make([][]ratingMatrixEntry, len(poolCombatants)),
+	}
+
+	for i := range poolCombatants {
+		result.Entries[i] = make([]ratingMatrixEntry, len(meta))
+
+		if ctx.Err() != nil {
+			return result
+		}
+
+		for oppIdx := range meta {
+			rating, err := ratingFor(&poolCombatants[i], &meta[oppIdx])
+			if err != nil {
+				result.Failures++
+				result.Entries[i][oppIdx] = ratingMatrixEntry{Rating: rating, OK: false}
+
+				continue
+			}
+
+			result.Entries[i][oppIdx] = ratingMatrixEntry{Rating: rating, OK: true}
+		}
+	}
+
+	return result
+}
+
+// scoreTripleFromMatrix averages the ratings for three pool members
+// against the full meta, skipping failed entries in both numerator
+// and denominator so failures do not distort the average toward
+// ratingMidpoint.
+func scoreTripleFromMatrix(matrix [][]ratingMatrixEntry, iIdx, jIdx, kIdx int) float64 {
+	if len(matrix) == 0 || len(matrix[iIdx]) == 0 {
+		return 0
+	}
+
+	var (
+		sum     float64
+		counted int
+	)
+
+	for opp := range matrix[iIdx] {
+		for _, member := range []int{iIdx, jIdx, kIdx} {
+			entry := matrix[member][opp]
+			if !entry.OK {
+				continue
+			}
+
+			sum += float64(entry.Rating)
+			counted++
+		}
+	}
+
+	if counted == 0 {
+		return 0
+	}
+
+	return sum / float64(counted)
 }
 
 // containsAllSpecies reports whether every id in required is present
@@ -372,40 +471,4 @@ func containsAllSpecies(members []string, required map[string]struct{}) bool {
 	}
 
 	return true
-}
-
-// teamScore bundles the average rating across a team × meta sweep
-// with the count of failed simulate calls that happened inside it.
-type teamScore struct {
-	Average  float64
-	Failures int
-}
-
-// scoreTeam returns the average battle rating across the cartesian
-// product of team × meta plus the failure count.
-func scoreTeam(team, meta []pogopvp.Combatant) teamScore {
-	if len(team) == 0 || len(meta) == 0 {
-		return teamScore{}
-	}
-
-	var (
-		sum      float64
-		failures int
-	)
-
-	for memberIdx := range team {
-		for oppIdx := range meta {
-			rating, err := ratingFor(&team[memberIdx], &meta[oppIdx])
-			if err != nil {
-				failures++
-			}
-
-			sum += float64(rating)
-		}
-	}
-
-	return teamScore{
-		Average:  sum / float64(len(team)*len(meta)),
-		Failures: failures,
-	}
 }

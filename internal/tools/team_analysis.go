@@ -71,6 +71,12 @@ const ratingMidpoint = 500
 // species is flagged as an uncovered threat.
 const uncoveredThreshold = 400
 
+// rankingsMaxLevelCap mirrors the levelCap pvpoke uses when generating
+// the per-league rankings JSONs we ingest (50 in the XL-candy era).
+// Meta-combatants are resolved under this cap so their spreads match
+// what pvpoke simulated when producing the rankings.
+const rankingsMaxLevelCap = 50
+
 // TeamAnalysisParams is the JSON input contract for pvp_team_analysis.
 // Shields is an optional 2-slot slice; an omitted/empty value defaults
 // to [1, 1]. An explicit [0, 2] is honoured literally — setting
@@ -299,9 +305,12 @@ func buildOneMetaCombatant(
 			ErrUnknownMove, len(entry.Moveset))
 	}
 
+	// pvpoke rankings are generated with levelCap=50 (XL-candy era).
+	// Mirror that envelope so the meta-combatants we simulate match
+	// the spreads pvpoke itself used when computing the rankings.
 	spread, err := pogopvp.FindOptimalSpread(species.BaseStats, cpCap, pogopvp.FindSpreadOpts{
 		XLAllowed:   true,
-		MaxLevelCap: pogopvp.NoXLMaxLevel, // pvpoke default ranking level cap is 40
+		MaxLevelCap: rankingsMaxLevelCap,
 	})
 	if err != nil {
 		return pogopvp.Combatant{}, fmt.Errorf("find optimal spread: %w", err)
@@ -533,7 +542,8 @@ func initialHP(combatant *pogopvp.Combatant) int {
 }
 
 // scaleHP maps an absolute HP value in [0, maxHP] to a 0..500 range.
-// Max is clamped to 1 so the mapping never divides by zero.
+// A non-positive maxHP short-circuits to zero so the mapping never
+// divides by zero.
 func scaleHP(hp, maxHP int) int {
 	if maxHP <= 0 {
 		return 0

@@ -278,6 +278,29 @@ func TestTeamBuilderTool_InvalidShields(t *testing.T) {
 	}
 }
 
+func TestTeamBuilderTool_PoolTooLarge(t *testing.T) {
+	t.Parallel()
+
+	tool := newTeamBuilderTool(t)
+	handler := tool.Handler()
+
+	// Build a pool one over the hard cap by repeating the same
+	// (species, IV, moves) spec — pvpoke rankings / gamemaster
+	// lookups do not matter because validation fires first.
+	pool := make([]tools.Combatant, tools.MaxPoolSize+1)
+	for i := range pool {
+		pool[i] = baseCombatant("a")
+	}
+
+	_, _, err := handler(t.Context(), nil, tools.TeamBuilderParams{
+		Pool:   pool,
+		League: leagueGreat,
+	})
+	if !errors.Is(err, tools.ErrPoolTooLarge) {
+		t.Errorf("error = %v, want wrapping ErrPoolTooLarge", err)
+	}
+}
+
 func TestTeamBuilderTool_NegativeMaxResults(t *testing.T) {
 	t.Parallel()
 
