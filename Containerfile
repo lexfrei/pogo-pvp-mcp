@@ -10,7 +10,10 @@
 # go.mod points at ../pogo-pvp-engine) this Containerfile will not
 # build cleanly. README documents the prerequisite.
 
-FROM docker.io/library/golang:1.26.1-alpine@sha256:2389ebfa5b7f43eeafbd6be0c3700cc46690ef842ad962f6c5bd6be49ed82039 AS builder
+# Image digest deliberately omitted while we're not yet cutting
+# releases; renovate/dependabot will pin once the first ghcr.io tag
+# ships. 1.26.2 matches the go.mod toolchain floor.
+FROM docker.io/library/golang:1.26.2-alpine AS builder
 
 ARG VERSION=development
 ARG REVISION=unknown

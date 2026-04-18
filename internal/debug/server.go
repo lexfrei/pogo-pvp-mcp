@@ -5,7 +5,9 @@
 package debug
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -52,7 +54,10 @@ func healthzHandler(manager *gamemaster.Manager) http.HandlerFunc {
 }
 
 // refreshHandler triggers a synchronous upstream refresh on POST.
-// GET and other verbs return 405.
+// GET and other verbs return 405. A client-side cancellation
+// (context.Canceled) maps to 503 Service Unavailable rather than
+// the default 500 so observability dashboards do not treat client
+// disconnects as server errors.
 func refreshHandler(manager *gamemaster.Manager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
@@ -63,7 +68,12 @@ func refreshHandler(manager *gamemaster.Manager) http.HandlerFunc {
 
 		err := manager.Refresh(r.Context())
 		if err != nil {
-			http.Error(w, fmt.Sprintf("refresh failed: %v", err), http.StatusInternalServerError)
+			status := http.StatusInternalServerError
+			if errors.Is(err, context.Canceled) {
+				status = http.StatusServiceUnavailable
+			}
+
+			http.Error(w, fmt.Sprintf("refresh failed: %v", err), status)
 
 			return
 		}

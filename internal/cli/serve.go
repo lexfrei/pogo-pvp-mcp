@@ -137,8 +137,9 @@ type managerBundle struct {
 	Rankings   *rankings.Manager
 }
 
-// buildManagers constructs the gamemaster + rankings managers with
-// the sibling-directory convention wired through.
+// buildManagers constructs the gamemaster + rankings managers from
+// the runtime config, placing the rankings cache next to the
+// gamemaster cache so they share a parent directory.
 func buildManagers(rt *Runtime) (*managerBundle, error) {
 	mgr, err := gamemaster.NewManager(rt.Config.Gamemaster)
 	if err != nil {

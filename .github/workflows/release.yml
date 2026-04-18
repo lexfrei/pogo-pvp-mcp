@@ -183,7 +183,12 @@ jobs:
 
       - name: Generate release notes
         run: |
-          VERSION="${GITHUB_REF_NAME#v}"
+          # Keep the v-prefix in the release-notes docker pull command
+          # because docker/metadata-action's pattern=v{{version}}
+          # publishes tags with the leading 'v' (it strips it from
+          # {{version}} but the pattern re-adds it). Mismatched prefix
+          # produced a broken pull command in earlier revisions.
+          VERSION="${GITHUB_REF_NAME}"
           CURRENT_TAG="${GITHUB_REF_NAME}"
           PREV_TAG=$(git tag --sort=-v:refname | grep --invert-match "^${CURRENT_TAG}$" | head --lines=1)
 
