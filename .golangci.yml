@@ -125,6 +125,9 @@ linters:
           - tagliatelle
         path: internal/tools/
       - linters:
+          - tagliatelle
+        path: internal/debug/
+      - linters:
           - gocritic
         text: hugeParam
         path: internal/tools/

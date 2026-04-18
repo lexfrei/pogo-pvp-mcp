@@ -1,0 +1,11 @@
+.git/
+.github/
+*.test
+*_test.go
+testdata/
+.env*
+.mcp.json
+.containerignore
+.gitattributes
+README.md
+LICENSE

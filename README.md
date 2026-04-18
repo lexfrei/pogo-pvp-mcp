@@ -55,7 +55,53 @@ Two filesystem caches live alongside each other by default:
 - `$XDG_CACHE_HOME/pogo-pvp-mcp/rankings/rankings-{500,1500,2500,10000}.json` —
   per-league pvpoke rankings, fetched lazily the first time a meta-
   driven tool (`pvp_meta`, `pvp_team_analysis`, `pvp_team_builder`)
-  touches that cap.
+  touches that cap. Each file expires after 24h and is re-fetched on
+  the next access.
+
+## Debug HTTP surface
+
+Setting `server.http_port` (or `POGO_PVP_SERVER_HTTP_PORT`) to a
+non-zero port opens a small debug surface on top of the MCP stdio
+transport:
+
+- `GET  /healthz` — 200 when the gamemaster is loaded, 503 otherwise.
+- `POST /refresh` — synchronous upstream gamemaster refresh.
+- `GET  /debug/gamemaster` — Pokémon / move counts + version string.
+
+It binds `127.0.0.1` by default; override via `server.http_host` if
+you need to expose it externally (don't — it's intended for local
+readiness probes and on-demand cache primes).
+
+## Claude Desktop integration
+
+Add the server to `~/Library/Application Support/Claude/claude_desktop_config.json`
+(macOS) or `%APPDATA%\Claude\claude_desktop_config.json` (Windows):
+
+```json
+{
+  "mcpServers": {
+    "pogo-pvp": {
+      "command": "/absolute/path/to/pogo-pvp-mcp",
+      "args": ["serve"]
+    }
+  }
+}
+```
+
+Restart Claude Desktop. The five `pvp_*` tools will appear in the
+tool list. If a tool returns "gamemaster not loaded", run
+`pogo-pvp-mcp fetch-gm` once to warm the cache.
+
+## Container image
+
+A `Containerfile` ships in the repo root; tagged builds produce
+`ghcr.io/lexfrei/pogo-pvp-mcp:vX.Y.Z` (multi-arch linux/amd64 +
+linux/arm64, cosign-signed). Note: the image build depends on
+`github.com/lexfrei/pogo-pvp-engine` being resolvable by `go mod
+download` — during the engine-sibling development window (while the
+`replace` directive in `go.mod` points at a local `../pogo-pvp-engine`
+checkout), the Containerfile will not build cleanly. It becomes
+buildable once the engine repository is published and tagged.
 
 ## Disclaimer
 

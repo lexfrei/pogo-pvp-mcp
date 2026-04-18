@@ -5,11 +5,15 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
+	"net/http"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"syscall"
 	"time"
 
+	"github.com/lexfrei/pogo-pvp-mcp/internal/debug"
 	"github.com/lexfrei/pogo-pvp-mcp/internal/gamemaster"
 	"github.com/lexfrei/pogo-pvp-mcp/internal/rankings"
 	"github.com/lexfrei/pogo-pvp-mcp/internal/tools"
@@ -37,6 +41,15 @@ var serverVersion = "dev"
 // refreshGrace is how long Run waits for the background refresh loop
 // to exit during shutdown before giving up and returning.
 const refreshGrace = 2 * time.Second
+
+// debugServerShutdownGrace is the window the HTTP debug server gets
+// to finish in-flight requests after the main context is cancelled.
+const debugServerShutdownGrace = 5 * time.Second
+
+// debugServerReadHeaderTimeout is the read-header deadline for the
+// debug HTTP server; keeps pathological clients from tying up a
+// handler goroutine.
+const debugServerReadHeaderTimeout = 10 * time.Second
 
 // bootstrapRetries is how many times primeGamemaster retries the
 // upstream fetch during cold start before giving up and returning an
@@ -78,33 +91,19 @@ func runServe(parent context.Context, rt *Runtime) error {
 	ctx, stop := signal.NotifyContext(parent, syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	mgr, err := gamemaster.NewManager(rt.Config.Gamemaster)
-	if err != nil {
-		return fmt.Errorf("gamemaster manager: %w", err)
-	}
-
-	ranks, err := buildRankingsManager(rankings.Config{
-		BaseURL:  defaultRankingsBaseURL,
-		LocalDir: rankingsCacheDir(rt.Config.Gamemaster.LocalPath),
-	})
+	managers, err := buildManagers(rt)
 	if err != nil {
 		return err
 	}
 
-	err = primeGamemaster(ctx, rt.Logger, mgr)
+	err = primeGamemaster(ctx, rt.Logger, managers.Gamemaster)
 	if err != nil {
 		return fmt.Errorf("prime gamemaster: %w", err)
 	}
 
-	server := buildMCPServer(mgr, ranks)
-
-	refreshDone := make(chan struct{})
-
-	go func() {
-		defer close(refreshDone)
-
-		runRefreshLoop(ctx, rt.Logger, mgr, rt.Config.Gamemaster.RefreshInterval)
-	}()
+	server := buildMCPServer(managers.Gamemaster, managers.Rankings)
+	refreshDone := startRefreshLoop(ctx, rt, managers.Gamemaster)
+	debugDone := startDebugServer(ctx, rt, managers.Gamemaster)
 
 	rt.Logger.Info("starting stdio transport",
 		slog.String("transport", rt.Config.Server.Transport))
@@ -112,18 +111,74 @@ func runServe(parent context.Context, rt *Runtime) error {
 	err = server.Run(ctx, &mcp.StdioTransport{})
 
 	stop()
-
-	select {
-	case <-refreshDone:
-	case <-time.After(refreshGrace):
-		rt.Logger.Warn("refresh loop did not exit within grace window")
-	}
+	waitForBackgroundShutdown(rt, refreshDone, debugDone)
 
 	if err != nil {
 		return fmt.Errorf("mcp transport: %w", err)
 	}
 
 	return nil
+}
+
+// managerBundle groups the gamemaster and rankings managers so
+// buildManagers can return them through a single typed value.
+type managerBundle struct {
+	Gamemaster *gamemaster.Manager
+	Rankings   *rankings.Manager
+}
+
+// buildManagers constructs the gamemaster + rankings managers with
+// the sibling-directory convention wired through.
+func buildManagers(rt *Runtime) (*managerBundle, error) {
+	mgr, err := gamemaster.NewManager(rt.Config.Gamemaster)
+	if err != nil {
+		return nil, fmt.Errorf("gamemaster manager: %w", err)
+	}
+
+	ranks, err := buildRankingsManager(rankings.Config{
+		BaseURL:  defaultRankingsBaseURL,
+		LocalDir: rankingsCacheDir(rt.Config.Gamemaster.LocalPath),
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return &managerBundle{Gamemaster: mgr, Rankings: ranks}, nil
+}
+
+// startRefreshLoop launches the periodic gamemaster refresh goroutine
+// and returns a channel that closes when the loop exits.
+func startRefreshLoop(ctx context.Context, rt *Runtime, mgr *gamemaster.Manager) <-chan struct{} {
+	done := make(chan struct{})
+
+	go func() {
+		defer close(done)
+
+		runRefreshLoop(ctx, rt.Logger, mgr, rt.Config.Gamemaster.RefreshInterval)
+	}()
+
+	return done
+}
+
+// waitForBackgroundShutdown blocks until the refresh loop and the
+// optional debug HTTP server have exited, each under its own grace
+// window, and warns when either misses its deadline.
+func waitForBackgroundShutdown(rt *Runtime, refreshDone, debugDone <-chan struct{}) {
+	select {
+	case <-refreshDone:
+	case <-time.After(refreshGrace):
+		rt.Logger.Warn("refresh loop did not exit within grace window")
+	}
+
+	if debugDone == nil {
+		return
+	}
+
+	select {
+	case <-debugDone:
+	case <-time.After(debugServerShutdownGrace):
+		rt.Logger.Warn("debug HTTP server did not exit within grace window")
+	}
 }
 
 // primeGamemaster tries the local cache first (fast, no network) and
@@ -251,4 +306,62 @@ func buildRankingsManager(cfg rankings.Config) (*rankings.Manager, error) {
 // from the gamemaster.local_path — both caches share a parent.
 func rankingsCacheDir(gamemasterLocalPath string) string {
 	return filepath.Join(filepath.Dir(gamemasterLocalPath), rankingsSubdir)
+}
+
+// startDebugServer spins up the debug HTTP surface when the
+// configured port is non-zero. Returns a channel that closes once the
+// server has shut down (either cleanly after ctx cancellation or due
+// to a Serve error). Returns nil when the server is disabled so the
+// caller can skip its wait step.
+func startDebugServer(
+	ctx context.Context, rt *Runtime, mgr *gamemaster.Manager,
+) <-chan struct{} {
+	if rt.Config.Server.HTTPPort == 0 {
+		return nil
+	}
+
+	addr := net.JoinHostPort(rt.Config.Server.HTTPHost, strconv.Itoa(rt.Config.Server.HTTPPort))
+	server := &http.Server{
+		Addr:              addr,
+		Handler:           debug.NewHandler(mgr),
+		ReadHeaderTimeout: debugServerReadHeaderTimeout,
+	}
+
+	done := make(chan struct{})
+
+	go func() {
+		defer close(done)
+
+		rt.Logger.Info("starting debug HTTP server", slog.String("addr", addr))
+
+		err := server.ListenAndServe()
+		if err != nil && !errors.Is(err, http.ErrServerClosed) {
+			rt.Logger.Error("debug HTTP server failed",
+				slog.String("error", err.Error()))
+		}
+	}()
+
+	//nolint:gosec // G118: shutdownDebugServer intentionally runs on a fresh ctx; see its doc
+	go shutdownDebugServer(ctx, rt, server)
+
+	return done
+}
+
+// shutdownDebugServer blocks until the parent context is cancelled,
+// then runs http.Server.Shutdown on a fresh context so in-flight
+// requests can drain. The fresh context is intentional: the parent
+// is already cancelled, and Shutdown needs a live ctx.
+//
+//nolint:contextcheck // fresh ctx is required; parent is already cancelled by the time we run
+func shutdownDebugServer(ctx context.Context, rt *Runtime, server *http.Server) {
+	<-ctx.Done()
+
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), debugServerShutdownGrace)
+	defer cancel()
+
+	err := server.Shutdown(shutdownCtx)
+	if err != nil {
+		rt.Logger.Warn("debug HTTP server shutdown error",
+			slog.String("error", err.Error()))
+	}
 }
