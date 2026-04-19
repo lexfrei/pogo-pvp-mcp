@@ -21,41 +21,154 @@ var ErrUnknownMove = errors.New("unknown move")
 // engine error downstream.
 var ErrMoveCategoryMismatch = errors.New("move category mismatch")
 
+// CombatantOptions carries per-Pokémon modifier flags that affect
+// either combat resolution (shadow form uses a distinct pvpoke
+// entry with shadow-exclusive legacy moves) or cost estimation
+// (shadow ×1.2, purified ×0.9, lucky ×0.5 on stardust-only).
+// Flags are orthogonal — a Shadow Pokémon is never Purified, but
+// Lucky can stack with either.
+//
+// The `_shadow` suffix on species ids is no longer the convention
+// for signalling shadow form — set Shadow=true in Options and leave
+// Species as the base id (e.g. "medicham"). The tool internally
+// resolves to the shadow gamemaster entry via "_shadow" suffix
+// concatenation; if pvpoke does not publish a dedicated entry,
+// the fallback reports the base species with a shadow_variant_missing
+// flag so the caller knows shadow-specific legacy moves / rankings
+// were not applied.
+type CombatantOptions struct {
+	Shadow   bool `json:"shadow,omitempty" jsonschema:"shadow form (×1.2 cost, distinct gamemaster entry)"`
+	Lucky    bool `json:"lucky,omitempty" jsonschema:"lucky Pokémon (×0.5 powerup stardust only)"`
+	Purified bool `json:"purified,omitempty" jsonschema:"purified form (×0.9 stardust and candy costs)"`
+}
+
 // Combatant is the MCP-visible input shape for one fighter in a
 // matchup / team. Shields on matchup is specified once per side at
 // the MatchupParams level so callers can sweep (0, 1, 2)×(0, 1, 2)
 // outside the tool. FastMove and ChargedMoves are optional: if left
 // empty the tool resolves the recommended moveset from the relevant
 // (cup, cap) rankings entry. An explicit move overrides the default.
+// Options carries modifier flags (shadow / lucky / purified) — see
+// CombatantOptions godoc.
+//
+// Unexported fields (resolvedSpeciesID, shadowVariantMissing) are
+// runtime-only bookkeeping populated by buildEngineCombatant after
+// shadow-aware lookup; they skip JSON (un)marshalling and are read
+// back by resolvedFromSpec to surface the missing-variant signal
+// in the response.
 type Combatant struct {
-	Species      string   `json:"species" jsonschema:"species id"`
-	IV           [3]int   `json:"iv" jsonschema:"IV triple [atk, def, sta]"`
-	Level        float64  `json:"level" jsonschema:"level on 0.5 grid, [1.0, 51.0]"`
-	FastMove     string   `json:"fast_move,omitempty" jsonschema:"fast move id; omit to use recommended"`
-	ChargedMoves []string `json:"charged_moves,omitempty" jsonschema:"charged move ids; omit to use recommended"`
+	Species      string           `json:"species" jsonschema:"species id"`
+	IV           [3]int           `json:"iv" jsonschema:"IV triple [atk, def, sta]"`
+	Level        float64          `json:"level" jsonschema:"level on 0.5 grid, [1.0, 51.0]"`
+	FastMove     string           `json:"fast_move,omitempty" jsonschema:"fast move id; omit to use recommended"`
+	ChargedMoves []string         `json:"charged_moves,omitempty" jsonschema:"charged move ids; omit to use recommended"`
+	Options      CombatantOptions `json:"options,omitzero" jsonschema:"modifier flags: shadow/lucky/purified"`
+
+	resolvedSpeciesID    string
+	shadowVariantMissing bool
 }
 
 // ResolvedCombatant echoes back the species + moveset actually used
-// by the engine after any recommended-moveset defaulting. Callers
-// consume it to learn which fast/charged pair the tool picked when
-// they left those fields empty on input.
+// by the engine after any recommended-moveset defaulting. Options
+// round-trips so the caller sees the modifier flags the tool saw.
+// ResolvedSpeciesID reports the underlying pvpoke gamemaster id the
+// engine actually queried (e.g. "medicham_shadow" when Options.Shadow
+// is true and pvpoke publishes a dedicated shadow entry).
+// ShadowVariantMissing is true when Options.Shadow was set but
+// pvpoke does not publish a corresponding "_shadow" entry — the
+// tool fell back to the base species and did NOT apply shadow-
+// specific legacy moves or rankings. Callers should treat results
+// on such a combatant as approximate.
 type ResolvedCombatant struct {
-	Species      string   `json:"species"`
-	FastMove     string   `json:"fast_move"`
-	ChargedMoves []string `json:"charged_moves"`
+	Species              string           `json:"species"`
+	ResolvedSpeciesID    string           `json:"resolved_species_id,omitempty"`
+	FastMove             string           `json:"fast_move"`
+	ChargedMoves         []string         `json:"charged_moves"`
+	Options              CombatantOptions `json:"options,omitzero"`
+	ShadowVariantMissing bool             `json:"shadow_variant_missing,omitempty"`
 }
 
 // resolvedFromSpec projects a finalised Combatant (after moveset
-// defaulting) to its echo shape.
+// defaulting) to its echo shape, carrying the runtime shadow-lookup
+// result populated by buildEngineCombatant.
 func resolvedFromSpec(spec *Combatant) ResolvedCombatant {
 	charged := make([]string, len(spec.ChargedMoves))
 	copy(charged, spec.ChargedMoves)
 
 	return ResolvedCombatant{
-		Species:      spec.Species,
-		FastMove:     spec.FastMove,
-		ChargedMoves: charged,
+		Species:              spec.Species,
+		ResolvedSpeciesID:    spec.resolvedSpeciesID,
+		FastMove:             spec.FastMove,
+		ChargedMoves:         charged,
+		Options:              spec.Options,
+		ShadowVariantMissing: spec.shadowVariantMissing,
 	}
+}
+
+// resolveSpeciesForSpec wraps resolveSpeciesLookup for the common
+// buildEngineCombatant / rejectLegacy case: on success it populates
+// the runtime shadow-resolve fields on the Combatant so the
+// response can echo ResolvedSpeciesID / ShadowVariantMissing.
+func resolveSpeciesForSpec(
+	snapshot *pogopvp.Gamemaster, spec *Combatant,
+) (pogopvp.Species, error) {
+	species, resolvedID, shadowMissing, ok := resolveSpeciesLookup(
+		snapshot, spec.Species, spec.Options)
+	if !ok {
+		return pogopvp.Species{}, fmt.Errorf("%w: %q", ErrUnknownSpecies, spec.Species)
+	}
+
+	spec.resolvedSpeciesID, spec.shadowVariantMissing = resolvedID, shadowMissing
+
+	return species, nil
+}
+
+// shadowSuffix is the pvpoke convention for shadow-form species
+// ids in the gamemaster entry map. Clients don't emit this suffix
+// anymore — they set Options.Shadow=true and let the tool resolve
+// the pvpoke entry internally. Kept as a package-private constant
+// so the one place that does the concatenation stays greppable.
+const shadowSuffix = "_shadow"
+
+// resolveSpeciesLookup performs shadow-aware species lookup against
+// the gamemaster snapshot:
+//
+//   - Options.Shadow=false: direct lookup by baseID.
+//   - Options.Shadow=true: try baseID+"_shadow" first; if pvpoke
+//     publishes no dedicated shadow entry (rare but possible for
+//     shadow-eligible-but-shadow-variant-not-yet-published species),
+//     fall back to baseID and report shadowMissing=true so callers
+//     can surface the approximation to the end user.
+//
+// resolvedID is the pvpoke key actually used. ok=false means the
+// base species id doesn't exist at all, which is an input error the
+// caller should wrap into ErrUnknownSpecies.
+//
+//nolint:gocritic // unnamedResult: (species, resolvedID, shadowMissing, ok) documented in godoc
+func resolveSpeciesLookup(
+	snapshot *pogopvp.Gamemaster, baseID string, opts CombatantOptions,
+) (pogopvp.Species, string, bool, bool) {
+	if opts.Shadow {
+		shadowID := baseID + shadowSuffix
+		if species, found := snapshot.Pokemon[shadowID]; found {
+			return species, shadowID, false, true
+		}
+		// Shadow requested but pvpoke has no dedicated entry: fall
+		// back to the base species but flag the approximation.
+		species, found := snapshot.Pokemon[baseID]
+		if !found {
+			return pogopvp.Species{}, "", false, false
+		}
+
+		return species, baseID, true, true
+	}
+
+	species, ok := snapshot.Pokemon[baseID]
+	if !ok {
+		return pogopvp.Species{}, "", false, false
+	}
+
+	return species, baseID, false, true
 }
 
 // MatchupParams is the JSON input contract for pvp_matchup. Cup is
@@ -205,13 +318,17 @@ func (tool *MatchupTool) applyDefaults(ctx context.Context, params *MatchupParam
 
 // buildEngineCombatant maps a tool-level Combatant (string-addressed
 // moves, species id) to an engine-level pogopvp.Combatant with looked-up
-// Species, Move structs, and a validated IV.
+// Species, Move structs, and a validated IV. Shadow-aware: when
+// spec.Options.Shadow is true the gamemaster entry resolves through
+// resolveSpeciesLookup and spec.resolvedSpeciesID /
+// spec.shadowVariantMissing are populated for later echo to the
+// response via resolvedFromSpec.
 func buildEngineCombatant(
 	snapshot *pogopvp.Gamemaster, spec *Combatant, shields int,
 ) (pogopvp.Combatant, error) {
-	species, ok := snapshot.Pokemon[spec.Species]
-	if !ok {
-		return pogopvp.Combatant{}, fmt.Errorf("%w: %q", ErrUnknownSpecies, spec.Species)
+	species, err := resolveSpeciesForSpec(snapshot, spec)
+	if err != nil {
+		return pogopvp.Combatant{}, err
 	}
 
 	ivs, err := pogopvp.NewIV(spec.IV[0], spec.IV[1], spec.IV[2])

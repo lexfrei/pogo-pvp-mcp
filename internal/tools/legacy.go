@@ -115,7 +115,7 @@ func assertNoLegacyInCombatant(
 		return nil
 	}
 
-	species, ok := snapshot.Pokemon[spec.Species]
+	species, _, _, ok := resolveSpeciesLookup(snapshot, spec.Species, spec.Options)
 	if !ok {
 		return nil
 	}

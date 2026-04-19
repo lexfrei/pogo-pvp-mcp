@@ -154,7 +154,8 @@ func TestSecondMoveCost_ShadowMultiplier(t *testing.T) {
 	handler := tool.Handler()
 
 	_, result, err := handler(t.Context(), nil, tools.SecondMoveCostParams{
-		Species: "medicham_shadow",
+		Species: speciesMedicham,
+		Options: tools.CombatantOptions{Shadow: true},
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -383,7 +384,8 @@ func TestSecondMoveCost_ShadowWithMissingBuddyDistance(t *testing.T) {
 	handler := tool.Handler()
 
 	_, result, err := handler(t.Context(), nil, tools.SecondMoveCostParams{
-		Species: "mewtwo_shadow",
+		Species: "mewtwo",
+		Options: tools.CombatantOptions{Shadow: true},
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
