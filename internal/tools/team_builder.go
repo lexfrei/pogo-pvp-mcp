@@ -40,14 +40,15 @@ const MaxPoolSize = 50
 // omit the field for the [1, 1] default, or supply both slots
 // explicitly.
 type TeamBuilderParams struct {
-	Pool       []Combatant `json:"pool" jsonschema:"candidate combatants to draw the team from"`
-	League     string      `json:"league" jsonschema:"little|great|ultra|master"`
-	Cup        string      `json:"cup,omitempty" jsonschema:"cup id from pvpoke (e.g. spring, retro); empty = open-league all"`
-	TopN       int         `json:"top_n,omitempty" jsonschema:"meta size for scoring (default 30)"`
-	Shields    []int       `json:"shields,omitempty" jsonschema:"[team, meta] shield counts; omit for [1, 1]; each 0..2"`
-	MaxResults int         `json:"max_results,omitempty" jsonschema:"how many top teams to return (default 5)"`
-	Required   []string    `json:"required,omitempty" jsonschema:"species ids that must appear in the returned team"`
-	Banned     []string    `json:"banned,omitempty" jsonschema:"species ids to exclude from the pool"`
+	Pool        []Combatant `json:"pool" jsonschema:"candidate combatants to draw the team from"`
+	League      string      `json:"league" jsonschema:"little|great|ultra|master"`
+	Cup         string      `json:"cup,omitempty" jsonschema:"cup id from pvpoke (e.g. spring, retro); empty = open-league all"`
+	TopN        int         `json:"top_n,omitempty" jsonschema:"meta size for scoring (default 30)"`
+	Shields     []int       `json:"shields,omitempty" jsonschema:"[team, meta] shield counts; omit for [1, 1]; each 0..2"`
+	MaxResults  int         `json:"max_results,omitempty" jsonschema:"how many top teams to return (default 5)"`
+	Required    []string    `json:"required,omitempty" jsonschema:"species ids that must appear in the returned team"`
+	Banned      []string    `json:"banned,omitempty" jsonschema:"species ids to exclude from the pool"`
+	OptimizeFor string      `json:"optimize_for,omitempty" jsonschema:"overall|0s|1s|2s|all_pareto (default overall)"`
 }
 
 // TeamBuilderTeam is one candidate team plus its aggregated score.
@@ -62,7 +63,7 @@ type TeamBuilderTeam struct {
 	Members     []ResolvedCombatant `json:"members"`
 	PoolIndices []int               `json:"pool_indices"`
 	TeamScore   float64             `json:"team_score"`
-	Reason      string              `json:"reason"`
+	ParetoLabel string              `json:"pareto_label"`
 }
 
 // TeamBuilderResult is the JSON output for pvp_team_builder.
@@ -148,7 +149,8 @@ func (tool *TeamBuilderTool) handle(
 		return nil, TeamBuilderResult{}, err
 	}
 
-	result := evaluateTeams(ctx, inputs.pool, inputs.poolCombatants, inputs.metaCombatants, inputs.required)
+	result := evaluateTeams(ctx, inputs.pool, inputs.poolCombatants,
+		inputs.metaCombatants, inputs.required, params.OptimizeFor)
 
 	if ctx.Err() != nil {
 		return nil, TeamBuilderResult{}, fmt.Errorf("team_builder cancelled: %w", ctx.Err())
@@ -396,25 +398,101 @@ func resolveRequired(pool []Combatant, required []string) (map[string]struct{}, 
 	return out, nil
 }
 
+// scenarioCount is the number of shield scenarios the per-scenario
+// rating matrix covers: 0 shields vs 0, 1 vs 1, 2 vs 2. Used for
+// the Pareto-frontier output in team_builder.
+const scenarioCount = 3
+
+// scenarioLabels maps scenario index to a stable human-readable
+// label echoed back in TeamBuilderTeam.ParetoLabel.
+//
+//nolint:gochecknoglobals // fixed enumeration of shield scenarios, no reassignment
+var scenarioLabels = [scenarioCount]string{
+	"best 0-shield",
+	"best 1-shield",
+	"best 2-shield",
+}
+
 // evaluateTeams enumerates all 3-combinations of the pool that satisfy
-// the required-species constraint and returns them annotated with
-// team_score. Precomputes the pool × meta rating matrix once so the
-// triple loop is O(pool^3) index ops instead of O(pool^3 × meta)
-// Simulate calls. Honours ctx cancellation at both the matrix
-// precompute step and each outer iteration of the triple loop.
+// the required-species constraint and scores each triple. The score
+// selection depends on params.OptimizeFor:
+//   - "" or "overall" → average across the 1-shield scenario (default).
+//   - "0s" / "1s" / "2s" → average across the named scenario only.
+//   - "all_pareto" → for each of the three scenarios, pick the best
+//     triple; dedup; add one "best overall" team too. Up to 4 teams.
 func evaluateTeams(
 	ctx context.Context,
 	pool []Combatant,
 	poolCombatants, meta []pogopvp.Combatant,
 	required map[string]struct{},
+	optimizeFor string,
 ) evaluationResult {
 	matrix := precomputeRatingMatrix(ctx, poolCombatants, meta)
 
 	out := evaluationResult{Failures: matrix.Failures}
 
+	if optimizeFor == optimizeForAllPareto {
+		out.Teams = buildParetoFrontier(ctx, pool, matrix.Entries, required, &out.Evaluated)
+
+		return out
+	}
+
+	scenarioIdx, ok := selectScenario(optimizeFor)
+	if !ok {
+		// Unknown optimize_for falls back to overall (scenario 1).
+		scenarioIdx = 1
+	}
+
+	label := "best overall"
+	if optimizeFor == "0s" || optimizeFor == "1s" || optimizeFor == "2s" {
+		label = scenarioLabels[scenarioIdx]
+	}
+
+	out.Teams = enumerateTeams(ctx, pool, matrix.Entries, required, scenarioIdx, label, &out.Evaluated)
+
+	return out
+}
+
+// optimize_for recognised values. Anything else falls back to overall.
+const (
+	optimizeForOverall   = "overall"
+	optimizeFor0s        = "0s"
+	optimizeFor1s        = "1s"
+	optimizeFor2s        = "2s"
+	optimizeForAllPareto = "all_pareto"
+)
+
+// selectScenario maps optimize_for to a scenario index into the
+// rating matrix. Returns false for all_pareto and unknown values; the
+// caller decides the fallback.
+func selectScenario(optimizeFor string) (int, bool) {
+	switch optimizeFor {
+	case optimizeFor0s:
+		return 0, true
+	case "", optimizeForOverall, optimizeFor1s:
+		return 1, true
+	case optimizeFor2s:
+		return 2, true
+	default:
+		return 0, false
+	}
+}
+
+// enumerateTeams walks every 3-combination of the pool satisfying
+// `required`, scores each under the chosen scenario, and returns the
+// resulting teams with the given label. Mutates *evaluated so the
+// caller can tally how many triples were considered.
+func enumerateTeams(
+	ctx context.Context,
+	pool []Combatant, matrix [][][scenarioCount]ratingMatrixEntry,
+	required map[string]struct{},
+	scenarioIdx int, label string, evaluated *int,
+) []TeamBuilderTeam {
+	var teams []TeamBuilderTeam
+
 	for i := range pool {
 		if ctx.Err() != nil {
-			return out
+			return teams
 		}
 
 		for jIdx := i + 1; jIdx < len(pool); jIdx++ {
@@ -424,24 +502,175 @@ func evaluateTeams(
 					continue
 				}
 
-				score := scoreTripleFromMatrix(matrix.Entries, i, jIdx, kIdx)
-				out.Evaluated++
+				score := scoreTripleFromMatrix(matrix, i, jIdx, kIdx, scenarioIdx)
+				*evaluated++
 
-				out.Teams = append(out.Teams, TeamBuilderTeam{
-					Members: []ResolvedCombatant{
-						resolvedFromSpec(&pool[i]),
-						resolvedFromSpec(&pool[jIdx]),
-						resolvedFromSpec(&pool[kIdx]),
-					},
-					PoolIndices: []int{i, jIdx, kIdx},
-					TeamScore:   score,
-					Reason:      "highest average battle rating across the sampled meta",
-				})
+				teams = append(teams, newTeam(pool, i, jIdx, kIdx, score, label))
 			}
 		}
 	}
 
+	return teams
+}
+
+// buildParetoFrontier returns up to four teams: one best-in-class per
+// shield scenario plus a best-overall (averaged across all three
+// scenarios). Duplicates across scenarios are schlopped — a single
+// team wins in e.g. both 0s and 1s and only appears once, labelled
+// with the best scenario label it won.
+func buildParetoFrontier(
+	ctx context.Context,
+	pool []Combatant, matrix [][][scenarioCount]ratingMatrixEntry,
+	required map[string]struct{}, evaluated *int,
+) []TeamBuilderTeam {
+	bestByScenario := make([]TeamBuilderTeam, scenarioCount)
+	foundByScenario := make([]bool, scenarioCount)
+
+	var bestOverall TeamBuilderTeam
+
+	foundOverall := false
+
+	for i := range pool {
+		if ctx.Err() != nil {
+			break
+		}
+
+		for jIdx := i + 1; jIdx < len(pool); jIdx++ {
+			for kIdx := jIdx + 1; kIdx < len(pool); kIdx++ {
+				speciesIDs := []string{pool[i].Species, pool[jIdx].Species, pool[kIdx].Species}
+				if !containsAllSpecies(speciesIDs, required) {
+					continue
+				}
+
+				*evaluated++
+
+				updateScenarioBests(pool, matrix, i, jIdx, kIdx,
+					bestByScenario, foundByScenario)
+				updateOverallBest(pool, matrix, i, jIdx, kIdx,
+					&bestOverall, &foundOverall)
+			}
+		}
+	}
+
+	return assembleFrontier(bestByScenario, foundByScenario, bestOverall, foundOverall)
+}
+
+// updateScenarioBests checks the triple against the per-scenario
+// champions and replaces them on improvement.
+func updateScenarioBests(
+	pool []Combatant, matrix [][][scenarioCount]ratingMatrixEntry,
+	i, jIdx, kIdx int,
+	bestByScenario []TeamBuilderTeam, foundByScenario []bool,
+) {
+	for scenarioIdx := range scenarioCount {
+		score := scoreTripleFromMatrix(matrix, i, jIdx, kIdx, scenarioIdx)
+
+		if !foundByScenario[scenarioIdx] || score > bestByScenario[scenarioIdx].TeamScore {
+			bestByScenario[scenarioIdx] = newTeam(pool, i, jIdx, kIdx,
+				score, scenarioLabels[scenarioIdx])
+			foundByScenario[scenarioIdx] = true
+		}
+	}
+}
+
+// updateOverallBest averages the triple's score across all three
+// scenarios and replaces the running champion on improvement.
+func updateOverallBest(
+	pool []Combatant, matrix [][][scenarioCount]ratingMatrixEntry,
+	i, jIdx, kIdx int,
+	bestOverall *TeamBuilderTeam, foundOverall *bool,
+) {
+	overallScore := averageScenarioScore(matrix, i, jIdx, kIdx)
+
+	if !*foundOverall || overallScore > bestOverall.TeamScore {
+		*bestOverall = newTeam(pool, i, jIdx, kIdx, overallScore, "best overall")
+		*foundOverall = true
+	}
+}
+
+// assembleFrontier composes the final Pareto slice: overall first,
+// then one scenario team per axis, de-duplicated by PoolIndices.
+func assembleFrontier(
+	bestByScenario []TeamBuilderTeam, foundByScenario []bool,
+	bestOverall TeamBuilderTeam, foundOverall bool,
+) []TeamBuilderTeam {
+	var out []TeamBuilderTeam
+
+	if foundOverall {
+		out = append(out, bestOverall)
+	}
+
+	for scenarioIdx := range scenarioCount {
+		if !foundByScenario[scenarioIdx] {
+			continue
+		}
+
+		if duplicateInFrontier(out, bestByScenario[scenarioIdx].PoolIndices) {
+			continue
+		}
+
+		out = append(out, bestByScenario[scenarioIdx])
+	}
+
 	return out
+}
+
+// duplicateInFrontier reports whether any existing team references
+// the same pool triple. Order-insensitive since PoolIndices is
+// always ascending (enumeration generates i<jIdx<kIdx).
+func duplicateInFrontier(existing []TeamBuilderTeam, indices []int) bool {
+	for i := range existing {
+		if slices.Equal(existing[i].PoolIndices, indices) {
+			return true
+		}
+	}
+
+	return false
+}
+
+// newTeam assembles a TeamBuilderTeam from three pool indices.
+func newTeam(
+	pool []Combatant, i, jIdx, kIdx int, score float64, label string,
+) TeamBuilderTeam {
+	return TeamBuilderTeam{
+		Members: []ResolvedCombatant{
+			resolvedFromSpec(&pool[i]),
+			resolvedFromSpec(&pool[jIdx]),
+			resolvedFromSpec(&pool[kIdx]),
+		},
+		PoolIndices: []int{i, jIdx, kIdx},
+		TeamScore:   score,
+		ParetoLabel: label,
+	}
+}
+
+// averageScenarioScore means-of-means across the three scenarios for
+// one triple — the overall-axis score in all_pareto mode.
+func averageScenarioScore(
+	matrix [][][scenarioCount]ratingMatrixEntry, iIdx, jIdx, kIdx int,
+) float64 {
+	var (
+		total    float64
+		counted  int
+		anyScore bool
+	)
+
+	for scenarioIdx := range scenarioCount {
+		score := scoreTripleFromMatrix(matrix, iIdx, jIdx, kIdx, scenarioIdx)
+		if score == 0 {
+			continue
+		}
+
+		total += score
+		counted++
+		anyScore = true
+	}
+
+	if !anyScore || counted == 0 {
+		return 0
+	}
+
+	return total / float64(counted)
 }
 
 // ratingMatrixEntry pairs the rating with a flag that distinguishes a
@@ -453,40 +682,53 @@ type ratingMatrixEntry struct {
 	OK     bool
 }
 
-// ratingMatrix is the result of a full (pool, meta) precompute: the
-// matrix itself plus the count of failed simulate calls observed.
+// ratingMatrix is the result of a full (pool, meta) precompute: a
+// per-scenario 3D cube of entries plus the total count of failed
+// simulate calls observed across all three scenarios.
 type ratingMatrix struct {
-	Entries  [][]ratingMatrixEntry
+	Entries  [][][scenarioCount]ratingMatrixEntry
 	Failures int
 }
 
-// precomputeRatingMatrix simulates every (pool_i, meta_j) pair exactly
-// once, storing the rating for reuse across every triple that uses
+// precomputeRatingMatrix simulates every (pool_i, meta_j) pair across
+// all three shield scenarios (0/0, 1/1, 2/2) exactly once, storing
+// the per-scenario rating for reuse across every triple that uses
 // pool_i. ctx cancellation short-circuits the computation.
 func precomputeRatingMatrix(
 	ctx context.Context, poolCombatants, meta []pogopvp.Combatant,
 ) ratingMatrix {
 	result := ratingMatrix{
-		Entries: make([][]ratingMatrixEntry, len(poolCombatants)),
+		Entries: make([][][scenarioCount]ratingMatrixEntry, len(poolCombatants)),
 	}
 
 	for i := range poolCombatants {
-		result.Entries[i] = make([]ratingMatrixEntry, len(meta))
+		result.Entries[i] = make([][scenarioCount]ratingMatrixEntry, len(meta))
 
 		if ctx.Err() != nil {
 			return result
 		}
 
 		for oppIdx := range meta {
-			rating, err := ratingFor(&poolCombatants[i], &meta[oppIdx])
-			if err != nil {
-				result.Failures++
-				result.Entries[i][oppIdx] = ratingMatrixEntry{Rating: rating, OK: false}
+			for scenarioIdx := range scenarioCount {
+				attacker := poolCombatants[i]
+				defender := meta[oppIdx]
+				attacker.Shields = scenarioIdx
+				defender.Shields = scenarioIdx
 
-				continue
+				rating, err := ratingFor(&attacker, &defender)
+				if err != nil {
+					result.Failures++
+					result.Entries[i][oppIdx][scenarioIdx] = ratingMatrixEntry{
+						Rating: rating, OK: false,
+					}
+
+					continue
+				}
+
+				result.Entries[i][oppIdx][scenarioIdx] = ratingMatrixEntry{
+					Rating: rating, OK: true,
+				}
 			}
-
-			result.Entries[i][oppIdx] = ratingMatrixEntry{Rating: rating, OK: true}
 		}
 	}
 
@@ -494,10 +736,12 @@ func precomputeRatingMatrix(
 }
 
 // scoreTripleFromMatrix averages the ratings for three pool members
-// against the full meta, skipping failed entries in both numerator
-// and denominator so failures do not distort the average toward
-// ratingMidpoint.
-func scoreTripleFromMatrix(matrix [][]ratingMatrixEntry, iIdx, jIdx, kIdx int) float64 {
+// against the full meta for one shield scenario, skipping failed
+// entries in both numerator and denominator so failures do not
+// distort the average toward ratingMidpoint.
+func scoreTripleFromMatrix(
+	matrix [][][scenarioCount]ratingMatrixEntry, iIdx, jIdx, kIdx, scenarioIdx int,
+) float64 {
 	if len(matrix) == 0 || len(matrix[iIdx]) == 0 {
 		return 0
 	}
@@ -509,7 +753,7 @@ func scoreTripleFromMatrix(matrix [][]ratingMatrixEntry, iIdx, jIdx, kIdx int) f
 
 	for opp := range matrix[iIdx] {
 		for _, member := range []int{iIdx, jIdx, kIdx} {
-			entry := matrix[member][opp]
+			entry := matrix[member][opp][scenarioIdx]
 			if !entry.OK {
 				continue
 			}
