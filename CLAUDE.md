@@ -61,7 +61,7 @@ The MCP server is a thin wrapper around the engine. The hot shape: an MCP tool h
 
 ### MCP tools
 
-1. `pvp_rank` — CP, stat product, percent-of-best for a given species at a given IV/level under a league cap.
+1. `pvp_rank` — CP, stat product, percent-of-best for a given species at a given IV/level under a league cap. `RankingsByCup []CupRanking` carries the species' rank/rating/moveset in every pvpoke-published cup ranking for the league (open-league first, then named cups sorted by id; cups where the species is absent from pvpoke's list are omitted). Phase R4.1 removed the `Cup` input parameter — one call returns all cups for the league, so the r3 Bug #4 `cup` drift (`cup=spring` returning open-league `percent_of_best`) can't happen. Top-level `OptimalMoveset` / `NonLegacyMoveset` / `Hundo` are computed from the open-league rankings; per-cup non-legacy is deliberately not emitted (would multiply latency by the cup count).
 2. `pvp_matchup` — 1v1 simulation via `pogopvp.Simulate`; returns winner/turns/HP/energy/shield counts.
 3. `pvp_cp_limits` — highest level and CP a species with given IVs can reach under each standard league cap (Little/Great/Ultra). Honours the same `XL` flag as `pvp_rank`; Master is omitted because its cap is unreachable.
 4. `pvp_meta` — trimmed top-N rankings slice from pvpoke's pre-computed JSON.

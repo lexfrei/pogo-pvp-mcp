@@ -39,7 +39,6 @@ type RankBatchParams struct {
 	Species string           `json:"species" jsonschema:"species id in the pvpoke gamemaster"`
 	IVs     [][3]int         `json:"ivs" jsonschema:"list of [atk, def, sta] triples; each component 0..15"`
 	League  string           `json:"league" jsonschema:"little|great|ultra|master"`
-	Cup     string           `json:"cup,omitempty" jsonschema:"cup id from pvpoke; empty = open-league all"`
 	CPCap   int              `json:"cp_cap,omitempty" jsonschema:"overrides the league default CP cap"`
 	XL      bool             `json:"xl,omitempty" jsonschema:"allow XL candy levels above 40"`
 	Options CombatantOptions `json:"options,omitzero" jsonschema:"shadow / lucky / purified flags applied batch-wide"`
@@ -62,7 +61,6 @@ type RankBatchEntry struct {
 type RankBatchResult struct {
 	Species      string           `json:"species"`
 	League       string           `json:"league"`
-	Cup          string           `json:"cup"`
 	CPCap        int              `json:"cp_cap"`
 	Entries      []RankBatchEntry `json:"entries"`
 	SuccessCount int              `json:"success_count"`
@@ -141,7 +139,6 @@ func (tool *RankBatchTool) handle(
 	return nil, RankBatchResult{
 		Species:      params.Species,
 		League:       params.League,
-		Cup:          resolveCupLabel(params.Cup),
 		CPCap:        resolvedCPCap,
 		Entries:      entries,
 		SuccessCount: successCount,
@@ -204,7 +201,6 @@ func runRankBatchEntry(
 		Species: params.Species,
 		IV:      ivTriple,
 		League:  params.League,
-		Cup:     params.Cup,
 		CPCap:   resolvedCPCap,
 		XL:      params.XL,
 		Options: params.Options,
