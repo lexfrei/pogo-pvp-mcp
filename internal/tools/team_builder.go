@@ -43,15 +43,16 @@ const MaxPoolSize = 50
 // OptimizeFor (overall|0s|1s|2s|all_pareto) selects which scenario
 // axis drives the ranking; see TeamBuilderTeam.ParetoLabel.
 type TeamBuilderParams struct {
-	Pool        []Combatant `json:"pool" jsonschema:"candidate combatants to draw the team from"`
-	League      string      `json:"league" jsonschema:"little|great|ultra|master"`
-	Cup         string      `json:"cup,omitempty" jsonschema:"cup id from pvpoke (e.g. spring, retro); empty = open-league all"`
-	TopN        int         `json:"top_n,omitempty" jsonschema:"meta size for scoring (default 30)"`
-	Shields     []int       `json:"shields,omitempty" jsonschema:"symmetric shield scenarios; omit for [1]; each 0..2"`
-	MaxResults  int         `json:"max_results,omitempty" jsonschema:"how many top teams to return (default 5)"`
-	Required    []string    `json:"required,omitempty" jsonschema:"species ids that must appear in the returned team"`
-	Banned      []string    `json:"banned,omitempty" jsonschema:"species ids to exclude from the pool"`
-	OptimizeFor string      `json:"optimize_for,omitempty" jsonschema:"overall|0s|1s|2s|all_pareto (default overall)"`
+	Pool           []Combatant `json:"pool" jsonschema:"candidate combatants to draw the team from"`
+	League         string      `json:"league" jsonschema:"little|great|ultra|master"`
+	Cup            string      `json:"cup,omitempty" jsonschema:"cup id from pvpoke (e.g. spring, retro); empty = open-league all"`
+	TopN           int         `json:"top_n,omitempty" jsonschema:"meta size for scoring (default 30)"`
+	Shields        []int       `json:"shields,omitempty" jsonschema:"symmetric shield scenarios; omit for [1]; each 0..2"`
+	MaxResults     int         `json:"max_results,omitempty" jsonschema:"how many top teams to return (default 5)"`
+	Required       []string    `json:"required,omitempty" jsonschema:"species ids that must appear in the returned team"`
+	Banned         []string    `json:"banned,omitempty" jsonschema:"species ids to exclude from the pool"`
+	OptimizeFor    string      `json:"optimize_for,omitempty" jsonschema:"overall|0s|1s|2s|all_pareto (default overall)"`
+	DisallowLegacy bool        `json:"disallow_legacy,omitempty" jsonschema:"reject legacy moves; default false (legacy allowed)"`
 }
 
 // TeamBuilderTeam is one candidate team plus its aggregated score.
@@ -200,6 +201,11 @@ func (tool *TeamBuilderTool) resolveTeamBuilderInputs(
 		return nil, err
 	}
 
+	err = rejectTeamLegacy(snapshot, params.Pool, params.DisallowLegacy)
+	if err != nil {
+		return nil, err
+	}
+
 	err = tool.defaultPoolMovesets(ctx, params, cpCap)
 	if err != nil {
 		return nil, err
@@ -214,8 +220,11 @@ func (tool *TeamBuilderTool) resolveTeamBuilderInputs(
 func (tool *TeamBuilderTool) defaultPoolMovesets(
 	ctx context.Context, params *TeamBuilderParams, cpCap int,
 ) error {
+	snapshot := tool.gm.Current()
+
 	for i := range params.Pool {
-		err := applyMovesetDefaults(ctx, tool.rankings, &params.Pool[i], cpCap, params.Cup)
+		err := applyMovesetDefaults(ctx, tool.rankings, &params.Pool[i],
+			cpCap, params.Cup, snapshot, params.DisallowLegacy)
 		if err != nil {
 			return fmt.Errorf("pool[%d] moveset: %w", i, err)
 		}

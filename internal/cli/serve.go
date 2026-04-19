@@ -294,7 +294,7 @@ func buildMCPServer(gamemasterMgr *gamemaster.Manager, ranks *rankings.Manager) 
 	cpLimitsTool := tools.NewCPLimitsTool(gamemasterMgr)
 	mcp.AddTool(server, cpLimitsTool.Tool(), cpLimitsTool.Handler())
 
-	metaTool := tools.NewMetaTool(ranks)
+	metaTool := tools.NewMetaTool(ranks, gamemasterMgr)
 	mcp.AddTool(server, metaTool.Tool(), metaTool.Handler())
 
 	teamAnalysisTool := tools.NewTeamAnalysisTool(gamemasterMgr, ranks)

@@ -85,15 +85,29 @@ func ResolveMoveset(
 // want recommended charged moves too should leave FastMove empty as
 // well. When the resolver fails the spec is left untouched and the
 // error is returned so the caller can surface it.
+//
+// When disallowLegacy is true the resolved moveset is checked
+// against the species' LegacyMoves list; if any of the pvpoke-
+// recommended slots is legacy on this species the call fails with
+// ErrLegacyConflict rather than silently filling in a move the
+// caller explicitly rejected. The per-species lookup needs the
+// gamemaster snapshot; pass nil when the caller is not enforcing
+// the gate.
 func applyMovesetDefaults(
 	ctx context.Context, ranks *rankings.Manager,
 	spec *Combatant, cpCap int, cup string,
+	snapshot *pogopvp.Gamemaster, disallowLegacy bool,
 ) error {
 	if spec.FastMove != "" {
 		return nil
 	}
 
 	fast, charged, err := ResolveMoveset(ctx, ranks, spec.Species, cpCap, cup)
+	if err != nil {
+		return err
+	}
+
+	err = rejectResolvedLegacy(snapshot, spec.Species, fast, charged, disallowLegacy)
 	if err != nil {
 		return err
 	}
