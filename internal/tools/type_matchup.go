@@ -75,17 +75,27 @@ func (tool *TypeMatchupTool) handle(
 
 	atk := strings.ToLower(params.AttackerType)
 
+	err := validateTypeNames(atk, params.DefenderTypes)
+	if err != nil {
+		return nil, TypeMatchupResult{}, err
+	}
+
+	lowered := make([]string, 0, len(params.DefenderTypes))
+
 	factors := make([]string, 0, len(params.DefenderTypes))
 	for _, def := range params.DefenderTypes {
 		if def == "" {
 			continue
 		}
 
-		factor := pogopvp.TypeEffectiveness(atk, []string{def})
-		factors = append(factors, fmt.Sprintf("%s(%.2f)", strings.ToLower(def), factor))
+		low := strings.ToLower(def)
+		lowered = append(lowered, low)
+
+		factor := pogopvp.TypeEffectiveness(atk, []string{low})
+		factors = append(factors, fmt.Sprintf("%s(%.2f)", low, factor))
 	}
 
-	composite := pogopvp.TypeEffectiveness(atk, params.DefenderTypes)
+	composite := pogopvp.TypeEffectiveness(atk, lowered)
 
 	calculation := fmt.Sprintf("%s vs %s = %.2f",
 		atk, strings.Join(factors, " × "), composite)
@@ -96,8 +106,67 @@ func (tool *TypeMatchupTool) handle(
 
 	return nil, TypeMatchupResult{
 		AttackerType:  atk,
-		DefenderTypes: params.DefenderTypes,
+		DefenderTypes: lowered,
 		Multiplier:    composite,
 		Calculation:   calculation,
 	}, nil
+}
+
+// knownPvPTypes is the closed set of 18 PvP types pvpoke uses. Used
+// to reject garbage type names in params before pogopvp.TypeEffectiveness
+// silently folds them to neutral (1.0).
+//
+//nolint:gochecknoglobals // fixed domain table mirroring the engine's type chart
+var knownPvPTypes = map[string]struct{}{
+	"normal":   {},
+	"fire":     {},
+	"water":    {},
+	"electric": {},
+	"grass":    {},
+	"ice":      {},
+	"fighting": {},
+	"poison":   {},
+	"ground":   {},
+	"flying":   {},
+	"psychic":  {},
+	"bug":      {},
+	"rock":     {},
+	"ghost":    {},
+	"dragon":   {},
+	"dark":     {},
+	"steel":    {},
+	"fairy":    {},
+}
+
+// ErrUnknownType is returned by pvp_type_matchup when an attacker
+// or defender type name is not one of pvpoke's 18 canonical types.
+// The engine's TypeEffectiveness silently folds unknowns to neutral
+// (1.0), which is a footgun for LLM callers that mistype — we
+// reject explicitly so the caller can fix and retry.
+var ErrUnknownType = errors.New("unknown type name")
+
+// validateTypeNames rejects any attacker or defender type outside
+// the canonical 18. Empty defender-type entries are tolerated
+// (they're trimmed by the composite calculation); nil / empty
+// defender list is also fine (multiplier = 1.0, neutral).
+func validateTypeNames(attacker string, defenders []string) error {
+	_, ok := knownPvPTypes[attacker]
+	if !ok {
+		return fmt.Errorf("%w: attacker_type=%q not in pvpoke's 18 types",
+			ErrUnknownType, attacker)
+	}
+
+	for _, def := range defenders {
+		if def == "" {
+			continue
+		}
+
+		_, ok := knownPvPTypes[strings.ToLower(def)]
+		if !ok {
+			return fmt.Errorf("%w: defender_types contains %q, not in pvpoke's 18 types",
+				ErrUnknownType, def)
+		}
+	}
+
+	return nil
 }

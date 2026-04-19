@@ -112,12 +112,25 @@ func categoryLabel(category pogopvp.MoveCategory) string {
 
 // legacyReverseIndex walks every species in the gamemaster and
 // collects the ids on which moveID appears in LegacyMoves. Sorted
-// for deterministic output.
+// alphabetically so the output is deterministic. Pre-allocates a
+// zero-length non-nil slice so the JSON wire shape is always `[]`
+// rather than `null` — downstream LLM clients parse list-typed
+// fields more reliably against `[]` than `null`.
+//
+// The `for id, species := range` idiom binds a fresh species copy
+// each iteration; we pass &species to IsLegacyMove because Go does
+// not allow taking the address of a map-value expression directly
+// (`&snapshot.Pokemon[id]` is a compile error), and IsLegacyMove
+// reads the species without mutating it so the copy is fine.
 func legacyReverseIndex(snapshot *pogopvp.Gamemaster, moveID string) []string {
-	var out []string
+	out := make([]string, 0)
 
-	for id := range snapshot.Pokemon {
-		species := snapshot.Pokemon[id]
+	// rangeValCopy is unavoidable here: Go forbids &snapshot.Pokemon[id]
+	// directly (map-value expressions are not addressable) and
+	// IsLegacyMove needs a *Species. The copy is read-only — its only
+	// use is a slices.Contains over LegacyMoves inside the helper.
+	//nolint:gocritic // see comment above — idiomatic map-iter workaround
+	for id, species := range snapshot.Pokemon {
 		if pogopvp.IsLegacyMove(&species, moveID) {
 			out = append(out, id)
 		}

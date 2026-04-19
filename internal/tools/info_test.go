@@ -2,9 +2,15 @@ package tools_test
 
 import (
 	"errors"
+	"net/http"
+	"net/http/httptest"
+	"path/filepath"
 	"slices"
 	"testing"
 
+	"github.com/lexfrei/pogo-pvp-mcp/internal/config"
+	"github.com/lexfrei/pogo-pvp-mcp/internal/gamemaster"
+	"github.com/lexfrei/pogo-pvp-mcp/internal/rankings"
 	"github.com/lexfrei/pogo-pvp-mcp/internal/tools"
 )
 
@@ -186,5 +192,202 @@ func TestTypeMatchup_MissingAttackerType(t *testing.T) {
 	})
 	if !errors.Is(err, tools.ErrMissingAttackerType) {
 		t.Errorf("error = %v, want wrapping ErrMissingAttackerType", err)
+	}
+}
+
+// TestTypeMatchup_UnknownAttackerType pins the round-2 fix: an
+// attacker type outside pvpoke's 18 canonical types must surface
+// ErrUnknownType instead of silently folding to neutral (1.0).
+func TestTypeMatchup_UnknownAttackerType(t *testing.T) {
+	t.Parallel()
+
+	handler := tools.NewTypeMatchupTool().Handler()
+
+	_, _, err := handler(t.Context(), nil, tools.TypeMatchupParams{
+		AttackerType:  "cosmic",
+		DefenderTypes: []string{"water"},
+	})
+	if !errors.Is(err, tools.ErrUnknownType) {
+		t.Errorf("error = %v, want wrapping ErrUnknownType", err)
+	}
+}
+
+// TestTypeMatchup_UnknownDefenderType mirrors the attacker validator
+// for the defender list. Any entry outside the 18 canonical types
+// surfaces ErrUnknownType — no silent neutral.
+func TestTypeMatchup_UnknownDefenderType(t *testing.T) {
+	t.Parallel()
+
+	handler := tools.NewTypeMatchupTool().Handler()
+
+	_, _, err := handler(t.Context(), nil, tools.TypeMatchupParams{
+		AttackerType:  "grass",
+		DefenderTypes: []string{"water", "krypton"},
+	})
+	if !errors.Is(err, tools.ErrUnknownType) {
+		t.Errorf("error = %v, want wrapping ErrUnknownType", err)
+	}
+}
+
+// TestTypeMatchup_CasingNormalized pins that both AttackerType and
+// DefenderTypes echoed in the result are lowercased — previously
+// only AttackerType was, giving inconsistent JSON shape.
+func TestTypeMatchup_CasingNormalized(t *testing.T) {
+	t.Parallel()
+
+	handler := tools.NewTypeMatchupTool().Handler()
+
+	_, result, err := handler(t.Context(), nil, tools.TypeMatchupParams{
+		AttackerType:  "Grass",
+		DefenderTypes: []string{"Water", "Ground"},
+	})
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+
+	if result.AttackerType != "grass" {
+		t.Errorf("AttackerType = %q, want grass", result.AttackerType)
+	}
+
+	wantDefenders := []string{"water", "ground"}
+	if !slices.Equal(result.DefenderTypes, wantDefenders) {
+		t.Errorf("DefenderTypes = %v, want %v", result.DefenderTypes, wantDefenders)
+	}
+}
+
+// TestSpeciesInfo_NoGamemasterLoaded pins the defensive branch: a
+// handler invoked before gamemaster.Manager has any data must
+// surface ErrGamemasterNotLoaded rather than dereferencing a nil
+// snapshot.
+func TestSpeciesInfo_NoGamemasterLoaded(t *testing.T) {
+	t.Parallel()
+
+	mgr, err := gamemaster.NewManager(config.GamemasterConfig{
+		Source:    "http://example.invalid",
+		LocalPath: filepath.Join(t.TempDir(), "gm.json"),
+	})
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+
+	handler := tools.NewSpeciesInfoTool(mgr, nil).Handler()
+
+	_, _, err = handler(t.Context(), nil, tools.SpeciesInfoParams{Species: speciesMedicham})
+	if !errors.Is(err, tools.ErrGamemasterNotLoaded) {
+		t.Errorf("error = %v, want wrapping ErrGamemasterNotLoaded", err)
+	}
+}
+
+// TestMoveInfo_NoGamemasterLoaded mirrors the species_info test for
+// pvp_move_info.
+func TestMoveInfo_NoGamemasterLoaded(t *testing.T) {
+	t.Parallel()
+
+	mgr, err := gamemaster.NewManager(config.GamemasterConfig{
+		Source:    "http://example.invalid",
+		LocalPath: filepath.Join(t.TempDir(), "gm.json"),
+	})
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+
+	handler := tools.NewMoveInfoTool(mgr).Handler()
+
+	_, _, err = handler(t.Context(), nil, tools.MoveInfoParams{MoveID: "COUNTER"})
+	if !errors.Is(err, tools.ErrGamemasterNotLoaded) {
+		t.Errorf("error = %v, want wrapping ErrGamemasterNotLoaded", err)
+	}
+}
+
+// TestMoveInfo_NonLegacyMoveEmptySlice pins the wire-shape
+// invariant: a move that is not legacy on any species must emit
+// `"legacy_on_species": []` (empty non-nil slice), never `null`.
+// Matches ResolvedCombatant.ChargedMoves / SpeciesInfoMoveRef
+// conventions.
+func TestMoveInfo_NonLegacyMoveEmptySlice(t *testing.T) {
+	t.Parallel()
+
+	mgr := newManagerWithFixture(t, infoFixtureGamemaster)
+	handler := tools.NewMoveInfoTool(mgr).Handler()
+
+	// COUNTER is not legacy on any fixture species (PSYCHIC is the
+	// only legacy-flagged move on medicham).
+	_, result, err := handler(t.Context(), nil, tools.MoveInfoParams{MoveID: "COUNTER"})
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+
+	if result.LegacyOnSpecies == nil {
+		t.Errorf("LegacyOnSpecies = nil, want empty non-nil slice")
+	}
+	if len(result.LegacyOnSpecies) != 0 {
+		t.Errorf("LegacyOnSpecies = %v, want empty", result.LegacyOnSpecies)
+	}
+}
+
+// speciesInfoRankingsFixture carries a tiny rankings payload naming
+// medicham so TestSpeciesInfo_LeagueRanksFromManager can exercise
+// the best-effort per-league lookup end-to-end. Only the overall
+// Great League is populated; the other three leagues 404 so the
+// best-effort tolerance kicks in (and the test confirms exactly
+// one LeagueRank entry comes back).
+const speciesInfoRankingsFixture = `[
+  {"speciesId": "medicham", "speciesName": "Medicham", "rating": 800, "score": 92,
+   "moveset": ["COUNTER", "ICE_PUNCH", "PSYCHIC"], "matchups": [], "counters": [],
+   "stats": {"product": 2100, "atk": 106, "def": 139, "hp": 141}}
+]`
+
+// TestSpeciesInfo_LeagueRanksFromManager exercises the branch in
+// lookupLeagueRanks that the happy-path (ranks=nil) skipped
+// entirely — iterate leagues, fetch rankings, find the species,
+// record rank + rating, tolerate 404s on unsupported (cup, cap)
+// pairs silently.
+func TestSpeciesInfo_LeagueRanksFromManager(t *testing.T) {
+	t.Parallel()
+
+	rankServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Only Great returns data; the other three leagues 404 so
+		// the best-effort loop must handle the error path too.
+		if r.URL.Path != "/all/overall/rankings-1500.json" {
+			http.NotFound(w, r)
+
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(speciesInfoRankingsFixture))
+	}))
+	t.Cleanup(rankServer.Close)
+
+	ranks, err := rankings.NewManager(rankings.Config{
+		BaseURL:  rankServer.URL,
+		LocalDir: filepath.Join(t.TempDir(), "rankings"),
+	})
+	if err != nil {
+		t.Fatalf("rankings.NewManager: %v", err)
+	}
+
+	mgr := newManagerWithFixture(t, infoFixtureGamemaster)
+	handler := tools.NewSpeciesInfoTool(mgr, ranks).Handler()
+
+	_, result, err := handler(t.Context(), nil, tools.SpeciesInfoParams{Species: speciesMedicham})
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+
+	if len(result.LeagueRanks) != 1 {
+		t.Fatalf("LeagueRanks len = %d, want 1 (great only)", len(result.LeagueRanks))
+	}
+
+	entry := result.LeagueRanks[0]
+
+	if entry.League != leagueGreat {
+		t.Errorf("LeagueRanks[0].League = %q, want %s", entry.League, leagueGreat)
+	}
+	if entry.Rank != 1 {
+		t.Errorf("LeagueRanks[0].Rank = %d, want 1", entry.Rank)
+	}
+	if entry.Rating != 800 {
+		t.Errorf("LeagueRanks[0].Rating = %d, want 800", entry.Rating)
 	}
 }
