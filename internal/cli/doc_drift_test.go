@@ -61,8 +61,9 @@ func TestReadmeDocumentsCombatantOptions(t *testing.T) {
 		"pvp_cp_limits",
 		"pvp_evolution_preview",
 		"pvp_rank_batch",
-		// Cost tool.
+		// Cost tools.
 		"pvp_second_move_cost",
+		"pvp_powerup_cost",
 		"shadow_variant_missing",
 	}
 
