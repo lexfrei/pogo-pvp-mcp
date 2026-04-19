@@ -1,0 +1,122 @@
+package tools
+
+import (
+	"context"
+	"fmt"
+
+	pogopvp "github.com/lexfrei/pogo-pvp-engine"
+	"github.com/lexfrei/pogo-pvp-mcp/internal/gamemaster"
+	"github.com/modelcontextprotocol/go-sdk/mcp"
+)
+
+// LevelFromCPParams is the JSON input contract for pvp_level_from_cp.
+// Shadow / purified variants ride on the species id suffix convention
+// (e.g. "medicham_shadow") — no separate param. XL allows levels
+// above NoXLMaxLevel (40); default false.
+type LevelFromCPParams struct {
+	Species string `json:"species" jsonschema:"species id in the pvpoke gamemaster (shadow: \"medicham_shadow\")"`
+	IV      [3]int `json:"iv" jsonschema:"individual values [atk, def, sta]; each 0..15"`
+	CP      int    `json:"cp" jsonschema:"the observed CP to invert back into a level"`
+	XL      bool   `json:"xl,omitempty" jsonschema:"allow XL candy levels above 40"`
+}
+
+// LevelFromCPResult reports the highest level (on the 0.5 grid) at
+// which (species, iv) reaches CP ≤ the requested target. Exact is
+// true when the level's CP equals the requested CP; otherwise the
+// returned level is the greatest one that still fits under target.
+type LevelFromCPResult struct {
+	Species     string  `json:"species"`
+	IV          [3]int  `json:"iv"`
+	Level       float64 `json:"level"`
+	Exact       bool    `json:"exact"`
+	CP          int     `json:"cp"`
+	Atk         float64 `json:"atk"`
+	Def         float64 `json:"def"`
+	HP          int     `json:"hp"`
+	StatProduct float64 `json:"stat_product"`
+}
+
+// LevelFromCPTool is a thin wrapper around pogopvp.LevelForCP. The
+// resolved level is re-evaluated against the species stat line to
+// fill Atk / Def / HP / StatProduct — the usual post-resolution
+// bundle the client expects, matching pvp_rank's shape.
+type LevelFromCPTool struct {
+	manager *gamemaster.Manager
+}
+
+// NewLevelFromCPTool constructs the tool bound to the gamemaster.
+func NewLevelFromCPTool(manager *gamemaster.Manager) *LevelFromCPTool {
+	return &LevelFromCPTool{manager: manager}
+}
+
+const levelFromCPToolDescription = "Given species + IVs + an observed CP, return the highest level (on the " +
+	"0.5 grid) at which the Pokémon reaches CP ≤ the target. Useful for pinning down the level of a " +
+	"wild catch before committing to a power-up budget."
+
+// Tool returns the MCP registration.
+func (tool *LevelFromCPTool) Tool() *mcp.Tool {
+	return &mcp.Tool{
+		Name:        "pvp_level_from_cp",
+		Description: levelFromCPToolDescription,
+	}
+}
+
+// Handler returns the MCP-typed handler.
+func (tool *LevelFromCPTool) Handler() mcp.ToolHandlerFor[LevelFromCPParams, LevelFromCPResult] {
+	return tool.handle
+}
+
+// handle orchestrates the inverse search: resolves species, builds
+// an IV, calls engine LevelForCP, then re-evaluates Stats at the
+// returned level so the response carries the same post-resolution
+// bundle as pvp_rank.
+func (tool *LevelFromCPTool) handle(
+	ctx context.Context,
+	_ *mcp.CallToolRequest,
+	params LevelFromCPParams,
+) (*mcp.CallToolResult, LevelFromCPResult, error) {
+	err := ctx.Err()
+	if err != nil {
+		return nil, LevelFromCPResult{}, fmt.Errorf("level_from_cp cancelled: %w", err)
+	}
+
+	snapshot := tool.manager.Current()
+	if snapshot == nil {
+		return nil, LevelFromCPResult{}, ErrGamemasterNotLoaded
+	}
+
+	species, ok := snapshot.Pokemon[params.Species]
+	if !ok {
+		return nil, LevelFromCPResult{}, fmt.Errorf("%w: %q", ErrUnknownSpecies, params.Species)
+	}
+
+	ivs, err := pogopvp.NewIV(params.IV[0], params.IV[1], params.IV[2])
+	if err != nil {
+		return nil, LevelFromCPResult{}, fmt.Errorf("invalid IV: %w", err)
+	}
+
+	result, err := pogopvp.LevelForCP(species.BaseStats, ivs, params.CP,
+		pogopvp.FindSpreadOpts{XLAllowed: params.XL})
+	if err != nil {
+		return nil, LevelFromCPResult{}, fmt.Errorf("level_for_cp: %w", err)
+	}
+
+	cpm, err := pogopvp.CPMAt(result.Level)
+	if err != nil {
+		return nil, LevelFromCPResult{}, fmt.Errorf("cpm at level %.1f: %w", result.Level, err)
+	}
+
+	stats := pogopvp.ComputeStats(species.BaseStats, ivs, cpm)
+
+	return nil, LevelFromCPResult{
+		Species:     params.Species,
+		IV:          params.IV,
+		Level:       result.Level,
+		Exact:       result.Exact,
+		CP:          result.CP,
+		Atk:         stats.Atk,
+		Def:         stats.Def,
+		HP:          stats.HP,
+		StatProduct: pogopvp.ComputeStatProduct(stats),
+	}, nil
+}
