@@ -53,7 +53,56 @@ type TeamBuilderParams struct {
 	Banned         []string    `json:"banned,omitempty" jsonschema:"species ids to exclude from the pool"`
 	OptimizeFor    string      `json:"optimize_for,omitempty" jsonschema:"overall|0s|1s|2s|all_pareto (default overall)"`
 	DisallowLegacy bool        `json:"disallow_legacy,omitempty" jsonschema:"reject legacy moves; default false (legacy allowed)"`
+	TargetLevel    float64     `json:"target_level,omitempty" jsonschema:"target level for cost estimation; 0 = max level under league CP cap"`
 }
+
+// MemberCostBreakdown is the per-member cost estimate attached to
+// every ResolvedCombatant in a team_builder response (Phase 3A).
+// Stardust-only today — candy is still deferred to the separate
+// candy-cost branch because public sources disagree on per-half-
+// step values (see pvp_powerup_cost godoc). SecondMoveCandy IS
+// emitted because pvpoke's buddy-distance derivation is
+// unambiguous and already ships in pvp_second_move_cost.
+//
+// TargetLevel is the level the powerup climb targets. 0 + the
+// AlreadyAtOrAbove flag means the member is already at or past
+// the league's cap-fitting level; in that case the powerup cost
+// fields clamp to zero so summing breakdowns across a team is
+// straightforward for the client.
+//
+// Flags carries unstructured hints: "shadow_variant_missing" when
+// Options.Shadow was set but pvpoke has no dedicated shadow row,
+// "already_at_or_above_target" when the member needs no powerup.
+type MemberCostBreakdown struct {
+	TargetLevel              float64  `json:"target_level"`
+	AlreadyAtOrAboveTarget   bool     `json:"already_at_or_above_target,omitempty"`
+	PowerupStardustCost      int      `json:"powerup_stardust_cost"`
+	PowerupStardustBaseline  int      `json:"powerup_stardust_baseline"`
+	PowerupCrossesXLBoundary bool     `json:"powerup_crosses_xl_boundary,omitempty"`
+	PowerupXLStepsIncluded   int      `json:"powerup_xl_steps_included,omitempty"`
+	SecondMoveStardustCost   int      `json:"second_move_stardust_cost"`
+	SecondMoveCandyCost      int      `json:"second_move_candy_cost"`
+	SecondMoveCandyAvailable bool     `json:"second_move_candy_available"`
+	SecondMoveStardustAvail  bool     `json:"second_move_stardust_available"`
+	StardustMultiplier       float64  `json:"stardust_multiplier"`
+	SecondMoveCostMultiplier float64  `json:"second_move_cost_multiplier"`
+	Flags                    []string `json:"flags,omitempty"`
+}
+
+// ErrMemberInvalidForLeague is returned when a pool member's
+// pre-simulation state already violates the league's CP cap (i.e.
+// its level-1 CP at the given IVs exceeds the cap). The client is
+// expected to fix the pool before retrying — the enumerator does
+// not silently drop invalid entries because the "team of three"
+// semantic breaks if some members are discarded.
+var ErrMemberInvalidForLeague = errors.New("pool member is invalid for the league CP cap")
+
+// ErrInvalidTargetLevel is returned when params.TargetLevel is set
+// but does not land on the 0.5 grid within [1.0, 50.0]. The cost
+// helpers would otherwise silently produce zero-cost breakdowns
+// via the fall-through "pricing skipped" path; preferring a hard
+// error matches pvp_powerup_cost's behaviour on the same check.
+var ErrInvalidTargetLevel = errors.New("target_level must lie on the 0.5 grid within [1.0, 50.0]")
 
 // TeamBuilderTeam is one candidate team plus its aggregated score.
 // Members carries the resolved species+moveset triple (post-moveset
@@ -64,10 +113,11 @@ type TeamBuilderParams struct {
 // identify which variant was chosen when a species appears more than
 // once in the pool.
 type TeamBuilderTeam struct {
-	Members     []ResolvedCombatant `json:"members"`
-	PoolIndices []int               `json:"pool_indices"`
-	TeamScore   float64             `json:"team_score"`
-	ParetoLabel string              `json:"pareto_label"`
+	Members        []ResolvedCombatant   `json:"members"`
+	CostBreakdowns []MemberCostBreakdown `json:"cost_breakdowns,omitempty"`
+	PoolIndices    []int                 `json:"pool_indices"`
+	TeamScore      float64               `json:"team_score"`
+	ParetoLabel    string                `json:"pareto_label"`
 }
 
 // TeamBuilderResult is the JSON output for pvp_team_builder.
@@ -152,7 +202,7 @@ func (tool *TeamBuilderTool) handle(
 		return nil, TeamBuilderResult{}, fmt.Errorf("team_builder cancelled: %w", err)
 	}
 
-	inputs, err := tool.resolveTeamBuilderInputs(ctx, &params)
+	inputs, snapshot, err := tool.preHandleValidation(ctx, &params)
 	if err != nil {
 		return nil, TeamBuilderResult{}, err
 	}
@@ -170,6 +220,8 @@ func (tool *TeamBuilderTool) handle(
 
 	result.Teams = result.Teams[:min(inputs.maxResults, len(result.Teams))]
 
+	attachCostBreakdowns(result.Teams, snapshot, inputs.pool, inputs.cpCap, params.TargetLevel)
+
 	return nil, TeamBuilderResult{
 		League:             inputs.league,
 		Cup:                inputs.cup,
@@ -179,6 +231,40 @@ func (tool *TeamBuilderTool) handle(
 		SimulationFailures: result.Failures,
 		Teams:              result.Teams,
 	}, nil
+}
+
+// preHandleValidation bundles the cheap pre-simulation work that
+// handle would otherwise inline: target_level grid / bounds check,
+// pool resolution + moveset defaulting, snapshot acquisition, and
+// the pool-fits-the-league check. Returning both the resolved
+// inputs and the snapshot means the downstream cost-breakdown pass
+// sees the same gamemaster pointer as everything else in the
+// request, not a second .Current() read that could in principle
+// observe a mid-refresh pointer.
+func (tool *TeamBuilderTool) preHandleValidation(
+	ctx context.Context, params *TeamBuilderParams,
+) (*teamBuilderInputs, *pogopvp.Gamemaster, error) {
+	err := validateTargetLevel(params.TargetLevel)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	inputs, err := tool.resolveTeamBuilderInputs(ctx, params)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	snapshot := tool.gm.Current()
+	if snapshot == nil {
+		return nil, nil, ErrGamemasterNotLoaded
+	}
+
+	err = validatePoolForLeague(inputs.pool, snapshot, inputs.cpCap)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	return inputs, snapshot, nil
 }
 
 // resolveTeamBuilderInputs runs all validation, pool filtering, and
