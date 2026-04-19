@@ -1,10 +1,12 @@
 package tools_test
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"slices"
 	"testing"
 
 	"github.com/lexfrei/pogo-pvp-mcp/internal/config"
@@ -274,13 +276,23 @@ func TestThreatCoverage_UncoveredThreatsSurfaceCandidates(t *testing.T) {
 		t.Fatalf("handler: %v", err)
 	}
 
+	if len(result.UncoveredThreats) == 0 {
+		t.Fatalf("UncoveredThreats is empty; a level-1 IV-0 team must fail to cover at least one meta entry")
+	}
+
+	var entriesWithCandidates int
+
 	for _, entry := range result.UncoveredThreats {
 		if entry.TeamBestRating >= 400 {
 			t.Errorf("UncoveredThreats[%q].TeamBestRating = %d, want < 400 (uncoveredThreshold)",
 				entry.Threat, entry.TeamBestRating)
 		}
 
-		// If candidates populated, each must score ≥ 400.
+		if len(entry.CandidatesThatCover) > 0 {
+			entriesWithCandidates++
+		}
+
+		// Each candidate must score ≥ 400.
 		for _, c := range entry.CandidatesThatCover {
 			if c.BattleRating < 400 {
 				t.Errorf("threat %q candidate %q rating %d < 400 (uncoveredThreshold)",
@@ -295,6 +307,118 @@ func TestThreatCoverage_UncoveredThreatsSurfaceCandidates(t *testing.T) {
 				t.Errorf("CandidatesThatCover for threat %q not sorted desc", entry.Threat)
 			}
 		}
+	}
+
+	if entriesWithCandidates == 0 {
+		t.Fatalf("no uncovered threat produced a covering candidate; the level-40 pool must surface as a counter for at least one threat")
+	}
+}
+
+// TestThreatCoverage_SkippedMetaSurfaced pins the cache-skew path:
+// a ranking entry whose species is not in the gamemaster snapshot
+// must be dropped from the sweep and surfaced in
+// SkippedMetaSpecies, so the caller can tell "not covered" from
+// "never simulated" (which looks like rating=0 in TeamCoverage).
+func TestThreatCoverage_SkippedMetaSurfaced(t *testing.T) {
+	t.Parallel()
+
+	const skewedRanks = `[
+  {"speciesId": "a", "speciesName": "A", "rating": 700,
+   "moveset": ["FAST1", "CH1"],
+   "stats": {"product": 2100, "atk": 107, "def": 139, "hp": 141}},
+  {"speciesId": "phantom", "speciesName": "Phantom", "rating": 680,
+   "moveset": ["FAST1", "CH1"],
+   "stats": {"product": 2000, "atk": 111, "def": 113, "hp": 161}}
+]`
+
+	gmServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(threatCoverageFixtureGamemaster))
+	}))
+	t.Cleanup(gmServer.Close)
+
+	gmMgr, err := gamemaster.NewManager(config.GamemasterConfig{
+		Source:    gmServer.URL,
+		LocalPath: filepath.Join(t.TempDir(), "gm.json"),
+	})
+	if err != nil {
+		t.Fatalf("NewManager gm: %v", err)
+	}
+
+	err = gmMgr.Refresh(t.Context())
+	if err != nil {
+		t.Fatalf("Refresh gm: %v", err)
+	}
+
+	rankServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(skewedRanks))
+	}))
+	t.Cleanup(rankServer.Close)
+
+	ranksMgr, err := rankings.NewManager(rankings.Config{
+		BaseURL:  rankServer.URL,
+		LocalDir: filepath.Join(t.TempDir(), "rankings"),
+	})
+	if err != nil {
+		t.Fatalf("NewManager rankings: %v", err)
+	}
+
+	tool := tools.NewThreatCoverageTool(gmMgr, ranksMgr)
+	handler := tool.Handler()
+
+	valid := tools.Combatant{
+		Species: "a", IV: [3]int{15, 15, 15}, Level: 40,
+		FastMove: "FAST1", ChargedMoves: []string{"CH1"},
+	}
+
+	_, result, err := handler(t.Context(), nil, tools.ThreatCoverageParams{
+		Team:   []tools.Combatant{valid, valid, valid},
+		League: leagueGreat,
+	})
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+
+	if !slices.Contains(result.SkippedMetaSpecies, "phantom") {
+		t.Errorf("SkippedMetaSpecies = %v, want to contain \"phantom\"", result.SkippedMetaSpecies)
+	}
+
+	// phantom must not leak into TeamCoverage or UncoveredThreats —
+	// it was dropped before any simulation ran.
+	for _, entry := range result.UncoveredThreats {
+		if entry.Threat == "phantom" {
+			t.Errorf("UncoveredThreats should not contain skipped species \"phantom\"")
+		}
+	}
+
+	if _, present := result.TeamCoverage["phantom"]; present {
+		t.Errorf("TeamCoverage should not contain skipped species \"phantom\"")
+	}
+}
+
+// TestThreatCoverage_ContextCanceled pins the post-sweep cancellation
+// check: a context canceled before the handler completes produces an
+// error wrapping context.Canceled, not a truncated success.
+func TestThreatCoverage_ContextCanceled(t *testing.T) {
+	t.Parallel()
+
+	tool := newThreatCoverageTool(t)
+	handler := tool.Handler()
+
+	valid := tools.Combatant{
+		Species: "a", IV: [3]int{15, 15, 15}, Level: 40,
+		FastMove: "FAST1", ChargedMoves: []string{"CH1"},
+	}
+
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+
+	_, _, err := handler(ctx, nil, tools.ThreatCoverageParams{
+		Team:   []tools.Combatant{valid, valid, valid},
+		League: leagueGreat,
+	})
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("error = %v, want wrapping context.Canceled", err)
 	}
 }
 

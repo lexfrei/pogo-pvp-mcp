@@ -44,15 +44,21 @@ type ThreatCoverageEntry struct {
 }
 
 // ThreatCoverageResult is the JSON output for pvp_threat_coverage.
+// SkippedMetaSpecies mirrors team_analysis: meta entries whose
+// species / moves were not found in the current gamemaster snapshot
+// (typical for a post-balance-patch cache race between gamemaster
+// and rankings) are dropped from the sweep and listed here so the
+// caller can tell "not covered" from "never simulated".
 type ThreatCoverageResult struct {
-	League           string                `json:"league"`
-	Cup              string                `json:"cup"`
-	CPCap            int                   `json:"cp_cap"`
-	MetaSize         int                   `json:"meta_size"`
-	Scenarios        []int                 `json:"scenarios"`
-	Team             []ResolvedCombatant   `json:"team"`
-	TeamCoverage     map[string]int        `json:"team_coverage_matrix"`
-	UncoveredThreats []ThreatCoverageEntry `json:"uncovered_threats"`
+	League             string                `json:"league"`
+	Cup                string                `json:"cup"`
+	CPCap              int                   `json:"cp_cap"`
+	MetaSize           int                   `json:"meta_size"`
+	Scenarios          []int                 `json:"scenarios"`
+	Team               []ResolvedCombatant   `json:"team"`
+	TeamCoverage       map[string]int        `json:"team_coverage_matrix"`
+	UncoveredThreats   []ThreatCoverageEntry `json:"uncovered_threats"`
+	SkippedMetaSpecies []string              `json:"skipped_meta_species,omitempty"`
 }
 
 // ThreatCoverageTool wraps the gamemaster + rankings managers.
@@ -66,8 +72,9 @@ func NewThreatCoverageTool(gm *gamemaster.Manager, ranks *rankings.Manager) *Thr
 	return &ThreatCoverageTool{gm: gm, rankings: ranks}
 }
 
-const threatCoverageToolDescription = "Identify meta threats the 3-member team does not cover, and for each such " +
-	"threat surface the pool members (from candidate_pool) that do cover it. Ratings averaged across shield scenarios."
+const threatCoverageToolDescription = "Identify meta threats the 3-member team does not cover (best-of-team " +
+	"battle rating < 400/1000, averaged across shield scenarios), and for each such threat surface up to 3 " +
+	"candidate_pool members whose own averaged rating clears the same threshold, sorted by rating descending."
 
 // defaultThreatCoverageCandidates caps how many covering candidates
 // are reported per uncovered threat — enough to give the caller
@@ -88,15 +95,18 @@ func (tool *ThreatCoverageTool) Handler() mcp.ToolHandlerFor[ThreatCoverageParam
 }
 
 // threatCoverageWorkspace bundles resolved state between the prepare
-// and compute phases of handle.
+// and compute phases of handle. SkippedMeta captures meta entries
+// dropped by buildMetaCombatants so the handler can surface them
+// instead of letting the zero-rating conflate "team loses" with
+// "never simulated".
 type threatCoverageWorkspace struct {
-	snapshot       *pogopvp.Gamemaster
 	teamCombatants []pogopvp.Combatant
 	teamSpecs      []Combatant
 	poolCombatants []pogopvp.Combatant
 	poolSpecs      []Combatant
 	metaCombatants []pogopvp.Combatant
 	metaEntries    []rankings.RankingEntry
+	skippedMeta    []string
 	scenarios      []int
 	cpCap          int
 }
@@ -127,20 +137,25 @@ func (tool *ThreatCoverageTool) handle(
 
 	uncovered := buildUncoveredEntries(ctx, workspace, teamCoverage)
 
+	if ctx.Err() != nil {
+		return nil, ThreatCoverageResult{}, fmt.Errorf("threat_coverage cancelled: %w", ctx.Err())
+	}
+
 	teamResolved := make([]ResolvedCombatant, len(workspace.teamSpecs))
 	for i := range workspace.teamSpecs {
 		teamResolved[i] = resolvedFromSpec(&workspace.teamSpecs[i])
 	}
 
 	return nil, ThreatCoverageResult{
-		League:           params.League,
-		Cup:              resolveCupLabel(params.Cup),
-		CPCap:            workspace.cpCap,
-		MetaSize:         len(workspace.metaEntries),
-		Scenarios:        workspace.scenarios,
-		Team:             teamResolved,
-		TeamCoverage:     teamCoverage,
-		UncoveredThreats: uncovered,
+		League:             params.League,
+		Cup:                resolveCupLabel(params.Cup),
+		CPCap:              workspace.cpCap,
+		MetaSize:           len(workspace.metaEntries),
+		Scenarios:          workspace.scenarios,
+		Team:               teamResolved,
+		TeamCoverage:       teamCoverage,
+		UncoveredThreats:   uncovered,
+		SkippedMetaSpecies: workspace.skippedMeta,
 	}, nil
 }
 
@@ -235,20 +250,20 @@ func (tool *ThreatCoverageTool) prepareThreatCoverage(
 		return nil, err
 	}
 
-	metaCombatants, metaEntries, err := resolveMeta(ctx, tool.rankings, snapshot,
-		cpCap, params.Cup, params.TopN, shields)
+	metaCombatants, metaEntries, skippedMeta, err := resolveMeta(
+		ctx, tool.rankings, snapshot, cpCap, params.Cup, params.TopN, shields)
 	if err != nil {
 		return nil, err
 	}
 
 	return &threatCoverageWorkspace{
-		snapshot:       snapshot,
 		teamCombatants: teamCombatants,
 		teamSpecs:      params.Team,
 		poolCombatants: poolCombatants,
 		poolSpecs:      params.CandidatePool,
 		metaCombatants: metaCombatants,
 		metaEntries:    metaEntries,
+		skippedMeta:    skippedMeta,
 		scenarios:      scenarios,
 		cpCap:          cpCap,
 	}, nil
@@ -279,12 +294,15 @@ func (tool *ThreatCoverageTool) resolveCombatantSlice(
 }
 
 // resolveMeta fetches the top-N meta rankings and materialises them
-// into engine combatants under the given CP cap. Extracted so both
-// prepareThreatCoverage and potential future consumers can share it.
+// into engine combatants under the given CP cap. Returns the live
+// combatant + entry slices plus the list of species ids that
+// buildMetaCombatants dropped (gamemaster/rankings cache skew) so
+// the caller can surface them in the response. The quadruple return
+// is (combatants, kept entries, skipped species ids, error).
 func resolveMeta(
 	ctx context.Context, ranks *rankings.Manager, snapshot *pogopvp.Gamemaster,
 	cpCap int, cup string, topN, shields int,
-) ([]pogopvp.Combatant, []rankings.RankingEntry, error) {
+) ([]pogopvp.Combatant, []rankings.RankingEntry, []string, error) {
 	metaTopN := topN
 	if metaTopN == 0 {
 		metaTopN = defaultTeamTopN
@@ -292,17 +310,17 @@ func resolveMeta(
 
 	entries, err := ranks.Get(ctx, cpCap, cup)
 	if err != nil {
-		return nil, nil, fmt.Errorf("rankings fetch: %w", err)
+		return nil, nil, nil, fmt.Errorf("rankings fetch: %w", err)
 	}
 
 	entries = entries[:min(metaTopN, len(entries))]
 
-	combatants, kept, _, err := buildMetaCombatants(snapshot, entries, cpCap, shields)
+	combatants, kept, skipped, err := buildMetaCombatants(snapshot, entries, cpCap, shields)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 
-	return combatants, kept, nil
+	return combatants, kept, skipped, nil
 }
 
 // buildUncoveredEntries filters the meta species whose team coverage
