@@ -11,6 +11,11 @@ import (
 	"github.com/lexfrei/pogo-pvp-mcp/internal/tools"
 )
 
+// allOverall1500URL is the upstream path pvpoke publishes the
+// default open-league 1500-cap overall rankings under. Hoisted here
+// so the test server mux and the assertion paths stay in sync.
+const allOverall1500URL = "/all/overall/rankings-1500.json"
+
 const metaRankingsFixture = `[
   {"speciesId": "a", "speciesName": "A", "rating": 900, "score": 95.0,
    "moveset": ["M1","M2","M3"],
@@ -44,6 +49,102 @@ func newMetaTestManager(t *testing.T, payload string) *rankings.Manager {
 	}
 
 	return mgr
+}
+
+// newMetaManagerWithRoles wires a httptest server that dispatches on
+// the role segment of the URL so classifyRole gets real data to
+// evaluate. The four payloads deliberately order species differently
+// so the gap threshold (5 positions) picks a clear winner.
+func newMetaManagerWithRoles(
+	t *testing.T, overall, leads, switches, closers string,
+) *rankings.Manager {
+	t.Helper()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case allOverall1500URL:
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(overall))
+		case "/all/leads/rankings-1500.json":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(leads))
+		case "/all/switches/rankings-1500.json":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(switches))
+		case "/all/closers/rankings-1500.json":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(closers))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	mgr, err := rankings.NewManager(rankings.Config{
+		BaseURL:  server.URL,
+		LocalDir: filepath.Join(t.TempDir(), "rankings"),
+	})
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+
+	return mgr
+}
+
+// TestMetaTool_AssignsRoles asserts the role classifier:
+// species "a" dominates the leads ranking (position 1 there, far
+// down elsewhere) and must be tagged "lead"; species "b" sits near
+// the middle of all three rankings and must be tagged "flex" (no
+// clear winner).
+func TestMetaTool_AssignsRoles(t *testing.T) {
+	t.Parallel()
+
+	const overall = `[
+  {"speciesId": "a", "speciesName": "A", "rating": 900, "score": 95, "moveset": ["M1","M2","M3"],
+   "stats": {"product": 2500, "atk": 110, "def": 120, "hp": 160}},
+  {"speciesId": "b", "speciesName": "B", "rating": 880, "score": 93, "moveset": ["M4","M5","M6"],
+   "stats": {"product": 2400, "atk": 108, "def": 125, "hp": 150}}
+]`
+
+	const leadsRanking = `[
+  {"speciesId": "a"},
+  {"speciesId": "b"},
+  {"speciesId": "c"}
+]`
+
+	// Species "a" shows up very late in switches/closers, but near the
+	// top of leads — pure lead archetype, should pick "lead".
+	const switchesRanking = `[
+  {"speciesId": "x"}, {"speciesId": "y"}, {"speciesId": "z"},
+  {"speciesId": "b"}, {"speciesId": "p"}, {"speciesId": "q"},
+  {"speciesId": "r"}, {"speciesId": "a"}
+]`
+
+	const closersRanking = `[
+  {"speciesId": "u"}, {"speciesId": "v"}, {"speciesId": "w"},
+  {"speciesId": "b"}, {"speciesId": "m"}, {"speciesId": "n"},
+  {"speciesId": "o"}, {"speciesId": "a"}
+]`
+
+	mgr := newMetaManagerWithRoles(t, overall, leadsRanking, switchesRanking, closersRanking)
+	handler := tools.NewMetaTool(mgr).Handler()
+
+	_, result, err := handler(t.Context(), nil, tools.MetaParams{League: "great", TopN: 2})
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+
+	byID := map[string]tools.MetaEntry{}
+	for _, entry := range result.Entries {
+		byID[entry.SpeciesID] = entry
+	}
+
+	if byID["a"].Role != "lead" {
+		t.Errorf("a.Role = %q, want lead", byID["a"].Role)
+	}
+	if byID["b"].Role != "flex" {
+		t.Errorf("b.Role = %q, want flex", byID["b"].Role)
+	}
 }
 
 func TestMetaTool_ReturnsTopN(t *testing.T) {

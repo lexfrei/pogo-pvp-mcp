@@ -39,6 +39,21 @@ var ErrUpstreamStatus = errors.New("rankings upstream returned non-200 status")
 // defaultCup is the pvpoke URL segment for open-league (no cup) rankings.
 const defaultCup = "all"
 
+// Role identifies one of the per-role rankings pvpoke publishes
+// alongside `overall`. These feed the pvp_meta role classifier in
+// Phase F.2 and are served by the same URL pattern as `overall`
+// with a different path segment.
+type Role string
+
+// The role identifiers published by pvpoke. RoleOverall is the
+// default used by Get; the others are opt-in via GetRole.
+const (
+	RoleOverall  Role = "overall"
+	RoleLeads    Role = "leads"
+	RoleSwitches Role = "switches"
+	RoleClosers  Role = "closers"
+)
+
 // fetchTimeout caps each rankings download.
 const fetchTimeout = 30 * time.Second
 
@@ -96,12 +111,14 @@ type RankingEntry struct {
 	Stats       Stats     `json:"stats"`
 }
 
-// cacheKey identifies one (cup, cap) ranking snapshot. cup=="" is
-// normalised to defaultCup on every entry into the cache so lookups
-// and inserts always agree.
+// cacheKey identifies one (cup, cap, role) ranking snapshot.
+// cup=="" is normalised to defaultCup on every entry into the cache
+// so lookups and inserts always agree. role is always one of the
+// Role constants (never empty).
 type cacheKey struct {
-	Cup string
-	Cap int
+	Cup  string
+	Role Role
+	Cap  int
 }
 
 // Manager owns the per-(cup, cap) ranking snapshots. Get lazily
@@ -147,11 +164,26 @@ func NewManager(cfg Config) (*Manager, error) {
 // cold-start traffic from multiple tools does not trigger duplicate
 // HTTP requests.
 func (m *Manager) Get(ctx context.Context, cpCap int, cup string) ([]RankingEntry, error) {
+	return m.GetRole(ctx, cpCap, cup, RoleOverall)
+}
+
+// GetRole behaves like Get but with an explicit pvpoke role segment:
+// one of leads, switches, closers, consistency, attackers, chargers,
+// or overall. Role rankings share the same URL shape as overall and
+// are published per (cup, cap) in the same way. Callers routing the
+// Role classifier use this; everyone else sticks with Get.
+func (m *Manager) GetRole(
+	ctx context.Context, cpCap int, cup string, role Role,
+) ([]RankingEntry, error) {
 	if !supportedCaps[cpCap] {
 		return nil, fmt.Errorf("%w: %d not in {500, 1500, 2500, 10000}", ErrUnsupportedCap, cpCap)
 	}
 
-	key := cacheKey{Cup: resolveCup(cup), Cap: cpCap}
+	if role == "" {
+		role = RoleOverall
+	}
+
+	key := cacheKey{Cup: resolveCup(cup), Role: role, Cap: cpCap}
 
 	entries, ok := m.lookup(key)
 	if ok {
@@ -263,7 +295,8 @@ var errStaleCache = errors.New("rankings cache stale")
 // A 404 response wraps ErrUnknownCup to let callers distinguish
 // unsupported (cup, cap) pairs from generic upstream failures.
 func (m *Manager) fetchUpstream(ctx context.Context, key cacheKey) ([]RankingEntry, error) {
-	url := fmt.Sprintf("%s/%s/overall/rankings-%s.json", m.baseURL, key.Cup, strconv.Itoa(key.Cap))
+	url := fmt.Sprintf("%s/%s/%s/rankings-%s.json",
+		m.baseURL, key.Cup, key.Role, strconv.Itoa(key.Cap))
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, http.NoBody)
 	if err != nil {
@@ -302,20 +335,23 @@ func (m *Manager) fetchUpstream(ctx context.Context, key cacheKey) ([]RankingEnt
 	return entries, nil
 }
 
-// localDirFor returns the on-disk cache directory for the given cup.
-func (m *Manager) localDirFor(cup string) string {
-	return filepath.Join(m.localDir, cup)
+// localDirFor returns the on-disk cache directory for the given
+// (cup, role) pair.
+func (m *Manager) localDirFor(cup string, role Role) string {
+	return filepath.Join(m.localDir, cup, string(role))
 }
 
-// localPath returns the on-disk cache location for the given (cup, cap).
+// localPath returns the on-disk cache location for the given
+// (cup, role, cap) triple.
 func (m *Manager) localPath(key cacheKey) string {
-	return filepath.Join(m.localDirFor(key.Cup), fmt.Sprintf("rankings-%d.json", key.Cap))
+	return filepath.Join(m.localDirFor(key.Cup, key.Role),
+		fmt.Sprintf("rankings-%d.json", key.Cap))
 }
 
 // persist writes the fetched payload to disk atomically via temp file
 // + rename so partial writes cannot corrupt the cache.
 func (m *Manager) persist(key cacheKey, body []byte) error {
-	dir := m.localDirFor(key.Cup)
+	dir := m.localDirFor(key.Cup, key.Role)
 
 	err := os.MkdirAll(dir, cacheDirPerm)
 	if err != nil {

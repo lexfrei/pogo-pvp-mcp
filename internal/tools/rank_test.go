@@ -95,7 +95,7 @@ func newRankingsManagerWithPayload(t *testing.T, payload string) *rankings.Manag
 	t.Helper()
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/all/overall/rankings-1500.json" {
+		if r.URL.Path != allOverall1500URL {
 			http.NotFound(w, r)
 
 			return
