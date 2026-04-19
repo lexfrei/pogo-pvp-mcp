@@ -127,16 +127,16 @@ func TestTeamAnalysisTool_HappyPath(t *testing.T) {
 	if result.MetaSize != 3 {
 		t.Errorf("MetaSize = %d, want 3 (fixture size)", result.MetaSize)
 	}
-	if len(result.PerMember) != 3 {
-		t.Fatalf("PerMember len = %d, want 3", len(result.PerMember))
+	if len(result.Overall.PerMember) != 3 {
+		t.Fatalf("Overall.PerMember len = %d, want 3", len(result.Overall.PerMember))
 	}
-	for i, member := range result.PerMember {
+	for i, member := range result.Overall.PerMember {
 		if member.AvgRating < 0 || member.AvgRating > 1000 {
-			t.Errorf("PerMember[%d] AvgRating %.2f outside [0, 1000]", i, member.AvgRating)
+			t.Errorf("Overall.PerMember[%d] AvgRating %.2f outside [0, 1000]", i, member.AvgRating)
 		}
 	}
-	if result.TeamScore < 0 || result.TeamScore > 1000 {
-		t.Errorf("TeamScore %.2f outside [0, 1000]", result.TeamScore)
+	if result.Overall.TeamScore < 0 || result.Overall.TeamScore > 1000 {
+		t.Errorf("Overall.TeamScore %.2f outside [0, 1000]", result.Overall.TeamScore)
 	}
 }
 
@@ -207,9 +207,9 @@ func TestTeamAnalysisTool_ZeroShieldsHonoured(t *testing.T) {
 	// Different shield counts must produce a different team_score;
 	// if the two runs collapse onto the same aggregate the "shields=0
 	// silently becomes 1" regression would be back.
-	if withOneShield.TeamScore == withZeroShields.TeamScore {
+	if withOneShield.Overall.TeamScore == withZeroShields.Overall.TeamScore {
 		t.Errorf("team_score unchanged across shield counts (%.2f) — zero likely coerced to default",
-			withOneShield.TeamScore)
+			withOneShield.Overall.TeamScore)
 	}
 }
 
@@ -245,11 +245,11 @@ func TestTeamAnalysisTool_ChargedMovesEmptyIsJSONArray(t *testing.T) {
 		t.Fatalf("handler: %v", err)
 	}
 
-	if len(result.PerMember) == 0 {
+	if len(result.Overall.PerMember) == 0 {
 		t.Fatal("PerMember is empty")
 	}
 
-	payload, err := json.Marshal(result.PerMember[0])
+	payload, err := json.Marshal(result.Overall.PerMember[0])
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
@@ -384,12 +384,12 @@ func TestTeamAnalysisTool_ScenariosAreAveraged(t *testing.T) {
 		t.Fatalf("[0, 2]: %v", err)
 	}
 
-	minScore := min(zero.TeamScore, two.TeamScore)
-	maxScore := max(zero.TeamScore, two.TeamScore)
+	minScore := min(zero.Overall.TeamScore, two.Overall.TeamScore)
+	maxScore := max(zero.Overall.TeamScore, two.Overall.TeamScore)
 
-	if mixed.TeamScore < minScore || mixed.TeamScore > maxScore {
+	if mixed.Overall.TeamScore < minScore || mixed.Overall.TeamScore > maxScore {
 		t.Errorf("mixed [0,2] team_score %.2f outside [%.2f, %.2f] — averaging is broken",
-			mixed.TeamScore, minScore, maxScore)
+			mixed.Overall.TeamScore, minScore, maxScore)
 	}
 }
 
@@ -415,6 +415,95 @@ func TestTeamAnalysisTool_InvalidShieldsValue(t *testing.T) {
 	})
 	if !errors.Is(err, tools.ErrInvalidShields) {
 		t.Errorf("error = %v, want wrapping ErrInvalidShields", err)
+	}
+}
+
+// TestTeamAnalysisTool_PerScenarioIsPopulated pins the Phase-2B
+// split: PerScenario must contain exactly one aggregate per entry in
+// the Scenarios slice, keyed as "Ns" (e.g. "1s" for shield count 1),
+// and each aggregate must carry the full PerMember / Coverage /
+// Uncovered / TeamScore shape.
+func TestTeamAnalysisTool_PerScenarioIsPopulated(t *testing.T) {
+	t.Parallel()
+
+	tool := newTeamAnalysisTool(t)
+	handler := tool.Handler()
+
+	valid := tools.Combatant{
+		Species: "a", IV: [3]int{15, 15, 15}, Level: 40,
+		FastMove: "FAST1", ChargedMoves: []string{"CH1"},
+	}
+	team := []tools.Combatant{valid, valid, valid}
+
+	_, result, err := handler(t.Context(), nil, tools.TeamAnalysisParams{
+		Team: team, League: leagueGreat,
+		Shields: []int{0, 1, 2},
+	})
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+
+	if len(result.Scenarios) != 3 {
+		t.Errorf("Scenarios = %v, want length 3", result.Scenarios)
+	}
+
+	if len(result.PerScenario) != 3 {
+		t.Fatalf("PerScenario has %d entries, want 3 (one per scenario)",
+			len(result.PerScenario))
+	}
+
+	for _, key := range []string{"0s", "1s", "2s"} {
+		agg, ok := result.PerScenario[key]
+		if !ok {
+			t.Errorf("PerScenario missing key %q", key)
+
+			continue
+		}
+
+		if len(agg.PerMember) != 3 {
+			t.Errorf("PerScenario[%q].PerMember len = %d, want 3", key, len(agg.PerMember))
+		}
+
+		if agg.TeamScore < 0 || agg.TeamScore > 1000 {
+			t.Errorf("PerScenario[%q].TeamScore %.2f outside [0, 1000]", key, agg.TeamScore)
+		}
+	}
+}
+
+// TestTeamAnalysisTool_OverallIsMeanOfPerScenario pins the
+// Phase-2B invariant that Overall.TeamScore lies within the
+// min/max of the single-scenario TeamScores (it is a mean-of-means
+// across all scenarios, so it cannot be outside the envelope).
+func TestTeamAnalysisTool_OverallIsMeanOfPerScenario(t *testing.T) {
+	t.Parallel()
+
+	tool := newTeamAnalysisTool(t)
+	handler := tool.Handler()
+
+	valid := tools.Combatant{
+		Species: "a", IV: [3]int{15, 15, 15}, Level: 40,
+		FastMove: "FAST1", ChargedMoves: []string{"CH1"},
+	}
+	team := []tools.Combatant{valid, valid, valid}
+
+	_, result, err := handler(t.Context(), nil, tools.TeamAnalysisParams{
+		Team: team, League: leagueGreat,
+		Shields: []int{0, 2},
+	})
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+
+	zeroScore := result.PerScenario["0s"].TeamScore
+	twoScore := result.PerScenario["2s"].TeamScore
+	overallScore := result.Overall.TeamScore
+
+	lo := min(zeroScore, twoScore)
+	hi := max(zeroScore, twoScore)
+
+	if overallScore < lo || overallScore > hi {
+		t.Errorf("Overall.TeamScore %.2f outside [%.2f, %.2f] bracket of per-scenario scores",
+			overallScore, lo, hi)
 	}
 }
 
