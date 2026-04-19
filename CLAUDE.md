@@ -66,6 +66,7 @@ The MCP server is a thin wrapper around the engine. The hot shape: an MCP tool h
 10. `pvp_level_from_cp` — thin wrapper over `pogopvp.LevelForCP`: given species + IVs + observed CP, return the highest 0.5-grid level that fits under the target plus the resolved stats. `Exact` distinguishes round-trip hits from CP-cap-style approximations.
 11. `pvp_counter_finder` — score a pool (or the top-N meta by default) against a target combatant; returns the top-N counters sorted by averaged battle rating plus per-shield-scenario breakdown. Honours the same `disallow_legacy` gate as the team tools.
 12. `pvp_evolution_preview` — invert current CP to level via `pogopvp.LevelForCP`, then BFS-walk `Species.Evolutions` to project each descendant's stats/CP at that shared level (evolution preserves level in Pokémon GO). Returns `league_fit` per evolved form, supports branching roots (eevee) and multi-hop paths. Unknown ids in the evolution chain are silently skipped to tolerate gamemaster/rankings cache skew.
+13. `pvp_rank_batch` — thin batch wrapper over `pvp_rank`: same species + league + cup + CPCap + XL flag applied to every IV triple in `IVs`. Each entry is isolated (one bad IV surfaces as `OK=false` with the error message, siblings still produce results). Capped at `maxRankBatchSize=64` per call via `ErrTooManyIVs`.
 
 ### Non-obvious invariants (you will break these)
 
