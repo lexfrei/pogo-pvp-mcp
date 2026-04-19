@@ -461,6 +461,56 @@ func TestEvolutionPreview_MissingEvolutionIsSkipped(t *testing.T) {
 	}
 }
 
+// TestEvolutionPreview_ExactFlag pins the Exact semantics: when the
+// observed CP lands exactly on the 0.5 level grid for the given
+// species + IVs, Exact is true; otherwise (the inverted level is
+// the highest one whose CP is strictly less than the input), Exact
+// is false. squirtle at 15/15/15 reaches CP=500 exactly at level
+// 18.5, so input CP=500 is the exact case; CP=499 rounds down to
+// level 18.0 producing actual CP=486.
+func TestEvolutionPreview_ExactFlag(t *testing.T) {
+	t.Parallel()
+
+	tool := newEvolutionPreviewTool(t, evolutionFixtureGamemaster)
+	handler := tool.Handler()
+
+	_, exactResult, err := handler(t.Context(), nil, tools.EvolutionPreviewParams{
+		Species: speciesSquirtle,
+		IV:      [3]int{15, 15, 15},
+		CP:      500,
+	})
+	if err != nil {
+		t.Fatalf("exact handler: %v", err)
+	}
+
+	if !exactResult.Exact {
+		t.Errorf("CP=500 (on-grid for squirtle 15/15/15): Exact = %v, want true; base_cp = %d",
+			exactResult.Exact, exactResult.BaseCP)
+	}
+
+	if exactResult.BaseCP != 500 {
+		t.Errorf("exact case: BaseCP = %d, want 500", exactResult.BaseCP)
+	}
+
+	_, offGridResult, err := handler(t.Context(), nil, tools.EvolutionPreviewParams{
+		Species: speciesSquirtle,
+		IV:      [3]int{15, 15, 15},
+		CP:      499,
+	})
+	if err != nil {
+		t.Fatalf("off-grid handler: %v", err)
+	}
+
+	if offGridResult.Exact {
+		t.Errorf("CP=499 (off-grid): Exact = %v, want false; base_cp = %d",
+			offGridResult.Exact, offGridResult.BaseCP)
+	}
+
+	if offGridResult.BaseCP >= 499 {
+		t.Errorf("off-grid case: BaseCP = %d, want strictly less than 499", offGridResult.BaseCP)
+	}
+}
+
 // TestEvolutionPreview_DuplicateEvolutionID pins the fix for the
 // false-positive cycle error: pvpoke's real gamemaster contains
 // species whose `evolutions` array lists the same child id twice

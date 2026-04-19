@@ -16,7 +16,7 @@ import (
 // LevelForCP, then projects each reachable descendant's stats at the
 // same level (evolution preserves level in Pokémon GO).
 type EvolutionPreviewParams struct {
-	Species string `json:"species" jsonschema:"the current species id (pre-evolution)"`
+	Species string `json:"species" jsonschema:"the current species id (pre-evolution; shadow variants use e.g. \"medicham_shadow\")"`
 	IV      [3]int `json:"iv" jsonschema:"individual values [atk, def, sta]; each 0..15"`
 	CP      int    `json:"cp" jsonschema:"observed CP of the current form; inverted to a level"`
 	XL      bool   `json:"xl,omitempty" jsonschema:"allow XL candy levels above 40"`
@@ -24,9 +24,11 @@ type EvolutionPreviewParams struct {
 
 // EvolutionStage is one descendant form reachable by evolving the
 // input species, projected at the level inverted from CP. Path is
-// the chain of species ids from the parent of this stage down to
-// this stage inclusive (so a direct evolution has Path of length 1;
-// a great-grandparent's terminal descendant has Path of length 3).
+// the chain of species ids from the first direct descendant of the
+// input species down to this stage inclusive — the input species
+// itself is never included, so a direct evolution has Path of
+// length 1 and a great-grandparent's terminal descendant has Path
+// of length 3.
 type EvolutionStage struct {
 	Species     string   `json:"species"`
 	Path        []string `json:"path"`
@@ -41,13 +43,17 @@ type EvolutionStage struct {
 // EvolutionPreviewResult is the JSON output. Level is the inverted
 // value; BaseCP is the (re-computed) CP of the input form at that
 // level — may be strictly below params.CP when the observed CP does
-// not land exactly on the 0.5 grid. Evolutions is sorted by Path
-// length (direct evolutions first) and then alphabetically so the
-// output is deterministic.
+// not land exactly on the 0.5 grid. Exact=true iff BaseCP equals the
+// requested CP (the inverted level lands exactly on the grid), false
+// otherwise — same semantics as pvp_level_from_cp's Exact so clients
+// can tell "observed CP matched" from "rounded down to the nearest
+// grid point". Evolutions is sorted by Path length (direct evolutions
+// first) and then alphabetically so the output is deterministic.
 type EvolutionPreviewResult struct {
 	Species    string           `json:"species"`
 	IV         [3]int           `json:"iv"`
 	Level      float64          `json:"level"`
+	Exact      bool             `json:"exact"`
 	BaseCP     int              `json:"base_cp"`
 	Evolutions []EvolutionStage `json:"evolutions"`
 }
@@ -123,6 +129,7 @@ func (tool *EvolutionPreviewTool) handle(
 		Species:    params.Species,
 		IV:         params.IV,
 		Level:      inverted.Level,
+		Exact:      inverted.Exact,
 		BaseCP:     inverted.CP,
 		Evolutions: stages,
 	}, nil
