@@ -127,7 +127,7 @@ func TestMetaTool_AssignsRoles(t *testing.T) {
 ]`
 
 	mgr := newMetaManagerWithRoles(t, overall, leadsRanking, switchesRanking, closersRanking)
-	handler := tools.NewMetaTool(mgr).Handler()
+	handler := tools.NewMetaTool(mgr, nil).Handler()
 
 	_, result, err := handler(t.Context(), nil, tools.MetaParams{League: "great", TopN: 2})
 	if err != nil {
@@ -151,7 +151,7 @@ func TestMetaTool_ReturnsTopN(t *testing.T) {
 	t.Parallel()
 
 	mgr := newMetaTestManager(t, metaRankingsFixture)
-	handler := tools.NewMetaTool(mgr).Handler()
+	handler := tools.NewMetaTool(mgr, nil).Handler()
 
 	_, result, err := handler(t.Context(), nil, tools.MetaParams{
 		League: "great",
@@ -182,7 +182,7 @@ func TestMetaTool_DefaultTopN(t *testing.T) {
 	t.Parallel()
 
 	mgr := newMetaTestManager(t, metaRankingsFixture)
-	handler := tools.NewMetaTool(mgr).Handler()
+	handler := tools.NewMetaTool(mgr, nil).Handler()
 
 	_, result, err := handler(t.Context(), nil, tools.MetaParams{League: "great"})
 	if err != nil {
@@ -199,7 +199,7 @@ func TestMetaTool_UnknownLeague(t *testing.T) {
 	t.Parallel()
 
 	mgr := newMetaTestManager(t, metaRankingsFixture)
-	handler := tools.NewMetaTool(mgr).Handler()
+	handler := tools.NewMetaTool(mgr, nil).Handler()
 
 	_, _, err := handler(t.Context(), nil, tools.MetaParams{League: "marshmallow"})
 	if !errors.Is(err, tools.ErrUnknownLeague) {
@@ -211,7 +211,7 @@ func TestMetaTool_NegativeTopN(t *testing.T) {
 	t.Parallel()
 
 	mgr := newMetaTestManager(t, metaRankingsFixture)
-	handler := tools.NewMetaTool(mgr).Handler()
+	handler := tools.NewMetaTool(mgr, nil).Handler()
 
 	_, _, err := handler(t.Context(), nil, tools.MetaParams{
 		League: "great",

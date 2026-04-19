@@ -117,11 +117,11 @@ func newRankingsManagerWithPayload(t *testing.T, payload string) *rankings.Manag
 	return mgr
 }
 
-// TestRankTool_RecommendedMovesetFromRankings confirms that when the
+// TestRankTool_OptimalMovesetFromRankings confirms that when the
 // tool is constructed with a rankings manager and the species is
 // present in the cup's rankings JSON, RankResult carries the
 // projected fast + charged moveset.
-func TestRankTool_RecommendedMovesetFromRankings(t *testing.T) {
+func TestRankTool_OptimalMovesetFromRankings(t *testing.T) {
 	t.Parallel()
 
 	const rankingsPayload = `[
@@ -151,28 +151,28 @@ func TestRankTool_RecommendedMovesetFromRankings(t *testing.T) {
 		t.Fatalf("handler: %v", err)
 	}
 
-	if result.RecommendedMoveset == nil {
-		t.Fatal("RecommendedMoveset is nil, want populated")
+	if result.OptimalMoveset == nil {
+		t.Fatal("OptimalMoveset is nil, want populated")
 	}
-	if result.RecommendedMoveset.Fast != "COUNTER" {
-		t.Errorf("Fast = %q, want COUNTER", result.RecommendedMoveset.Fast)
+	if result.OptimalMoveset.Fast != "COUNTER" {
+		t.Errorf("Fast = %q, want COUNTER", result.OptimalMoveset.Fast)
 	}
-	if len(result.RecommendedMoveset.Charged) != 2 {
-		t.Fatalf("Charged len = %d, want 2", len(result.RecommendedMoveset.Charged))
+	if len(result.OptimalMoveset.Charged) != 2 {
+		t.Fatalf("Charged len = %d, want 2", len(result.OptimalMoveset.Charged))
 	}
-	if result.RecommendedMoveset.Charged[0] != "ICE_PUNCH" {
-		t.Errorf("Charged[0] = %q, want ICE_PUNCH", result.RecommendedMoveset.Charged[0])
+	if result.OptimalMoveset.Charged[0] != "ICE_PUNCH" {
+		t.Errorf("Charged[0] = %q, want ICE_PUNCH", result.OptimalMoveset.Charged[0])
 	}
-	if result.RecommendedMoveset.Charged[1] != "PSYCHIC" {
-		t.Errorf("Charged[1] = %q, want PSYCHIC", result.RecommendedMoveset.Charged[1])
+	if result.OptimalMoveset.Charged[1] != "PSYCHIC" {
+		t.Errorf("Charged[1] = %q, want PSYCHIC", result.OptimalMoveset.Charged[1])
 	}
 }
 
-// TestRankTool_RecommendedMovesetAbsentForUnknownInRanking confirms
+// TestRankTool_OptimalMovesetAbsentForUnknownInRanking confirms
 // that species present in the gamemaster but missing from the
 // rankings slice (common for obscure forms / cup exclusions) get a
-// nil RecommendedMoveset, not an error.
-func TestRankTool_RecommendedMovesetAbsentForUnknownInRanking(t *testing.T) {
+// nil OptimalMoveset, not an error.
+func TestRankTool_OptimalMovesetAbsentForUnknownInRanking(t *testing.T) {
 	t.Parallel()
 
 	const rankingsPayload = `[
@@ -195,9 +195,9 @@ func TestRankTool_RecommendedMovesetAbsentForUnknownInRanking(t *testing.T) {
 		t.Fatalf("handler: %v", err)
 	}
 
-	if result.RecommendedMoveset != nil {
-		t.Errorf("RecommendedMoveset = %+v, want nil for species absent from ranking",
-			result.RecommendedMoveset)
+	if result.OptimalMoveset != nil {
+		t.Errorf("OptimalMoveset = %+v, want nil for species absent from ranking",
+			result.OptimalMoveset)
 	}
 }
 

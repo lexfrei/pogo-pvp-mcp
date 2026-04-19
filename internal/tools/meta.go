@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 
+	pogopvp "github.com/lexfrei/pogo-pvp-engine"
+	"github.com/lexfrei/pogo-pvp-mcp/internal/gamemaster"
 	"github.com/lexfrei/pogo-pvp-mcp/internal/rankings"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -28,19 +30,21 @@ type MetaParams struct {
 // MCP clients. Rank is 1-based. Role is the best-fit classification
 // (lead / switch / closer / flex) based on where the species appears
 // in pvpoke's per-role rankings; omitted when the role fetch failed
-// or the species is not present in any of them.
+// or the species is not present in any of them. Moveset carries
+// per-move legacy flags so clients can tell pvpoke-recommended
+// community-day / event moves apart from regular learnables.
 type MetaEntry struct {
-	Rank        int      `json:"rank"`
-	SpeciesID   string   `json:"species"`
-	SpeciesName string   `json:"species_name"`
-	Rating      int      `json:"rating"`
-	Score       float64  `json:"score"`
-	Moveset     []string `json:"moveset"`
-	Product     int      `json:"product"`
-	Atk         float64  `json:"atk"`
-	Def         float64  `json:"def"`
-	HP          int      `json:"hp"`
-	Role        string   `json:"role,omitempty"`
+	Rank        int       `json:"rank"`
+	SpeciesID   string    `json:"species"`
+	SpeciesName string    `json:"species_name"`
+	Rating      int       `json:"rating"`
+	Score       float64   `json:"score"`
+	Moveset     []MoveRef `json:"moveset"`
+	Product     int       `json:"product"`
+	Atk         float64   `json:"atk"`
+	Def         float64   `json:"def"`
+	HP          int       `json:"hp"`
+	Role        string    `json:"role,omitempty"`
 }
 
 // MetaResult is the JSON output contract for pvp_meta. Cup echoes
@@ -53,14 +57,20 @@ type MetaResult struct {
 	Entries []MetaEntry `json:"entries"`
 }
 
-// MetaTool wraps a rankings.Manager and exposes the pvp_meta tool.
+// MetaTool wraps a rankings.Manager plus a gamemaster.Manager — the
+// former drives the top-N and role selection, the latter resolves
+// per-move legacy flags against each species' LegacyMoves. gm may
+// be nil in tests that don't care about legacy tagging; in that
+// case every Moveset entry gets Legacy=false.
 type MetaTool struct {
 	manager *rankings.Manager
+	gm      *gamemaster.Manager
 }
 
-// NewMetaTool constructs a MetaTool bound to the given rankings manager.
-func NewMetaTool(manager *rankings.Manager) *MetaTool {
-	return &MetaTool{manager: manager}
+// NewMetaTool constructs a MetaTool. ranks is required; gm may be
+// nil — legacy flags then fall through to false.
+func NewMetaTool(manager *rankings.Manager, gm *gamemaster.Manager) *MetaTool {
+	return &MetaTool{manager: manager, gm: gm}
 }
 
 // metaToolDescription is factored out so the struct-literal fits the
@@ -115,7 +125,7 @@ func (tool *MetaTool) handle(
 
 	topN = min(topN, len(entries))
 
-	metaEntries := buildMetaEntries(entries[:topN])
+	metaEntries := buildMetaEntries(tool.snapshotOrNil(), entries[:topN])
 	assignRoles(ctx, tool.manager, cpCap, params.Cup, metaEntries)
 
 	return nil, MetaResult{
@@ -237,20 +247,44 @@ func resolveCupLabel(cup string) string {
 	return cup
 }
 
+// snapshotOrNil returns the gamemaster snapshot for legacy tagging,
+// or nil when the tool was constructed without a gamemaster manager
+// (test mode). Callers treat nil as "every move has Legacy=false".
+func (tool *MetaTool) snapshotOrNil() *pogopvp.Gamemaster {
+	if tool.gm == nil {
+		return nil
+	}
+
+	return tool.gm.Current()
+}
+
 // buildMetaEntries projects rankings slice rows into MetaEntry with
-// 1-based rank assignment.
-func buildMetaEntries(entries []rankings.RankingEntry) []MetaEntry {
+// 1-based rank assignment. When snapshot is non-nil, Moveset entries
+// are tagged with their per-species legacy status via moveRefsFrom;
+// otherwise every Legacy flag falls through to false.
+func buildMetaEntries(
+	snapshot *pogopvp.Gamemaster, entries []rankings.RankingEntry,
+) []MetaEntry {
 	out := make([]MetaEntry, len(entries))
 
 	for i := range entries {
 		entry := entries[i]
+
+		var species *pogopvp.Species
+
+		if snapshot != nil {
+			if s, ok := snapshot.Pokemon[entry.SpeciesID]; ok {
+				species = &s
+			}
+		}
+
 		out[i] = MetaEntry{
 			Rank:        i + 1,
 			SpeciesID:   entry.SpeciesID,
 			SpeciesName: entry.SpeciesName,
 			Rating:      entry.Rating,
 			Score:       entry.Score,
-			Moveset:     entry.Moveset,
+			Moveset:     moveRefsFrom(species, entry.Moveset),
 			Product:     entry.Stats.Product,
 			Atk:         entry.Stats.Atk,
 			Def:         entry.Stats.Def,

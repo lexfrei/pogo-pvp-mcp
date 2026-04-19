@@ -87,11 +87,12 @@ const rankingsMaxLevelCap = 50
 // nil / empty → [1] (single 1v1 scenario). Phase E broke the v0.1
 // `[team, meta]` asymmetric pair — pre-v0.1 rename.
 type TeamAnalysisParams struct {
-	Team    []Combatant `json:"team" jsonschema:"exactly 3 team members"`
-	League  string      `json:"league" jsonschema:"little|great|ultra|master"`
-	Cup     string      `json:"cup,omitempty" jsonschema:"cup id from pvpoke (e.g. spring, retro); empty = open-league all"`
-	TopN    int         `json:"top_n,omitempty" jsonschema:"how many meta species to sweep (default 30)"`
-	Shields []int       `json:"shields,omitempty" jsonschema:"symmetric shield scenarios; omit for [1]; averaged across; each 0..2"`
+	Team           []Combatant `json:"team" jsonschema:"exactly 3 team members"`
+	League         string      `json:"league" jsonschema:"little|great|ultra|master"`
+	Cup            string      `json:"cup,omitempty" jsonschema:"cup id from pvpoke; empty = open-league all"`
+	TopN           int         `json:"top_n,omitempty" jsonschema:"meta species to sweep (default 30)"`
+	Shields        []int       `json:"shields,omitempty" jsonschema:"symmetric shield scenarios; omit for [1]; averaged; each 0..2"`
+	DisallowLegacy bool        `json:"disallow_legacy,omitempty" jsonschema:"reject legacy moves; default false (legacy allowed)"`
 }
 
 // TeamMemberAnalysis describes one team member's performance against
@@ -205,6 +206,29 @@ func (tool *TeamAnalysisTool) handle(
 	return nil, result, nil
 }
 
+// prepareTeam orchestrates the team-side prep: legacy rejection
+// (under DisallowLegacy) plus per-member moveset defaulting plus
+// combatant construction. Split off prepareTeamAnalysis so funlen
+// stays under budget.
+func (tool *TeamAnalysisTool) prepareTeam(
+	ctx context.Context, snapshot *pogopvp.Gamemaster,
+	params *TeamAnalysisParams, cpCap, shields int,
+) ([]pogopvp.Combatant, error) {
+	err := rejectTeamLegacy(snapshot, params.Team, params.DisallowLegacy)
+	if err != nil {
+		return nil, err
+	}
+
+	for i := range params.Team {
+		err = applyMovesetDefaults(ctx, tool.rankings, &params.Team[i], cpCap, params.Cup)
+		if err != nil {
+			return nil, fmt.Errorf("team[%d] moveset: %w", i, err)
+		}
+	}
+
+	return buildTeamCombatants(snapshot, params.Team, shields)
+}
+
 // prepareTeamAnalysis resolves all inputs (gamemaster snapshot, CP
 // cap, rankings, moveset defaults, combatants) into a workspace for
 // the simulation phase. Keeps handle under funlen.
@@ -236,14 +260,7 @@ func (tool *TeamAnalysisTool) prepareTeamAnalysis(
 		return nil, err
 	}
 
-	for i := range params.Team {
-		err = applyMovesetDefaults(ctx, tool.rankings, &params.Team[i], cpCap, params.Cup)
-		if err != nil {
-			return nil, fmt.Errorf("team[%d] moveset: %w", i, err)
-		}
-	}
-
-	teamCombatants, err := buildTeamCombatants(snapshot, params.Team, defaults.Scenarios[0])
+	teamCombatants, err := tool.prepareTeam(ctx, snapshot, params, cpCap, defaults.Scenarios[0])
 	if err != nil {
 		return nil, err
 	}
