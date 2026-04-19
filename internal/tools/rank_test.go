@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"slices"
 	"testing"
 
 	"github.com/lexfrei/pogo-pvp-mcp/internal/config"
@@ -154,8 +155,8 @@ func TestRankTool_OptimalMovesetFromRankings(t *testing.T) {
 	if result.OptimalMoveset == nil {
 		t.Fatal("OptimalMoveset is nil, want populated")
 	}
-	if result.OptimalMoveset.Fast != "COUNTER" {
-		t.Errorf("Fast = %q, want COUNTER", result.OptimalMoveset.Fast)
+	if result.OptimalMoveset.Fast != moveCounter {
+		t.Errorf("Fast = %q, want %q", result.OptimalMoveset.Fast, moveCounter)
 	}
 	if len(result.OptimalMoveset.Charged) != 2 {
 		t.Fatalf("Charged len = %d, want 2", len(result.OptimalMoveset.Charged))
@@ -445,5 +446,439 @@ func TestRankTool_ShadowOptionResolvesToShadowEntry(t *testing.T) {
 
 	if result.ShadowVariantMissing {
 		t.Errorf("ShadowVariantMissing = true; fixture publishes _shadow — must not signal missing")
+	}
+}
+
+// rankMultiCupFixtureGamemaster publishes medicham plus a Spring
+// cup entry (LevelCap=0 inherits the requested league cap) so the
+// rankings_by_cup tests can verify both the open-league and the
+// Spring per-cup entries flow through.
+const rankMultiCupFixtureGamemaster = `{
+  "id": "gamemaster",
+  "timestamp": "2026-04-19 00:00:00",
+  "pokemon": [
+    {"dex": 308, "speciesId": "medicham", "speciesName": "Medicham",
+     "baseStats": {"atk": 121, "def": 152, "hp": 155},
+     "types": ["fighting", "psychic"],
+     "fastMoves": ["COUNTER"], "chargedMoves": ["ICE_PUNCH","PSYCHIC"],
+     "released": true}
+  ],
+  "moves": [
+    {"moveId": "COUNTER", "name": "Counter", "type": "fighting",
+     "power": 8, "energy": 0, "energyGain": 7, "cooldown": 1000, "turns": 2},
+    {"moveId": "ICE_PUNCH", "name": "Ice Punch", "type": "ice",
+     "power": 55, "energy": 40, "cooldown": 500},
+    {"moveId": "PSYCHIC", "name": "Psychic", "type": "psychic",
+     "power": 90, "energy": 55, "cooldown": 500}
+  ],
+  "cups": [
+    {"name": "all", "title": "All Pokemon", "include": [], "exclude": []},
+    {"name": "spring", "title": "Spring Cup",
+     "include": [{"filterType": "type", "values": ["fighting"]}],
+     "exclude": []}
+  ]
+}`
+
+// newRankingsManagerMultiCup wires a httptest server that dispatches
+// between /all/... and /spring/... so the rankings_by_cup tests can
+// pin per-cup rankings flow. Payloads are supplied by the caller so
+// each test can opt into or out of medicham being ranked in Spring.
+const springOverall1500URL = "/spring/overall/rankings-1500.json"
+
+func newRankingsManagerMultiCup(t *testing.T, openLeague, spring string) *rankings.Manager {
+	t.Helper()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case allOverall1500URL:
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(openLeague))
+		case springOverall1500URL:
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(spring))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	mgr, err := rankings.NewManager(rankings.Config{
+		BaseURL:  server.URL,
+		LocalDir: t.TempDir(),
+	})
+	if err != nil {
+		t.Fatalf("rankings.NewManager: %v", err)
+	}
+
+	return mgr
+}
+
+// TestRankTool_RankingsByCupIncludesOpenAndNamedCups pins the
+// contract: when the species is ranked in both the open-league
+// ("all") slice and a named cup ("spring"), RankingsByCup returns
+// two entries in that order. Open-league is always first per
+// cupIDsForLookup's stable ordering.
+func TestRankTool_RankingsByCupIncludesOpenAndNamedCups(t *testing.T) {
+	t.Parallel()
+
+	const openPayload = `[
+  {"speciesId": "medicham", "speciesName": "Medicham", "rating": 700,
+   "moveset": ["COUNTER", "ICE_PUNCH", "PSYCHIC"],
+   "stats": {"product": 2100, "atk": 106, "def": 139, "hp": 141}}
+]`
+
+	const springPayload = `[
+  {"speciesId": "medicham", "speciesName": "Medicham", "rating": 820,
+   "moveset": ["COUNTER", "PSYCHIC", "ICE_PUNCH"],
+   "stats": {"product": 2100, "atk": 106, "def": 139, "hp": 141}}
+]`
+
+	gm := newManagerWithFixture(t, rankMultiCupFixtureGamemaster)
+	ranks := newRankingsManagerMultiCup(t, openPayload, springPayload)
+
+	handler := tools.NewRankTool(gm, ranks).Handler()
+
+	_, result, err := handler(t.Context(), nil, tools.RankParams{
+		Species: "medicham",
+		IV:      [3]int{0, 15, 15},
+		League:  "great",
+	})
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+
+	if len(result.RankingsByCup) != 2 {
+		t.Fatalf("RankingsByCup len = %d, want 2 (open + spring)", len(result.RankingsByCup))
+	}
+
+	if result.RankingsByCup[0].Cup != cupAllLabel {
+		t.Errorf("RankingsByCup[0].Cup = %q, want %q (open-league always first)",
+			result.RankingsByCup[0].Cup, cupAllLabel)
+	}
+
+	if result.RankingsByCup[0].Rating != 700 {
+		t.Errorf("RankingsByCup[0].Rating = %d, want 700", result.RankingsByCup[0].Rating)
+	}
+
+	springEntry := result.RankingsByCup[1]
+
+	if springEntry.Cup != cupSpringLabel {
+		t.Errorf("RankingsByCup[1].Cup = %q, want %q", springEntry.Cup, cupSpringLabel)
+	}
+
+	if springEntry.Rating != 820 {
+		t.Errorf("RankingsByCup[1].Rating = %d, want 820 (spring payload)", springEntry.Rating)
+	}
+
+	if springEntry.Rank != 1 {
+		t.Errorf("RankingsByCup[1].Rank = %d, want 1", springEntry.Rank)
+	}
+}
+
+// TestRankTool_RankingsByCupSkipsUnrankedCups pins the converse:
+// when the species is not present in a cup's rankings, that cup
+// does NOT appear in RankingsByCup — the array stays signal-dense.
+func TestRankTool_RankingsByCupSkipsUnrankedCups(t *testing.T) {
+	t.Parallel()
+
+	const openPayload = `[
+  {"speciesId": "medicham", "speciesName": "Medicham", "rating": 700,
+   "moveset": ["COUNTER", "ICE_PUNCH"],
+   "stats": {"product": 2100, "atk": 106, "def": 139, "hp": 141}}
+]`
+
+	// Spring payload without medicham.
+	const springPayload = `[
+  {"speciesId": "venusaur", "speciesName": "Venusaur", "rating": 750,
+   "moveset": ["VINE_WHIP", "FRENZY_PLANT"],
+   "stats": {"product": 2050, "atk": 100, "def": 120, "hp": 150}}
+]`
+
+	gm := newManagerWithFixture(t, rankMultiCupFixtureGamemaster)
+	ranks := newRankingsManagerMultiCup(t, openPayload, springPayload)
+
+	handler := tools.NewRankTool(gm, ranks).Handler()
+
+	_, result, err := handler(t.Context(), nil, tools.RankParams{
+		Species: "medicham",
+		IV:      [3]int{15, 15, 15},
+		League:  "great",
+	})
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+
+	if len(result.RankingsByCup) != 1 {
+		t.Fatalf("RankingsByCup len = %d, want 1 (only open-league; spring has no medicham)",
+			len(result.RankingsByCup))
+	}
+
+	if result.RankingsByCup[0].Cup != cupAllLabel {
+		t.Errorf("RankingsByCup[0].Cup = %q, want %q",
+			result.RankingsByCup[0].Cup, cupAllLabel)
+	}
+}
+
+// TestRankTool_RankingsByCupMovesetPopulated pins the per-entry
+// Moveset projection: Fast, Charged, and HasLegacy are all set
+// correctly from the rankings JSON's flat moveset array. Shared
+// with the legacy-tagging test below so the "empty" cases here
+// can stay focused on the happy path.
+func TestRankTool_RankingsByCupMovesetPopulated(t *testing.T) {
+	t.Parallel()
+
+	const openPayload = `[
+  {"speciesId": "medicham", "speciesName": "Medicham", "rating": 700,
+   "moveset": ["COUNTER", "PSYCHIC", "ICE_PUNCH"],
+   "stats": {"product": 2100, "atk": 106, "def": 139, "hp": 141}}
+]`
+
+	gm := newManagerWithFixture(t, rankMultiCupFixtureGamemaster)
+	ranks := newRankingsManagerMultiCup(t, openPayload, `[]`)
+
+	handler := tools.NewRankTool(gm, ranks).Handler()
+
+	_, result, err := handler(t.Context(), nil, tools.RankParams{
+		Species: "medicham",
+		IV:      [3]int{15, 15, 15},
+		League:  "great",
+	})
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+
+	if len(result.RankingsByCup) == 0 {
+		t.Fatal("RankingsByCup empty")
+	}
+
+	openEntry := result.RankingsByCup[0]
+
+	if openEntry.Moveset == nil {
+		t.Fatal("openEntry.Moveset is nil; want populated Moveset")
+	}
+
+	if openEntry.Moveset.Fast != "COUNTER" {
+		t.Errorf("Fast = %q, want COUNTER", openEntry.Moveset.Fast)
+	}
+
+	wantCharged := []string{"PSYCHIC", "ICE_PUNCH"}
+	if !slices.Equal(openEntry.Moveset.Charged, wantCharged) {
+		t.Errorf("Charged = %v, want %v", openEntry.Moveset.Charged, wantCharged)
+	}
+
+	if openEntry.Moveset.HasLegacy {
+		t.Errorf("HasLegacy = true; fixture species has no LegacyMoves")
+	}
+}
+
+// TestRankTool_RankingsByCupLegacyTagged pins the legacy flag on
+// the projected per-cup Moveset: when the species' gamemaster entry
+// lists a move in LegacyMoves and that move is in the cup's
+// recommended moveset, HasLegacy flips true.
+func TestRankTool_RankingsByCupLegacyTagged(t *testing.T) {
+	t.Parallel()
+
+	const legacyFixtureGM = `{
+  "id": "gamemaster",
+  "timestamp": "2026-04-19 00:00:00",
+  "pokemon": [
+    {"dex": 308, "speciesId": "medicham", "speciesName": "Medicham",
+     "baseStats": {"atk": 121, "def": 152, "hp": 155},
+     "types": ["fighting", "psychic"],
+     "fastMoves": ["COUNTER"], "chargedMoves": ["ICE_PUNCH","PSYCHIC"],
+     "legacyMoves": ["PSYCHIC"],
+     "released": true}
+  ],
+  "moves": [
+    {"moveId": "COUNTER", "name": "Counter", "type": "fighting",
+     "power": 8, "energy": 0, "energyGain": 7, "cooldown": 1000, "turns": 2},
+    {"moveId": "ICE_PUNCH", "name": "Ice Punch", "type": "ice",
+     "power": 55, "energy": 40, "cooldown": 500},
+    {"moveId": "PSYCHIC", "name": "Psychic", "type": "psychic",
+     "power": 90, "energy": 55, "cooldown": 500}
+  ],
+  "cups": [
+    {"name": "all", "title": "All Pokemon", "include": [], "exclude": []}
+  ]
+}`
+
+	const openPayload = `[
+  {"speciesId": "medicham", "speciesName": "Medicham", "rating": 700,
+   "moveset": ["COUNTER", "PSYCHIC", "ICE_PUNCH"],
+   "stats": {"product": 2100, "atk": 106, "def": 139, "hp": 141}}
+]`
+
+	gm := newManagerWithFixture(t, legacyFixtureGM)
+	ranks := newRankingsManagerWithPayload(t, openPayload)
+
+	handler := tools.NewRankTool(gm, ranks).Handler()
+
+	_, result, err := handler(t.Context(), nil, tools.RankParams{
+		Species: "medicham",
+		IV:      [3]int{15, 15, 15},
+		League:  "great",
+	})
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+
+	if len(result.RankingsByCup) == 0 {
+		t.Fatal("RankingsByCup empty")
+	}
+
+	openEntry := result.RankingsByCup[0]
+
+	if openEntry.Moveset == nil {
+		t.Fatal("Moveset nil")
+	}
+
+	if !openEntry.Moveset.HasLegacy {
+		t.Errorf("HasLegacy = false; PSYCHIC is in LegacyMoves and in the recommended moveset")
+	}
+}
+
+// TestRankTool_RankingsByCupNonZeroLevelCapCup pins the fix for
+// the Pokémon-level vs CP-cap confusion in cupIDsForLookup: a cup
+// whose LevelCap is the Pokémon level cap (50, used by the Little
+// Cup / Equinox cup etc.) must still flow through when the league
+// CP cap is 500 / 1500. The earlier filter compared LevelCap to
+// cpCap and silently dropped every cup with LevelCap != 0,
+// including the `little` cup at `league=little`.
+func TestRankTool_RankingsByCupNonZeroLevelCapCup(t *testing.T) {
+	t.Parallel()
+
+	const levelCappedFixture = `{
+  "id": "gamemaster",
+  "timestamp": "2026-04-19 00:00:00",
+  "pokemon": [
+    {"dex": 308, "speciesId": "medicham", "speciesName": "Medicham",
+     "baseStats": {"atk": 121, "def": 152, "hp": 155},
+     "types": ["fighting", "psychic"],
+     "fastMoves": ["COUNTER"], "chargedMoves": ["ICE_PUNCH"],
+     "released": true}
+  ],
+  "moves": [
+    {"moveId": "COUNTER", "name": "Counter", "type": "fighting",
+     "power": 8, "energy": 0, "energyGain": 7, "cooldown": 1000, "turns": 2},
+    {"moveId": "ICE_PUNCH", "name": "Ice Punch", "type": "ice",
+     "power": 55, "energy": 40, "cooldown": 500}
+  ],
+  "cups": [
+    {"name": "all", "title": "All Pokemon", "include": [], "exclude": []},
+    {"name": "spring", "title": "Spring Cup",
+     "include": [{"filterType": "type", "values": ["fighting"]}],
+     "exclude": [],
+     "levelCap": 50}
+  ]
+}`
+
+	const openPayload = `[
+  {"speciesId": "medicham", "speciesName": "Medicham", "rating": 700,
+   "moveset": ["COUNTER", "ICE_PUNCH"],
+   "stats": {"product": 2100, "atk": 106, "def": 139, "hp": 141}}
+]`
+
+	const springPayload = `[
+  {"speciesId": "medicham", "speciesName": "Medicham", "rating": 800,
+   "moveset": ["COUNTER", "ICE_PUNCH"],
+   "stats": {"product": 2100, "atk": 106, "def": 139, "hp": 141}}
+]`
+
+	gm := newManagerWithFixture(t, levelCappedFixture)
+	ranks := newRankingsManagerMultiCup(t, openPayload, springPayload)
+
+	handler := tools.NewRankTool(gm, ranks).Handler()
+
+	_, result, err := handler(t.Context(), nil, tools.RankParams{
+		Species: "medicham",
+		IV:      [3]int{15, 15, 15},
+		League:  "great",
+	})
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+
+	if len(result.RankingsByCup) != 2 {
+		t.Fatalf("RankingsByCup len = %d, want 2 (open + spring with levelCap=50)",
+			len(result.RankingsByCup))
+	}
+
+	if result.RankingsByCup[1].Cup != cupSpringLabel {
+		t.Errorf("RankingsByCup[1].Cup = %q, want %q (levelCap=50 cup must flow through)",
+			result.RankingsByCup[1].Cup, cupSpringLabel)
+	}
+}
+
+// TestRankTool_RankingsByCupCachesNotFound pins the round-2 fix
+// for the 404 fan-out performance regression: once a (cap, cup)
+// pair returns ErrUnknownCup, subsequent calls for the same pair
+// must short-circuit without a network round-trip. The test uses
+// a counting httptest server that serves the open-league payload
+// but 404s on /spring/..., invokes pvp_rank twice, and asserts
+// the spring path was hit exactly once — the negative cache
+// absorbs the second request.
+func TestRankTool_RankingsByCupCachesNotFound(t *testing.T) {
+	t.Parallel()
+
+	const openPayload = `[
+  {"speciesId": "medicham", "speciesName": "Medicham", "rating": 700,
+   "moveset": ["COUNTER", "ICE_PUNCH"],
+   "stats": {"product": 2100, "atk": 106, "def": 139, "hp": 141}}
+]`
+
+	var springCalls int
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case allOverall1500URL:
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(openPayload))
+		case springOverall1500URL:
+			springCalls++
+
+			http.NotFound(w, r)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	ranks, err := rankings.NewManager(rankings.Config{
+		BaseURL:  server.URL,
+		LocalDir: t.TempDir(),
+	})
+	if err != nil {
+		t.Fatalf("rankings.NewManager: %v", err)
+	}
+
+	gm := newManagerWithFixture(t, rankMultiCupFixtureGamemaster)
+
+	handler := tools.NewRankTool(gm, ranks).Handler()
+
+	params := tools.RankParams{
+		Species: "medicham",
+		IV:      [3]int{15, 15, 15},
+		League:  "great",
+	}
+
+	_, _, err = handler(t.Context(), nil, params)
+	if err != nil {
+		t.Fatalf("first call: %v", err)
+	}
+
+	firstSpring := springCalls
+
+	_, _, err = handler(t.Context(), nil, params)
+	if err != nil {
+		t.Fatalf("second call: %v", err)
+	}
+
+	if springCalls != firstSpring {
+		t.Errorf("springCalls after second Handler = %d, want %d (404 must be negative-cached)",
+			springCalls, firstSpring)
+	}
+
+	if firstSpring != 1 {
+		t.Errorf("firstSpring = %d, want 1 (one 404 round-trip on cold start)", firstSpring)
 	}
 }

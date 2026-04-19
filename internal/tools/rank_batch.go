@@ -29,17 +29,18 @@ var ErrTooManyIVs = errors.New("iv list exceeds maxRankBatchSize")
 const maxRankBatchSize = 64
 
 // RankBatchParams is the JSON input for pvp_rank_batch: the same
-// species + league + cup + CP cap + XL flag + Options as pvp_rank,
+// species + league + CP cap + XL flag + Options as pvp_rank,
 // applied to each IV triple in IVs. Batching saves N-1 round-trips
 // when a client is sweeping IV space (typical use: "score my entire
 // box of this species in one call"). Options applies batch-wide —
 // every IV triple is evaluated against the same resolved species,
-// so Options.Shadow=true sweeps the shadow variant's ranking.
+// so Options.Shadow=true sweeps the shadow variant's ranking. No
+// cup parameter: pvp_rank returns rankings_by_cup on every result,
+// so the batch reproduces that array per entry.
 type RankBatchParams struct {
 	Species string           `json:"species" jsonschema:"species id in the pvpoke gamemaster"`
 	IVs     [][3]int         `json:"ivs" jsonschema:"list of [atk, def, sta] triples; each component 0..15"`
 	League  string           `json:"league" jsonschema:"little|great|ultra|master"`
-	Cup     string           `json:"cup,omitempty" jsonschema:"cup id from pvpoke; empty = open-league all"`
 	CPCap   int              `json:"cp_cap,omitempty" jsonschema:"overrides the league default CP cap"`
 	XL      bool             `json:"xl,omitempty" jsonschema:"allow XL candy levels above 40"`
 	Options CombatantOptions `json:"options,omitzero" jsonschema:"shadow / lucky / purified flags applied batch-wide"`
@@ -62,7 +63,6 @@ type RankBatchEntry struct {
 type RankBatchResult struct {
 	Species      string           `json:"species"`
 	League       string           `json:"league"`
-	Cup          string           `json:"cup"`
 	CPCap        int              `json:"cp_cap"`
 	Entries      []RankBatchEntry `json:"entries"`
 	SuccessCount int              `json:"success_count"`
@@ -141,7 +141,6 @@ func (tool *RankBatchTool) handle(
 	return nil, RankBatchResult{
 		Species:      params.Species,
 		League:       params.League,
-		Cup:          resolveCupLabel(params.Cup),
 		CPCap:        resolvedCPCap,
 		Entries:      entries,
 		SuccessCount: successCount,
@@ -204,7 +203,6 @@ func runRankBatchEntry(
 		Species: params.Species,
 		IV:      ivTriple,
 		League:  params.League,
-		Cup:     params.Cup,
 		CPCap:   resolvedCPCap,
 		XL:      params.XL,
 		Options: params.Options,

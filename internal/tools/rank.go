@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"sort"
 
 	pogopvp "github.com/lexfrei/pogo-pvp-engine"
 	"github.com/lexfrei/pogo-pvp-mcp/internal/gamemaster"
@@ -85,10 +86,29 @@ type RankParams struct {
 	Species string           `json:"species" jsonschema:"species id in the pvpoke gamemaster (e.g. \"medicham\")"`
 	IV      [3]int           `json:"iv" jsonschema:"individual values in [atk, def, sta] order, each 0..15"`
 	League  string           `json:"league" jsonschema:"little|great|ultra|master"`
-	Cup     string           `json:"cup,omitempty" jsonschema:"cup id from pvpoke (spring/retro/etc.); empty=all; optimal_moveset only"`
 	CPCap   int              `json:"cp_cap,omitempty" jsonschema:"overrides the league default CP cap"`
 	XL      bool             `json:"xl,omitempty" jsonschema:"allow XL candy levels above 40"`
 	Options CombatantOptions `json:"options,omitzero" jsonschema:"shadow / lucky / purified flags; Shadow flips to the pvpoke _shadow entry"`
+}
+
+// CupRanking is one entry in RankResult.RankingsByCup — the species'
+// position inside one pvpoke-published cup ranking for the requested
+// league. Cup IDs observed in the current gamemaster include "all"
+// (open league), "spring", "retro", "jungle", etc. Only cups where
+// the species actually appears in pvpoke's per-cup ranking list are
+// emitted; cups where the species is filtered out or ranks below
+// pvpoke's cutoff are dropped so the array stays signal-dense.
+//
+// Moveset carries pvpoke's cup-specific recommended build (legacy
+// flag included); per-cup NonLegacyMoveset is NOT computed yet —
+// full meta re-simulation per cup would multiply the rank call's
+// cost by the cup count. Top-level NonLegacyMoveset remains
+// available as a best-effort open-league alternative.
+type CupRanking struct {
+	Cup     string   `json:"cup"`
+	Rank    int      `json:"rank"`
+	Rating  int      `json:"rating"`
+	Moveset *Moveset `json:"moveset,omitempty"`
 }
 
 // Moveset is the fast + charged pairing pvp_rank reports as the
@@ -122,13 +142,24 @@ type NonLegacyMoveset struct {
 }
 
 // RankResult is the JSON output contract for pvp_rank.
-// OptimalMoveset is projected from the pvpoke rankings JSON for the
-// requested (cup, cap) pair and is absent when the species is not
-// present in the ranking. NonLegacyMoveset is populated only when
-// OptimalMoveset.HasLegacy=true — for species whose pvpoke-recommended
-// build contains a CD / event / ETM-only move, callers see the best
-// alternative without legacy plus the rating delta so the trade-off
-// is explicit.
+//
+// Top-level OptimalMoveset / NonLegacyMoveset / Hundo are projected
+// from pvpoke's open-league ("all") rankings — the open-league
+// optimal build is the reference baseline. RankingsByCup carries
+// the species' position inside every additional pvpoke per-cup
+// ranking for the requested league (spring / retro / jungle /
+// etc.); each entry is a CupRanking with rank, rating, and
+// cup-specific moveset. Cups where the species does not appear in
+// pvpoke's per-cup list (filtered out by cup rules, or below the
+// cutoff) are dropped from the array.
+//
+// NonLegacyMoveset (top-level) is populated only when
+// OptimalMoveset.HasLegacy=true — for species whose pvpoke-
+// recommended build contains a CD / event / ETM-only move, callers
+// see the best alternative without legacy plus the rating delta so
+// the trade-off is explicit. Per-cup NonLegacyMoveset is not
+// emitted yet (each cup would require a full non-legacy meta
+// re-simulation, multiplying pvp_rank latency by the cup count).
 type RankResult struct {
 	Species              string            `json:"species"`
 	ResolvedSpeciesID    string            `json:"resolved_species_id,omitempty"`
@@ -140,11 +171,11 @@ type RankResult struct {
 	HP                   int               `json:"hp"`
 	PercentOfBest        float64           `json:"percent_of_best"`
 	League               string            `json:"league"`
-	Cup                  string            `json:"cup"`
 	CPCap                int               `json:"cp_cap"`
 	OptimalMoveset       *Moveset          `json:"optimal_moveset,omitempty"`
 	NonLegacyMoveset     *NonLegacyMoveset `json:"non_legacy_moveset,omitempty"`
 	Hundo                *HundoComparison  `json:"comparison_to_hundo,omitempty"`
+	RankingsByCup        []CupRanking      `json:"rankings_by_cup,omitempty"`
 	ShadowVariantMissing bool              `json:"shadow_variant_missing,omitempty"`
 }
 
@@ -216,8 +247,9 @@ func (tool *RankTool) handle(
 		return nil, RankResult{}, err
 	}
 
-	result.OptimalMoveset = tool.lookupMoveset(ctx, inputs.cpCap, inputs.cup, &inputs.species)
+	result.OptimalMoveset = tool.lookupMoveset(ctx, inputs.cpCap, "", &inputs.species)
 	result.NonLegacyMoveset = tool.nonLegacyAlternative(ctx, &inputs, result.OptimalMoveset)
+	result.RankingsByCup = tool.buildRankingsByCup(ctx, &inputs)
 
 	err = ctx.Err()
 	if err != nil {
@@ -269,6 +301,140 @@ func (tool *RankTool) lookupMoveset(
 	return nil
 }
 
+// buildRankingsByCup fetches every pvpoke per-cup ranking for the
+// requested league cap and returns the species' entry per cup
+// (rank / rating / moveset). The "all" (open-league) cup is
+// always attempted first; then every named cup published in the
+// gamemaster is tried. No LevelCap-based filtering — that field
+// is the Pokémon level cap (40 / 50), not the CP cap, so any
+// such filter silently dropped real cups like `little` at CPCap=500.
+// Cups where the species is not present in pvpoke's per-cup
+// ranking slice are dropped — the array stays signal-dense.
+//
+// The rankings manager caches per-(cap, cup) fetches — both
+// positive and negative (404) results — so the O(N) Get calls
+// across all cups are cheap after the first warm-up. Unknown /
+// missing cup rankings surface as a silently-skipped entry. The
+// ctx.Err() check at the loop boundary honours the project-wide
+// invariant that handlers release on client disconnect mid-sweep.
+func (tool *RankTool) buildRankingsByCup(
+	ctx context.Context, inputs *rankInputs,
+) []CupRanking {
+	if tool.rankings == nil {
+		return nil
+	}
+
+	snapshot := tool.manager.Current()
+	if snapshot == nil {
+		return nil
+	}
+
+	cupIDs := cupIDsForLookup(snapshot)
+
+	out := make([]CupRanking, 0, len(cupIDs))
+
+	for _, cupID := range cupIDs {
+		if ctx.Err() != nil {
+			return out
+		}
+
+		entry := lookupCupRanking(ctx, tool.rankings, inputs.cpCap, cupID, &inputs.species)
+		if entry == nil {
+			continue
+		}
+
+		out = append(out, *entry)
+	}
+
+	return out
+}
+
+// openLeagueCupID is pvpoke's conventional id for the open-league
+// ranking slice. The cacheKey code in rankings.Manager maps empty
+// cup names to this literal; cupIDsForLookup skips both spellings
+// to avoid emitting a duplicate open-league entry alongside the
+// implicit leading "" we already prepend.
+const openLeagueCupID = "all"
+
+// cupIDsForLookup returns the list of pvpoke cup ids to try: "" for
+// the open-league slice first, then every named cup from the
+// gamemaster sorted alphabetically. No filtering on the cup's
+// LevelCap — that field is the Pokémon level cap (40 for Classic,
+// 50 for Equinox/Little, 0 for "inherit"), not the CP cap, so
+// comparing it against the league CP cap is never meaningful and
+// silently dropped real cups like `little` at cpCap=500. Unsupported
+// (cup, cap) pairs silently fall out later: rankings.Manager.Get
+// returns ErrUnknownCup on upstream 404, and lookupCupRanking
+// discards a nil result without adding to the output array.
+func cupIDsForLookup(snapshot *pogopvp.Gamemaster) []string {
+	names := make([]string, 0, len(snapshot.Cups))
+
+	for cupID := range snapshot.Cups {
+		if cupID == "" || cupID == openLeagueCupID {
+			continue
+		}
+
+		names = append(names, cupID)
+	}
+
+	sort.Strings(names)
+
+	out := make([]string, 0, 1+len(names))
+	out = append(out, "")
+	out = append(out, names...)
+
+	return out
+}
+
+// lookupCupRanking fetches one (cap, cup) ranking and projects the
+// species' entry into a CupRanking. Returns nil when the rankings
+// fetch fails or the species is not in the list; this keeps
+// buildRankingsByCup's outer loop straightforward.
+func lookupCupRanking(
+	ctx context.Context, ranks *rankings.Manager,
+	cpCap int, cupID string, species *pogopvp.Species,
+) *CupRanking {
+	entries, err := ranks.Get(ctx, cpCap, cupID)
+	if err != nil {
+		return nil
+	}
+
+	for i := range entries {
+		if entries[i].SpeciesID != species.ID {
+			continue
+		}
+
+		return &CupRanking{
+			Cup:     resolveCupLabel(cupID),
+			Rank:    i + 1,
+			Rating:  entries[i].Rating,
+			Moveset: movesetFromEntry(species, &entries[i]),
+		}
+	}
+
+	return nil
+}
+
+// movesetFromEntry projects a rankings entry's Moveset slice into
+// the tool's Moveset shape with per-move legacy tagging. Returns
+// nil when the entry carries no moveset data so the caller can
+// omit the field.
+func movesetFromEntry(species *pogopvp.Species, entry *rankings.RankingEntry) *Moveset {
+	if len(entry.Moveset) == 0 {
+		return nil
+	}
+
+	moveset := &Moveset{Fast: entry.Moveset[0]}
+	if len(entry.Moveset) > 1 {
+		moveset.Charged = append(moveset.Charged, entry.Moveset[1:]...)
+	}
+
+	moveset.HasLegacy = pogopvp.IsLegacyMove(species, moveset.Fast) ||
+		anyLegacyMove(species, moveset.Charged)
+
+	return moveset
+}
+
 // rankInputs bundles the values derived from RankParams that the build
 // step needs — keeps handle's body small enough for funlen. speciesID
 // echoes params.Species verbatim (the caller's input id); resolvedID
@@ -283,7 +449,6 @@ type rankInputs struct {
 	ivs                  pogopvp.IV
 	cpCap                int
 	league               string
-	cup                  string
 	opts                 pogopvp.FindSpreadOpts
 	speciesID            string
 	resolvedID           string
@@ -318,7 +483,6 @@ func resolveRankInputs(manager *gamemaster.Manager, params *RankParams) (rankInp
 		ivs:                  ivs,
 		cpCap:                cpCap,
 		league:               params.League,
-		cup:                  params.Cup,
 		opts:                 pogopvp.FindSpreadOpts{XLAllowed: params.XL},
 		speciesID:            params.Species,
 		resolvedID:           resolvedID,
@@ -362,7 +526,6 @@ func buildRankResult(inputs rankInputs) (RankResult, error) {
 		HP:                   stats.HP,
 		PercentOfBest:        percentOfBest,
 		League:               inputs.league,
-		Cup:                  resolveCupLabel(inputs.cup),
 		CPCap:                inputs.cpCap,
 		Hundo:                computeHundo(inputs),
 		ShadowVariantMissing: inputs.shadowVariantMissing,
@@ -515,7 +678,7 @@ type nonLegacyBest struct {
 func (tool *RankTool) nonLegacyMeta(
 	ctx context.Context, inputs *rankInputs, snapshot *pogopvp.Gamemaster,
 ) ([]pogopvp.Combatant, error) {
-	entries, err := tool.rankings.Get(ctx, inputs.cpCap, inputs.cup)
+	entries, err := tool.rankings.Get(ctx, inputs.cpCap, "")
 	if err != nil {
 		return nil, fmt.Errorf("rankings fetch: %w", err)
 	}
