@@ -146,7 +146,7 @@ type TeamBuilderTeam struct {
 	PoolIndices    []int                 `json:"pool_indices"`
 	TeamScore      float64               `json:"team_score"`
 	ParetoLabel    string                `json:"pareto_label"`
-	AggregateCost  int                   `json:"aggregate_stardust_cost,omitempty"`
+	AggregateCost  int                   `json:"aggregate_stardust_cost"`
 	BudgetExceeded bool                  `json:"budget_exceeded,omitempty"`
 	BudgetExcess   int                   `json:"budget_excess,omitempty"`
 }
@@ -249,11 +249,13 @@ func (tool *TeamBuilderTool) handle(
 		return result.Teams[i].TeamScore > result.Teams[j].TeamScore
 	})
 
-	result.Teams = applyBudgetFilter(snapshot, inputs.pool, inputs.cpCap, &params, result.Teams)
+	poolBreakdowns := computePoolBreakdowns(snapshot, inputs.pool, inputs.cpCap, params.TargetLevel)
+
+	result.Teams = applyBudgetFilter(&params, result.Teams, poolBreakdowns)
 
 	result.Teams = result.Teams[:min(inputs.maxResults, len(result.Teams))]
 
-	attachCostBreakdowns(result.Teams, snapshot, inputs.pool, inputs.cpCap, params.TargetLevel)
+	attachCostBreakdownsFromPool(result.Teams, poolBreakdowns)
 
 	return nil, TeamBuilderResult{
 		League:             inputs.league,

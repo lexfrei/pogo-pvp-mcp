@@ -258,33 +258,42 @@ func validatePoolForLeague(
 	return nil
 }
 
-// computeTeamBreakdowns builds MemberCostBreakdown for each of the
-// three team members, resolving a per-species target level when
-// explicitTarget is zero. Returns a three-element slice aligned
-// with team.Members.
-func computeTeamBreakdowns(
+// computePoolBreakdowns precomputes MemberCostBreakdown for every
+// pool entry so the budget filter and the per-team attach pass can
+// share the same cost data instead of recomputing it twice. The
+// result is indexed by pool position (stable across the pipeline;
+// PoolIndices on each team references into this slice).
+func computePoolBreakdowns(
 	snapshot *pogopvp.Gamemaster, pool []Combatant,
-	indices []int, cpCap int, explicitTarget float64,
+	cpCap int, explicitTarget float64,
 ) []MemberCostBreakdown {
-	out := make([]MemberCostBreakdown, 0, len(indices))
-
-	for _, idx := range indices {
-		out = append(out, computeMemberCost(snapshot, &pool[idx], cpCap, explicitTarget))
+	out := make([]MemberCostBreakdown, len(pool))
+	for i := range pool {
+		out[i] = computeMemberCost(snapshot, &pool[i], cpCap, explicitTarget)
 	}
 
 	return out
 }
 
-// attachCostBreakdowns walks every team in teams and populates its
-// CostBreakdowns slice via computeTeamBreakdowns. Extracted from
-// handle so the outer function stays under the funlen budget.
-func attachCostBreakdowns(
-	teams []TeamBuilderTeam, snapshot *pogopvp.Gamemaster,
-	pool []Combatant, cpCap int, explicitTarget float64,
+// attachCostBreakdownsFromPool copies per-pool-member breakdowns
+// into each team's CostBreakdowns slice via PoolIndices. Runs after
+// the budget filter + trim so only the surviving, windowed teams
+// pay the attach cost; the poolBreakdowns compute itself is
+// amortised via the caller (handle) over both passes.
+func attachCostBreakdownsFromPool(
+	teams []TeamBuilderTeam, poolBreakdowns []MemberCostBreakdown,
 ) {
 	for i := range teams {
-		teams[i].CostBreakdowns = computeTeamBreakdowns(
-			snapshot, pool, teams[i].PoolIndices, cpCap, explicitTarget)
+		out := make([]MemberCostBreakdown, 0, len(teams[i].PoolIndices))
+		for _, idx := range teams[i].PoolIndices {
+			if idx < 0 || idx >= len(poolBreakdowns) {
+				continue
+			}
+
+			out = append(out, poolBreakdowns[idx])
+		}
+
+		teams[i].CostBreakdowns = out
 	}
 }
 

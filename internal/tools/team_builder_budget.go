@@ -1,38 +1,28 @@
 package tools
 
-import (
-	pogopvp "github.com/lexfrei/pogo-pvp-engine"
-)
-
 // applyBudgetFilter is the post-enumeration pass that applies
 // a caller-supplied BudgetSpec to the candidate teams. The flow:
 //
-//  1. Compute a per-pool-member MemberCostBreakdown once (one call
-//     per pool entry, not per team — cost is a pool-member property,
-//     independent of the team composition).
-//  2. For each team, aggregate PowerupStardustCost +
-//     SecondMoveStardustCost across its three members. Store as
+//  1. For each team, aggregate PowerupStardustCost +
+//     SecondMoveStardustCost across its three members using the
+//     precomputed per-pool-member breakdowns. Store as
 //     AggregateCost on the team.
-//  3. If AggregateCost > StardustLimit:
+//  2. If AggregateCost > StardustLimit:
 //     - within StardustLimit × (1 + Tolerance): keep, flag
 //     BudgetExceeded=true + BudgetExcess=overBy.
 //     - over the tolerance bound: drop entirely.
 //
-// Runs BEFORE the final sort-and-trim so over-budget teams don't
-// push the returned window into an empty slot. attachCostBreakdowns
-// runs afterward on the surviving teams to fill their
-// CostBreakdowns field.
+// Runs BEFORE the final trim so over-budget teams don't push the
+// returned window into an empty slot. The poolBreakdowns slice is
+// computed once by the caller (handle) and passed into both this
+// filter and the downstream attach pass, so computeMemberCost
+// runs exactly once per pool entry regardless of budget.
 func applyBudgetFilter(
-	snapshot *pogopvp.Gamemaster, pool []Combatant, cpCap int,
 	params *TeamBuilderParams, teams []TeamBuilderTeam,
+	poolBreakdowns []MemberCostBreakdown,
 ) []TeamBuilderTeam {
 	if params.Budget == nil || params.Budget.StardustLimit <= 0 {
 		return teams
-	}
-
-	poolBreakdowns := make([]MemberCostBreakdown, len(pool))
-	for i := range pool {
-		poolBreakdowns[i] = computeMemberCost(snapshot, &pool[i], cpCap, params.TargetLevel)
 	}
 
 	limit := params.Budget.StardustLimit

@@ -1,11 +1,13 @@
 package tools_test
 
 import (
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/lexfrei/pogo-pvp-mcp/internal/config"
@@ -1550,40 +1552,116 @@ func TestTeamBuilderTool_BudgetKeepsFittingTeam(t *testing.T) {
 	}
 }
 
+// budgetFilterOrderFixture stacks c with the highest base-ATK
+// AND a massive thirdMoveCost (500k stardust) so c-containing
+// triples are BOTH top-scored in simulation AND over any sane
+// budget. The rankings list c first (rating 750, above a/b) to
+// match the pool-side scoring bias; this gives the order-sensitive
+// assertion in TestTeamBuilderTool_BudgetFilterRunsBeforeTrim a
+// deterministic top-team expectation.
+const budgetFilterOrderFixture = `{
+  "id": "gamemaster",
+  "timestamp": "2026-04-19 00:00:00",
+  "pokemon": [
+    {"dex": 1, "speciesId": "a", "speciesName": "A",
+     "baseStats": {"atk": 121, "def": 152, "hp": 155},
+     "types": ["fighting", "psychic"],
+     "fastMoves": ["FAST1"], "chargedMoves": ["CH1"], "released": true,
+     "thirdMoveCost": 0, "buddyDistance": 1},
+    {"dex": 2, "speciesId": "b", "speciesName": "B",
+     "baseStats": {"atk": 152, "def": 143, "hp": 216},
+     "types": ["water", "ground"],
+     "fastMoves": ["FAST1"], "chargedMoves": ["CH1"], "released": true,
+     "thirdMoveCost": 0, "buddyDistance": 1},
+    {"dex": 3, "speciesId": "c", "speciesName": "C",
+     "baseStats": {"atk": 300, "def": 200, "hp": 250},
+     "types": ["fighting", "none"],
+     "fastMoves": ["FAST1"], "chargedMoves": ["CH1"], "released": true,
+     "thirdMoveCost": 500000, "buddyDistance": 1}
+  ],
+  "moves": [
+    {"moveId": "FAST1", "name": "Fast 1", "type": "normal",
+     "power": 3, "energy": 0, "energyGain": 5, "cooldown": 1000, "turns": 2},
+    {"moveId": "CH1", "name": "Charged 1", "type": "normal",
+     "power": 50, "energy": 35, "energyGain": 0, "cooldown": 500}
+  ]
+}`
+
+const budgetFilterOrderRankings = `[
+  {"speciesId": "c", "speciesName": "C", "rating": 750, "score": 100,
+   "moveset": ["FAST1", "CH1"],
+   "stats": {"product": 2400, "atk": 160, "def": 160, "hp": 180}},
+  {"speciesId": "a", "speciesName": "A", "rating": 700, "score": 95,
+   "moveset": ["FAST1", "CH1"],
+   "stats": {"product": 2100, "atk": 107, "def": 139, "hp": 141}},
+  {"speciesId": "b", "speciesName": "B", "rating": 680, "score": 93,
+   "moveset": ["FAST1", "CH1"],
+   "stats": {"product": 2000, "atk": 111, "def": 113, "hp": 161}}
+]`
+
 // TestTeamBuilderTool_BudgetFilterRunsBeforeTrim pins the CLAUDE.md
 // invariant that applyBudgetFilter executes BEFORE the MaxResults
-// trim. Setup: four-member pool with a top-scored team expected to
-// include the expensive L1 member (c L1 has highest stats so any
-// triple containing it tends to rank highest). A budget below that
-// team's climb cost drops the c-teams; the surviving all-at-target
-// triple {a, b, b2} must appear at MaxResults=1.
+// trim. Setup: c is simultaneously the strongest scorer (base ATK
+// 300 + rating 750) AND over budget (thirdMoveCost=500,000). A
+// four-member pool {a, b15, b14, c} yields four triples; three
+// contain c. With MaxResults=1:
 //
-// If the trim ran first, trim=1 would keep the top-scored team
-// (c-containing) and the subsequent filter would drop it — result
-// would be empty (len=0). With filter-before-trim, the filter
-// removes c-teams first and trim=1 keeps the cheaper survivor.
+//   - Filter-first (correct): drop the three c-triples on budget,
+//     then trim picks the single survivor {a, b15, b14} → len=1.
+//   - Trim-first (regression): sort by score → top-1 is a c-triple
+//     → trim keeps it → filter drops it → len=0.
+//
+// The len assertion alone discriminates because the c-triples are
+// the top-scored — without the budget, MaxResults=1 would return
+// a c-triple. The explicit "no c in member list" check is a
+// belt-and-braces guard against a future regression that leaves
+// a c-triple in by some other mechanism.
 func TestTeamBuilderTool_BudgetFilterRunsBeforeTrim(t *testing.T) {
 	t.Parallel()
 
-	tool := newTeamBuilderTool(t)
+	tool := newTeamBuilderToolFromFixture(t, budgetFilterOrderFixture, budgetFilterOrderRankings)
 	handler := tool.Handler()
 
-	// Two-b variants (b15 / b14) give C(4,3)=4 triples without
-	// needing a 4th species in the shared fixture. The {a, b15,
-	// b14} triple has no c and therefore zero climb cost at
-	// target 40; the three c-containing triples each have to
-	// climb c from L1 → L40.
 	pool := []tools.Combatant{
 		{Species: "a", IV: [3]int{15, 15, 15}, Level: 40, FastMove: "FAST1", ChargedMoves: []string{"CH1"}},
 		{Species: "b", IV: [3]int{15, 15, 15}, Level: 40, FastMove: "FAST1", ChargedMoves: []string{"CH1"}},
 		{Species: "b", IV: [3]int{14, 15, 15}, Level: 40, FastMove: "FAST1", ChargedMoves: []string{"CH1"}},
-		{Species: "c", IV: [3]int{15, 15, 15}, Level: 1, FastMove: "FAST1", ChargedMoves: []string{"CH1"}},
+		{Species: "c", IV: [3]int{15, 15, 15}, Level: 40, FastMove: "FAST1", ChargedMoves: []string{"CH1"}},
 	}
 
-	// Budget 1000 stardust << 270,000 needed for c's L1→L40
-	// climb; zero tolerance so c-teams drop outright. The
-	// {a, b15, b14} triple has aggregate cost 0 (all at target)
-	// so it comfortably fits.
+	// Warm-up with no budget confirms a c-triple tops the
+	// unconstrained ranking. If this invariant ever breaks, the
+	// order-sensitive assertion below loses meaning — catch it
+	// here before the ambiguous case.
+	_, warm, err := handler(t.Context(), nil, tools.TeamBuilderParams{
+		Pool: pool, League: leagueGreat, TargetLevel: 40.0, MaxResults: 1,
+	})
+	if err != nil {
+		t.Fatalf("warm-up handler: %v", err)
+	}
+
+	if len(warm.Teams) == 0 {
+		t.Fatal("warm-up returned no teams; fixture broken")
+	}
+
+	topHasC := false
+	for _, member := range warm.Teams[0].Members {
+		if member.Species == "c" {
+			topHasC = true
+
+			break
+		}
+	}
+
+	if !topHasC {
+		t.Fatalf("warm-up top team %v does not contain c; order-sensitive test loses meaning",
+			warm.Teams[0].Members)
+	}
+
+	// Real run: budget 1000 stardust << 500,000 thirdMoveCost for
+	// c; tolerance zero. c-triples drop; the non-c triple (cost 0)
+	// survives. If trim ran first, only the top-scored c-triple
+	// would survive to the filter and then get dropped → len=0.
 	_, result, err := handler(t.Context(), nil, tools.TeamBuilderParams{
 		Pool:        pool,
 		League:      leagueGreat,
@@ -1596,14 +1674,58 @@ func TestTeamBuilderTool_BudgetFilterRunsBeforeTrim(t *testing.T) {
 	}
 
 	if len(result.Teams) != 1 {
-		t.Fatalf("Teams len = %d, want 1 (filter must drop c-teams BEFORE trim keeps survivors)",
+		t.Fatalf("Teams len = %d, want 1 (filter must drop c-teams BEFORE trim keeps survivors); "+
+			"len=0 would indicate trim ran first and filter dropped the top-scored c-team",
 			len(result.Teams))
 	}
 
 	for _, member := range result.Teams[0].Members {
 		if member.Species == "c" {
-			t.Errorf("c leaked into the returned team despite budget < c climb cost")
+			t.Errorf("c leaked into the returned team despite budget < c thirdMoveCost")
 		}
+	}
+}
+
+// TestTeamBuilderTool_BudgetAggregateCostAlwaysPresent pins the
+// JSON contract: `aggregate_stardust_cost` appears on every team
+// regardless of value. An `omitempty` tag would drop the field on
+// zero-cost teams (all members at target, no second-move cost),
+// breaking the README promise that under-budget teams still carry
+// the total so callers can compare to their inventory.
+func TestTeamBuilderTool_BudgetAggregateCostAlwaysPresent(t *testing.T) {
+	t.Parallel()
+
+	tool := newTeamBuilderTool(t)
+	handler := tool.Handler()
+
+	pool := []tools.Combatant{
+		baseCombatant("a"),
+		baseCombatant("b"),
+		baseCombatant("c"),
+	}
+
+	_, result, err := handler(t.Context(), nil, tools.TeamBuilderParams{
+		Pool:        pool,
+		League:      leagueGreat,
+		TargetLevel: 40.0,
+		Budget:      &tools.BudgetSpec{StardustLimit: 1_000_000},
+	})
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+
+	if len(result.Teams) == 0 {
+		t.Fatal("no teams returned")
+	}
+
+	encoded, err := json.Marshal(result.Teams[0])
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+
+	if !strings.Contains(string(encoded), `"aggregate_stardust_cost"`) {
+		t.Errorf("aggregate_stardust_cost missing from JSON when value is zero (omitempty regressed): %s",
+			encoded)
 	}
 }
 
