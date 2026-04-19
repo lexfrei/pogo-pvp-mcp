@@ -16,8 +16,11 @@ import (
 // exactly [TeamSize] combatants.
 var ErrTeamSizeMismatch = errors.New("team must have exactly 3 members")
 
-// ErrInvalidShields is returned when the shields slice is neither nil
-// nor of length 2 with values in [0, MaxShields].
+// ErrInvalidShields is returned when the shields slice contains a
+// value outside [0, maxShieldCount] or a duplicate scenario value.
+// Phase E broke the v0.1 "length-2 tuple [team, meta] shields"
+// meaning — the field is now a list of symmetric shield scenarios,
+// averaged across.
 var ErrInvalidShields = errors.New("invalid shields")
 
 // ErrMovesetTooShort is returned when a rankings entry for a meta
@@ -125,6 +128,16 @@ type TeamMemberAnalysis struct {
 // simulation sweep (either the multi-scenario mean — "overall" — or
 // one isolated shield scenario). Members carry their AvgRating scoped
 // to this sweep; Coverage / Uncovered / SimulationFailures likewise.
+//
+// SimulationFailures counts (member, opp) pairs whose rating lookup
+// returned ok=false in this scope: for Overall that means every
+// scenario in the scenarios slice failed for that pair (if at least
+// one succeeded the pair contributes its mean and is not counted);
+// for a PerScenario["Ns"] entry that means the single scenario N
+// failed for that pair. The sum over PerScenario entries is not
+// expected to equal Overall — a pair that fails in one scenario but
+// succeeds in another counts in the scenario entry but not in
+// Overall.
 type TeamAnalysisAggregate struct {
 	TeamScore          float64              `json:"team_score"`
 	SimulationFailures int                  `json:"simulation_failures"`
