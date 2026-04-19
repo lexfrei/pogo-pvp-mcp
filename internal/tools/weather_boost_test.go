@@ -197,6 +197,8 @@ func TestWeatherBoost_SingleWeatherCarriesDisclaimer(t *testing.T) {
 func TestWeatherBoost_ResultIsDefensivelyCloned(t *testing.T) {
 	t.Parallel()
 
+	const mutationSentinel = "MUTATED"
+
 	tool := tools.NewWeatherBoostTool()
 	handler := tool.Handler()
 
@@ -205,14 +207,14 @@ func TestWeatherBoost_ResultIsDefensivelyCloned(t *testing.T) {
 		t.Fatalf("first: %v", err)
 	}
 
-	first.Entries[0].BoostedTypes[0] = "MUTATED"
+	first.Entries[0].BoostedTypes[0] = mutationSentinel
 
 	_, second, err := handler(t.Context(), nil, tools.WeatherBoostParams{Weather: "rainy"})
 	if err != nil {
 		t.Fatalf("second: %v", err)
 	}
 
-	if slices.Contains(second.Entries[0].BoostedTypes, "MUTATED") {
+	if slices.Contains(second.Entries[0].BoostedTypes, mutationSentinel) {
 		t.Errorf("second call surfaced mutated data — slice is aliased, not cloned")
 	}
 }

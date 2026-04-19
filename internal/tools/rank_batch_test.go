@@ -290,8 +290,8 @@ func TestRankBatch_TopLevelMetadataEcho(t *testing.T) {
 		t.Errorf("League = %q, want \"great\"", result.League)
 	}
 
-	if result.Cup != "all" {
-		t.Errorf("Cup = %q, want \"all\" (empty input normalised)", result.Cup)
+	if result.Cup != cupAllLabel {
+		t.Errorf("Cup = %q, want %q (empty input normalised)", result.Cup, cupAllLabel)
 	}
 
 	if result.CPCap != 1500 {
