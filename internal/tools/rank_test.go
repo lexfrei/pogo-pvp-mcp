@@ -9,6 +9,7 @@ import (
 
 	"github.com/lexfrei/pogo-pvp-mcp/internal/config"
 	"github.com/lexfrei/pogo-pvp-mcp/internal/gamemaster"
+	"github.com/lexfrei/pogo-pvp-mcp/internal/rankings"
 	"github.com/lexfrei/pogo-pvp-mcp/internal/tools"
 )
 
@@ -62,7 +63,7 @@ func TestRankTool_KnownSpecies(t *testing.T) {
 	t.Parallel()
 
 	mgr := newManagerWithFixture(t, rankFixtureGamemaster)
-	handler := tools.NewRankTool(mgr).Handler()
+	handler := tools.NewRankTool(mgr, nil).Handler()
 
 	_, result, err := handler(t.Context(), nil, tools.RankParams{
 		Species: "medicham",
@@ -87,11 +88,124 @@ func TestRankTool_KnownSpecies(t *testing.T) {
 	}
 }
 
+// newRankingsManagerWithPayload wires a httptest server that serves
+// the given JSON payload under /all/overall/rankings-1500.json so
+// the rank tool can project a recommended_moveset from it.
+func newRankingsManagerWithPayload(t *testing.T, payload string) *rankings.Manager {
+	t.Helper()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/all/overall/rankings-1500.json" {
+			http.NotFound(w, r)
+
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(payload))
+	}))
+	t.Cleanup(server.Close)
+
+	mgr, err := rankings.NewManager(rankings.Config{
+		BaseURL:  server.URL,
+		LocalDir: t.TempDir(),
+	})
+	if err != nil {
+		t.Fatalf("rankings.NewManager: %v", err)
+	}
+
+	return mgr
+}
+
+// TestRankTool_RecommendedMovesetFromRankings confirms that when the
+// tool is constructed with a rankings manager and the species is
+// present in the cup's rankings JSON, RankResult carries the
+// projected fast + charged moveset.
+func TestRankTool_RecommendedMovesetFromRankings(t *testing.T) {
+	t.Parallel()
+
+	const rankingsPayload = `[
+  {
+    "speciesId": "medicham",
+    "speciesName": "Medicham",
+    "rating": 700,
+    "score": 95.2,
+    "moveset": ["COUNTER", "ICE_PUNCH", "PSYCHIC"],
+    "matchups": [],
+    "counters": [],
+    "stats": {"product": 2103, "atk": 106.9, "def": 139.4, "hp": 141}
+  }
+]`
+
+	gm := newManagerWithFixture(t, rankFixtureGamemaster)
+	ranks := newRankingsManagerWithPayload(t, rankingsPayload)
+
+	handler := tools.NewRankTool(gm, ranks).Handler()
+
+	_, result, err := handler(t.Context(), nil, tools.RankParams{
+		Species: "medicham",
+		IV:      [3]int{0, 15, 15},
+		League:  "great",
+	})
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+
+	if result.RecommendedMoveset == nil {
+		t.Fatal("RecommendedMoveset is nil, want populated")
+	}
+	if result.RecommendedMoveset.Fast != "COUNTER" {
+		t.Errorf("Fast = %q, want COUNTER", result.RecommendedMoveset.Fast)
+	}
+	if len(result.RecommendedMoveset.Charged) != 2 {
+		t.Fatalf("Charged len = %d, want 2", len(result.RecommendedMoveset.Charged))
+	}
+	if result.RecommendedMoveset.Charged[0] != "ICE_PUNCH" {
+		t.Errorf("Charged[0] = %q, want ICE_PUNCH", result.RecommendedMoveset.Charged[0])
+	}
+	if result.RecommendedMoveset.Charged[1] != "PSYCHIC" {
+		t.Errorf("Charged[1] = %q, want PSYCHIC", result.RecommendedMoveset.Charged[1])
+	}
+}
+
+// TestRankTool_RecommendedMovesetAbsentForUnknownInRanking confirms
+// that species present in the gamemaster but missing from the
+// rankings slice (common for obscure forms / cup exclusions) get a
+// nil RecommendedMoveset, not an error.
+func TestRankTool_RecommendedMovesetAbsentForUnknownInRanking(t *testing.T) {
+	t.Parallel()
+
+	const rankingsPayload = `[
+  {"speciesId": "azumarill", "speciesName": "Azumarill", "rating": 800, "score": 99,
+   "moveset": ["BUBBLE", "ICE_BEAM", "PLAY_ROUGH"], "matchups": [], "counters": [],
+   "stats": {"product": 2500, "atk": 80, "def": 150, "hp": 200}}
+]`
+
+	gm := newManagerWithFixture(t, rankFixtureGamemaster)
+	ranks := newRankingsManagerWithPayload(t, rankingsPayload)
+
+	handler := tools.NewRankTool(gm, ranks).Handler()
+
+	_, result, err := handler(t.Context(), nil, tools.RankParams{
+		Species: "medicham",
+		IV:      [3]int{0, 15, 15},
+		League:  "great",
+	})
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+
+	if result.RecommendedMoveset != nil {
+		t.Errorf("RecommendedMoveset = %+v, want nil for species absent from ranking",
+			result.RecommendedMoveset)
+	}
+}
+
 func TestRankTool_UnknownSpecies(t *testing.T) {
 	t.Parallel()
 
 	mgr := newManagerWithFixture(t, rankFixtureGamemaster)
-	handler := tools.NewRankTool(mgr).Handler()
+	handler := tools.NewRankTool(mgr, nil).Handler()
 
 	_, _, err := handler(t.Context(), nil, tools.RankParams{
 		Species: "missingno",
@@ -107,7 +221,7 @@ func TestRankTool_UnknownLeague(t *testing.T) {
 	t.Parallel()
 
 	mgr := newManagerWithFixture(t, rankFixtureGamemaster)
-	handler := tools.NewRankTool(mgr).Handler()
+	handler := tools.NewRankTool(mgr, nil).Handler()
 
 	_, _, err := handler(t.Context(), nil, tools.RankParams{
 		Species: "medicham",
@@ -123,7 +237,7 @@ func TestRankTool_InvalidIV(t *testing.T) {
 	t.Parallel()
 
 	mgr := newManagerWithFixture(t, rankFixtureGamemaster)
-	handler := tools.NewRankTool(mgr).Handler()
+	handler := tools.NewRankTool(mgr, nil).Handler()
 
 	_, _, err := handler(t.Context(), nil, tools.RankParams{
 		Species: "medicham",
@@ -146,7 +260,7 @@ func TestRankTool_NoGamemasterLoaded(t *testing.T) {
 		t.Fatalf("NewManager: %v", err)
 	}
 
-	handler := tools.NewRankTool(mgr).Handler()
+	handler := tools.NewRankTool(mgr, nil).Handler()
 
 	_, _, err = handler(t.Context(), nil, tools.RankParams{
 		Species: "medicham",
@@ -173,7 +287,7 @@ func TestRankTool_UnreachableCapSurfacesCleanly(t *testing.T) {
 	t.Parallel()
 
 	mgr := newManagerWithFixture(t, rankFixtureGamemaster)
-	handler := tools.NewRankTool(mgr).Handler()
+	handler := tools.NewRankTool(mgr, nil).Handler()
 
 	// CP cap 1 is below the minimum CP any species can reach: every
 	// IV/level hits the cp=10 floor, so no legal spread fits.
@@ -192,7 +306,7 @@ func TestRankTool_NegativeCPCapRejected(t *testing.T) {
 	t.Parallel()
 
 	mgr := newManagerWithFixture(t, rankFixtureGamemaster)
-	handler := tools.NewRankTool(mgr).Handler()
+	handler := tools.NewRankTool(mgr, nil).Handler()
 
 	_, _, err := handler(t.Context(), nil, tools.RankParams{
 		Species: "medicham",
@@ -209,7 +323,7 @@ func TestRankTool_CPCapOverride(t *testing.T) {
 	t.Parallel()
 
 	mgr := newManagerWithFixture(t, rankFixtureGamemaster)
-	handler := tools.NewRankTool(mgr).Handler()
+	handler := tools.NewRankTool(mgr, nil).Handler()
 
 	// Ultra-tight CP cap that only level-1 / 0-IV entries can meet.
 	_, result, err := handler(t.Context(), nil, tools.RankParams{

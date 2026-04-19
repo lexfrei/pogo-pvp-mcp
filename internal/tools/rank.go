@@ -13,6 +13,7 @@ import (
 
 	pogopvp "github.com/lexfrei/pogo-pvp-engine"
 	"github.com/lexfrei/pogo-pvp-mcp/internal/gamemaster"
+	"github.com/lexfrei/pogo-pvp-mcp/internal/rankings"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -64,33 +65,56 @@ type RankParams struct {
 	Species string `json:"species" jsonschema:"species id in the pvpoke gamemaster (e.g. \"medicham\")"`
 	IV      [3]int `json:"iv" jsonschema:"individual values in [atk, def, sta] order, each 0..15"`
 	League  string `json:"league" jsonschema:"little|great|ultra|master"`
+	Cup     string `json:"cup,omitempty" jsonschema:"cup id from pvpoke (spring/retro/etc.); empty=all; affects recommended_moveset only"`
 	CPCap   int    `json:"cp_cap,omitempty" jsonschema:"overrides the league default CP cap"`
 	XL      bool   `json:"xl,omitempty" jsonschema:"allow XL candy levels above 40"`
 }
 
-// RankResult is the JSON output contract for pvp_rank.
+// Moveset is the fast + charged pairing pvp_rank reports as the
+// current recommended build for the species under the requested
+// (league, cup). Charged can legitimately be 1- or 2-element
+// depending on how pvpoke publishes it — typically 2.
+type Moveset struct {
+	Fast    string   `json:"fast"`
+	Charged []string `json:"charged"`
+}
+
+// RankResult is the JSON output contract for pvp_rank. RecommendedMoveset
+// is projected from the pvpoke rankings JSON for the requested (cup,
+// cap) pair and is absent (omitempty) when either the RankTool was
+// constructed without a rankings manager, the rankings fetch failed,
+// or the species is not present in the ranking for the requested cup.
 type RankResult struct {
-	Species       string  `json:"species"`
-	CP            int     `json:"cp"`
-	StatProduct   float64 `json:"stat_product"`
-	Level         float64 `json:"level"`
-	Atk           float64 `json:"atk"`
-	Def           float64 `json:"def"`
-	HP            int     `json:"hp"`
-	PercentOfBest float64 `json:"percent_of_best"`
-	League        string  `json:"league"`
-	CPCap         int     `json:"cp_cap"`
+	Species            string   `json:"species"`
+	CP                 int      `json:"cp"`
+	StatProduct        float64  `json:"stat_product"`
+	Level              float64  `json:"level"`
+	Atk                float64  `json:"atk"`
+	Def                float64  `json:"def"`
+	HP                 int      `json:"hp"`
+	PercentOfBest      float64  `json:"percent_of_best"`
+	League             string   `json:"league"`
+	Cup                string   `json:"cup"`
+	CPCap              int      `json:"cp_cap"`
+	RecommendedMoveset *Moveset `json:"recommended_moveset,omitempty"`
 }
 
-// RankTool wraps the shared gamemaster.Manager and exposes Handler /
-// Tool constructors suited to the MCP SDK.
+// RankTool wraps the shared gamemaster.Manager plus an optional
+// rankings.Manager. When rankings is non-nil the tool projects the
+// species' recommended moveset for the requested (league, cup) into
+// RankResult.RecommendedMoveset; a nil rankings reduces the tool to
+// its pre-Phase-B behaviour (no moveset in the response).
 type RankTool struct {
-	manager *gamemaster.Manager
+	manager  *gamemaster.Manager
+	rankings *rankings.Manager
 }
 
-// NewRankTool constructs a RankTool bound to the given Manager.
-func NewRankTool(manager *gamemaster.Manager) *RankTool {
-	return &RankTool{manager: manager}
+// NewRankTool constructs a RankTool bound to the given managers.
+// ranks may be nil — typically in tests that don't care about
+// recommended_moveset — in which case the RecommendedMoveset field
+// is always absent from the response.
+func NewRankTool(manager *gamemaster.Manager, ranks *rankings.Manager) *RankTool {
+	return &RankTool{manager: manager, rankings: ranks}
 }
 
 // Tool returns the MCP tool registration metadata.
@@ -130,12 +154,52 @@ func (tool *RankTool) handle(
 		return nil, RankResult{}, err
 	}
 
+	result.RecommendedMoveset = tool.lookupMoveset(ctx, inputs.cpCap, inputs.cup, inputs.speciesID)
+
 	err = ctx.Err()
 	if err != nil {
 		return nil, RankResult{}, fmt.Errorf("rank cancelled: %w", err)
 	}
 
 	return nil, result, nil
+}
+
+// lookupMoveset projects the pvpoke rankings' recommended moveset for
+// the species into a Moveset. Best-effort: nil rankings manager, a
+// fetch error, a species missing from the ranking slice, or a moveset
+// shorter than 1 element all collapse to a nil return so the caller
+// just omits the field from the JSON response.
+func (tool *RankTool) lookupMoveset(
+	ctx context.Context, cpCap int, cup, speciesID string,
+) *Moveset {
+	if tool.rankings == nil {
+		return nil
+	}
+
+	entries, err := tool.rankings.Get(ctx, cpCap, cup)
+	if err != nil {
+		return nil
+	}
+
+	for i := range entries {
+		entry := entries[i]
+		if entry.SpeciesID != speciesID {
+			continue
+		}
+
+		if len(entry.Moveset) == 0 {
+			return nil
+		}
+
+		moveset := &Moveset{Fast: entry.Moveset[0]}
+		if len(entry.Moveset) > 1 {
+			moveset.Charged = append(moveset.Charged, entry.Moveset[1:]...)
+		}
+
+		return moveset
+	}
+
+	return nil
 }
 
 // rankInputs bundles the values derived from RankParams that the build
@@ -145,6 +209,7 @@ type rankInputs struct {
 	ivs       pogopvp.IV
 	cpCap     int
 	league    string
+	cup       string
 	opts      pogopvp.FindSpreadOpts
 	speciesID string
 }
@@ -177,6 +242,7 @@ func resolveRankInputs(manager *gamemaster.Manager, params *RankParams) (rankInp
 		ivs:       ivs,
 		cpCap:     cpCap,
 		league:    params.League,
+		cup:       params.Cup,
 		opts:      pogopvp.FindSpreadOpts{XLAllowed: params.XL},
 		speciesID: params.Species,
 	}, nil
@@ -217,6 +283,7 @@ func buildRankResult(inputs rankInputs) (RankResult, error) {
 		HP:            stats.HP,
 		PercentOfBest: percentOfBest,
 		League:        inputs.league,
+		Cup:           resolveCupLabel(inputs.cup),
 		CPCap:         inputs.cpCap,
 	}, nil
 }

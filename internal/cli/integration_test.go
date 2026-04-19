@@ -75,7 +75,7 @@ func buildWiredServer(t *testing.T) *mcp.Server {
 
 	mcpServer := mcp.NewServer(&mcp.Implementation{Name: "pogo-pvp-mcp-test", Version: "test"}, nil)
 
-	rankTool := tools.NewRankTool(mgr)
+	rankTool := tools.NewRankTool(mgr, ranks)
 	mcp.AddTool(mcpServer, rankTool.Tool(), rankTool.Handler())
 
 	matchupTool := tools.NewMatchupTool(mgr)
