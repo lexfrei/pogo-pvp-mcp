@@ -65,7 +65,7 @@ type RankParams struct {
 	Species string `json:"species" jsonschema:"species id in the pvpoke gamemaster (e.g. \"medicham\")"`
 	IV      [3]int `json:"iv" jsonschema:"individual values in [atk, def, sta] order, each 0..15"`
 	League  string `json:"league" jsonschema:"little|great|ultra|master"`
-	Cup     string `json:"cup,omitempty" jsonschema:"cup id from pvpoke (spring/retro/etc.); empty=all; affects recommended_moveset only"`
+	Cup     string `json:"cup,omitempty" jsonschema:"cup id from pvpoke (spring/retro/etc.); empty=all; affects optimal_moveset lookup only"`
 	CPCap   int    `json:"cp_cap,omitempty" jsonschema:"overrides the league default CP cap"`
 	XL      bool   `json:"xl,omitempty" jsonschema:"allow XL candy levels above 40"`
 }
@@ -138,9 +138,11 @@ type HundoComparison struct {
 
 // RankTool wraps the shared gamemaster.Manager plus an optional
 // rankings.Manager. When rankings is non-nil the tool projects the
-// species' recommended moveset for the requested (league, cup) into
-// RankResult.RecommendedMoveset; a nil rankings reduces the tool to
-// its pre-Phase-B behaviour (no moveset in the response).
+// species' pvpoke-recommended build for the requested (league, cup)
+// into RankResult.OptimalMoveset (and, when OptimalMoveset.HasLegacy
+// is true, searches for a non-legacy alternative in
+// RankResult.NonLegacyMoveset); a nil rankings reduces the tool to
+// its pre-Phase-B behaviour (no moveset fields in the response).
 type RankTool struct {
 	manager  *gamemaster.Manager
 	rankings *rankings.Manager
@@ -148,8 +150,8 @@ type RankTool struct {
 
 // NewRankTool constructs a RankTool bound to the given managers.
 // ranks may be nil — typically in tests that don't care about
-// recommended_moveset — in which case the RecommendedMoveset field
-// is always absent from the response.
+// optimal_moveset / non_legacy_moveset — in which case both
+// moveset fields are always absent from the response.
 func NewRankTool(manager *gamemaster.Manager, ranks *rankings.Manager) *RankTool {
 	return &RankTool{manager: manager, rankings: ranks}
 }

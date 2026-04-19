@@ -193,6 +193,186 @@ func TestTeamBuilder_DisallowLegacyRejectsResolvedLegacy(t *testing.T) {
 	}
 }
 
+// newRankToolFromFixture mirrors newTeamBuilderToolFromFixture for
+// RankTool; used by the legacy-aware rank pipeline tests.
+func newRankToolFromFixture(t *testing.T, gmJSON, ranksJSON string) *tools.RankTool {
+	t.Helper()
+
+	gmServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(gmJSON))
+	}))
+	t.Cleanup(gmServer.Close)
+
+	gmMgr, err := gamemaster.NewManager(config.GamemasterConfig{
+		Source:    gmServer.URL,
+		LocalPath: filepath.Join(t.TempDir(), "gm.json"),
+	})
+	if err != nil {
+		t.Fatalf("NewManager gm: %v", err)
+	}
+
+	err = gmMgr.Refresh(t.Context())
+	if err != nil {
+		t.Fatalf("Refresh gm: %v", err)
+	}
+
+	rankServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(ranksJSON))
+	}))
+	t.Cleanup(rankServer.Close)
+
+	ranksMgr, err := rankings.NewManager(rankings.Config{
+		BaseURL:  rankServer.URL,
+		LocalDir: filepath.Join(t.TempDir(), "rankings"),
+	})
+	if err != nil {
+		t.Fatalf("NewManager rankings: %v", err)
+	}
+
+	return tools.NewRankTool(gmMgr, ranksMgr)
+}
+
+// TestRank_OptimalHasLegacyDetected pins Moveset.HasLegacy tagging:
+// medicham's pvpoke-recommended build in the fixture includes
+// PSYCHIC (legacy on medicham) so HasLegacy must be true.
+func TestRank_OptimalHasLegacyDetected(t *testing.T) {
+	t.Parallel()
+
+	const ranksJSON = `[
+  {"speciesId": "medicham", "speciesName": "Medicham", "rating": 800,
+   "moveset": ["COUNTER", "PSYCHIC", "ICE_PUNCH"],
+   "matchups": [], "counters": [],
+   "stats": {"product": 2100, "atk": 106, "def": 139, "hp": 141}}
+]`
+
+	tool := newRankToolFromFixture(t, legacyFixtureGamemaster, ranksJSON)
+	handler := tool.Handler()
+
+	_, result, err := handler(t.Context(), nil, tools.RankParams{
+		Species: speciesMedicham,
+		IV:      [3]int{0, 15, 15},
+		League:  leagueGreat,
+	})
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+
+	if result.OptimalMoveset == nil {
+		t.Fatal("OptimalMoveset = nil, want populated")
+	}
+	if !result.OptimalMoveset.HasLegacy {
+		t.Error("OptimalMoveset.HasLegacy = false, want true (PSYCHIC is legacy on medicham)")
+	}
+	if result.NonLegacyMoveset == nil {
+		t.Fatal("NonLegacyMoveset = nil, want populated when optimal has legacy")
+	}
+}
+
+// TestRank_NonLegacyAbsentWhenOptimalClean pins that species with
+// a non-legacy recommended build get no non_legacy_moveset field —
+// nothing to compare against.
+func TestRank_NonLegacyAbsentWhenOptimalClean(t *testing.T) {
+	t.Parallel()
+
+	const ranksJSON = `[
+  {"speciesId": "azumarill", "speciesName": "Azumarill", "rating": 900,
+   "moveset": ["BUBBLE", "ICE_BEAM", "PLAY_ROUGH"],
+   "matchups": [], "counters": [],
+   "stats": {"product": 2500, "atk": 80, "def": 150, "hp": 200}}
+]`
+
+	tool := newRankToolFromFixture(t, legacyFixtureGamemaster, ranksJSON)
+	handler := tool.Handler()
+
+	_, result, err := handler(t.Context(), nil, tools.RankParams{
+		Species: "azumarill",
+		IV:      [3]int{0, 15, 15},
+		League:  leagueGreat,
+	})
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+
+	if result.OptimalMoveset == nil {
+		t.Fatal("OptimalMoveset = nil, want populated")
+	}
+	if result.OptimalMoveset.HasLegacy {
+		t.Error("OptimalMoveset.HasLegacy = true, want false (azumarill has no legacy in fixture)")
+	}
+	if result.NonLegacyMoveset != nil {
+		t.Errorf("NonLegacyMoveset = %+v, want nil (nothing to compare)",
+			result.NonLegacyMoveset)
+	}
+}
+
+// TestTeamAnalysis_DisallowLegacyExplicit mirrors the team_builder
+// test on the team_analysis side: an explicit legacy move under
+// DisallowLegacy=true surfaces ErrLegacyConflict before simulation.
+func TestTeamAnalysis_DisallowLegacyExplicit(t *testing.T) {
+	t.Parallel()
+
+	gmServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(legacyFixtureGamemaster))
+	}))
+	t.Cleanup(gmServer.Close)
+
+	gmMgr, err := gamemaster.NewManager(config.GamemasterConfig{
+		Source:    gmServer.URL,
+		LocalPath: filepath.Join(t.TempDir(), "gm.json"),
+	})
+	if err != nil {
+		t.Fatalf("NewManager gm: %v", err)
+	}
+
+	err = gmMgr.Refresh(t.Context())
+	if err != nil {
+		t.Fatalf("Refresh gm: %v", err)
+	}
+
+	rankServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`[]`))
+	}))
+	t.Cleanup(rankServer.Close)
+
+	ranksMgr, err := rankings.NewManager(rankings.Config{
+		BaseURL:  rankServer.URL,
+		LocalDir: filepath.Join(t.TempDir(), "rankings"),
+	})
+	if err != nil {
+		t.Fatalf("NewManager rankings: %v", err)
+	}
+
+	handler := tools.NewTeamAnalysisTool(gmMgr, ranksMgr).Handler()
+
+	team := []tools.Combatant{
+		{
+			Species: speciesMedicham, IV: [3]int{15, 15, 15}, Level: 40,
+			FastMove: "COUNTER", ChargedMoves: []string{movePsychic},
+		},
+		{
+			Species: "azumarill", IV: [3]int{15, 15, 15}, Level: 40,
+			FastMove: "BUBBLE", ChargedMoves: []string{"ICE_BEAM"},
+		},
+		{
+			Species: "machamp", IV: [3]int{15, 15, 15}, Level: 30,
+			FastMove: "COUNTER", ChargedMoves: []string{"CROSS_CHOP"},
+		},
+	}
+
+	_, _, err = handler(t.Context(), nil, tools.TeamAnalysisParams{
+		Team:           team,
+		League:         leagueGreat,
+		DisallowLegacy: true,
+	})
+	if !errors.Is(err, tools.ErrLegacyConflict) {
+		t.Errorf("error = %v, want wrapping ErrLegacyConflict", err)
+	}
+}
+
 // TestMeta_MoveRefCarriesLegacyFlag pins that pvp_meta emits each
 // recommended move as a MoveRef with Legacy tagged from the
 // species' LegacyMoves list.

@@ -109,9 +109,9 @@ func nonLegacyMoves(species *pogopvp.Species, ids []string) []string {
 // will surface the usual ErrUnknownSpecies via the normal combatant
 // builder path.
 func assertNoLegacyInCombatant(
-	snapshot *pogopvp.Gamemaster, spec *Combatant, allowLegacy bool,
+	snapshot *pogopvp.Gamemaster, spec *Combatant, disallowLegacy bool,
 ) error {
-	if allowLegacy || snapshot == nil {
+	if !disallowLegacy || snapshot == nil {
 		return nil
 	}
 
@@ -177,7 +177,7 @@ func rejectTeamLegacy(
 	}
 
 	for i := range team {
-		err := assertNoLegacyInCombatant(snapshot, &team[i], false)
+		err := assertNoLegacyInCombatant(snapshot, &team[i], true)
 		if err != nil {
 			return fmt.Errorf("team[%d]: %w", i, err)
 		}

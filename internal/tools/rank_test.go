@@ -90,7 +90,7 @@ func TestRankTool_KnownSpecies(t *testing.T) {
 
 // newRankingsManagerWithPayload wires a httptest server that serves
 // the given JSON payload under /all/overall/rankings-1500.json so
-// the rank tool can project a recommended_moveset from it.
+// the rank tool can project an optimal_moveset (and non_legacy_moveset) from it.
 func newRankingsManagerWithPayload(t *testing.T, payload string) *rankings.Manager {
 	t.Helper()
 

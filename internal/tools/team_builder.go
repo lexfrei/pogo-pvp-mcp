@@ -201,13 +201,9 @@ func (tool *TeamBuilderTool) resolveTeamBuilderInputs(
 		return nil, err
 	}
 
-	if params.DisallowLegacy {
-		for i := range params.Pool {
-			err = assertNoLegacyInCombatant(snapshot, &params.Pool[i], !params.DisallowLegacy)
-			if err != nil {
-				return nil, fmt.Errorf("pool[%d]: %w", i, err)
-			}
-		}
+	err = rejectTeamLegacy(snapshot, params.Pool, params.DisallowLegacy)
+	if err != nil {
+		return nil, err
 	}
 
 	err = tool.defaultPoolMovesets(ctx, params, cpCap)
