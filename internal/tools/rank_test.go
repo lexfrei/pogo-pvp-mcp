@@ -388,6 +388,41 @@ func TestRankTool_CPCapOverride(t *testing.T) {
 	}
 }
 
+// TestRankTool_CPCapOverrideEmptyRankingsByCup pins the Phase R4.8
+// doc claim that a non-standard cp_cap override yields an empty
+// rankings_by_cup because pvpoke publishes per-cup rankings only at
+// the four standard league caps (500 / 1500 / 2500 / 10000). The
+// override reaches lookupCupRanking via inputs.cpCap, so an
+// unrecognised cap (here 2000) produces 404s on every cup fetch and
+// the aggregated array comes back empty. Fixture rankings manager
+// returns 404 for any unrecognised path, so this test doubles as
+// the "graceful degradation" check for that flow.
+func TestRankTool_CPCapOverrideEmptyRankingsByCup(t *testing.T) {
+	t.Parallel()
+
+	gm := newManagerWithFixture(t, rankFixtureGamemaster)
+	ranks := newRankingsManagerWithPayload(t, `[]`)
+	handler := tools.NewRankTool(gm, ranks).Handler()
+
+	_, result, err := handler(t.Context(), nil, tools.RankParams{
+		Species: speciesMedicham,
+		IV:      [3]int{15, 15, 15},
+		League:  "ultra",
+		CPCap:   2000, // non-standard: pvpoke does not publish rankings at this cap
+	})
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+
+	if result.CP > 2000 {
+		t.Errorf("CP = %d, exceeds override cap 2000", result.CP)
+	}
+
+	if len(result.RankingsByCup) != 0 {
+		t.Errorf("RankingsByCup = %+v, want empty (non-standard cp_cap override)", result.RankingsByCup)
+	}
+}
+
 // rankShadowFixtureGamemaster publishes both medicham and
 // medicham_shadow so Phase X-II pvp_rank tests can verify that
 // Options.Shadow=true flips the lookup to the shadow entry.

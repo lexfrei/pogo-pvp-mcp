@@ -127,6 +127,81 @@ func TestReadmeToolCountConsistent(t *testing.T) {
 	}
 }
 
+// TestReadmeDocumentsTargetLevelAndCPCapNuance pins the Phase R4.8
+// doc-gap fix: the README must explicitly document the semantics of
+// the `target_level` parameter (omit / 0 vs positive) on team tools
+// and the `cp_cap` override on pvp_rank. Past sessions repeatedly hit
+// ambiguity — callers defaulted `target_level: 0` expecting "no
+// powerup" rather than "deepest fit under cap", and `cp_cap`
+// overrides were undocumented. The test locks distinctive phrases so
+// future rewrites can't silently drop them.
+func TestReadmeDocumentsTargetLevelAndCPCapNuance(t *testing.T) {
+	t.Parallel()
+
+	readme := readRepoFile(t, "README.md")
+
+	requiredPhrases := []string{
+		"deepest level fitting the league CP cap",
+		"already_at_or_above_target",
+		"re-searches the optimal level under that cap",
+	}
+
+	for _, phrase := range requiredPhrases {
+		if !strings.Contains(readme, phrase) {
+			t.Errorf("README.md missing required phrase %q (target_level / cp_cap nuance doc drift)", phrase)
+		}
+	}
+}
+
+// TestTargetLevelJSONSchemaTagsMatch pins a sibling invariant of
+// TestReadmeDocumentsTargetLevelAndCPCapNuance: team_analysis.go and
+// team_builder.go both expose `target_level` on their params structs
+// and both route through computeMemberCost with identical semantics.
+// Their jsonschema tags MUST carry the same description — an MCP
+// client reading the per-tool schema over the wire would otherwise
+// see a drift between two tools that behave identically. This test
+// loads both source files as raw text and checks that both contain
+// the canonical description string.
+func TestTargetLevelJSONSchemaTagsMatch(t *testing.T) {
+	t.Parallel()
+
+	const canonical = `"cost target; 0 = deepest fit under cap; positive = 0.5-grid level"`
+
+	for _, path := range []string{
+		"internal/tools/team_builder.go",
+		"internal/tools/team_analysis.go",
+	} {
+		src := readRepoFile(t, path)
+		if !strings.Contains(src, canonical) {
+			t.Errorf("%s missing canonical target_level jsonschema %s (drift between sibling tool schemas)",
+				path, canonical)
+		}
+	}
+}
+
+// TestCPCapJSONSchemaTagsMatch pins the same sibling invariant for
+// the cp_cap override: pvp_rank and pvp_rank_batch both accept the
+// override and route it through resolveCPCap with identical
+// semantics. Their jsonschema tags MUST carry the same description
+// so MCP clients don't see drift between two tools that behave
+// identically.
+func TestCPCapJSONSchemaTagsMatch(t *testing.T) {
+	t.Parallel()
+
+	const canonical = `"override (0 = league default); optimal level re-searched under the override"`
+
+	for _, path := range []string{
+		"internal/tools/rank.go",
+		"internal/tools/rank_batch.go",
+	} {
+		src := readRepoFile(t, path)
+		if !strings.Contains(src, canonical) {
+			t.Errorf("%s missing canonical cp_cap jsonschema %s (drift between sibling tool schemas)",
+				path, canonical)
+		}
+	}
+}
+
 // TestReportDataIssueURLMatchesLiveRepo pins the round-2 fix for
 // pvp_report_data_issue: the tool's outbound URLs must target the
 // live GitHub repository name, not the Go module path. CLAUDE.md

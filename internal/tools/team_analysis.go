@@ -99,6 +99,22 @@ const rankingsMaxLevelCap = 50
 // both sides to that count; ratings are averaged across scenarios.
 // nil / empty → [1] (single 1v1 scenario). Phase E broke the v0.1
 // `[team, meta]` asymmetric pair — pre-v0.1 rename.
+//
+// TargetLevel nuance (identical to TeamBuilderParams.TargetLevel —
+// both tools share computeMemberCost):
+//
+//   - Omitted / zero — the cost helper computes the deepest 0.5-
+//     grid level at which a 15/15/15 hundo of the same species
+//     would still fit the league CP cap, and uses that as the
+//     target. This is the "max powerup without busting cap" target
+//     a competitive player would aim for.
+//   - Positive — the exact 0.5-grid level is used verbatim as the
+//     target (off-grid / out-of-range values rejected with
+//     ErrInvalidTargetLevel).
+//   - Members whose current level already reaches or exceeds the
+//     resolved target get the already_at_or_above_target flag and
+//     their powerup cost clamps to zero (no "negative cost" from
+//     an inverted climb).
 type TeamAnalysisParams struct {
 	Team           []Combatant `json:"team" jsonschema:"exactly 3 team members"`
 	League         string      `json:"league" jsonschema:"little|great|ultra|master"`
@@ -106,7 +122,7 @@ type TeamAnalysisParams struct {
 	TopN           int         `json:"top_n,omitempty" jsonschema:"meta species to sweep (default 30)"`
 	Shields        []int       `json:"shields,omitempty" jsonschema:"symmetric shield scenarios; omit for [1]; averaged; each 0..2"`
 	DisallowLegacy bool        `json:"disallow_legacy,omitempty" jsonschema:"reject legacy moves; default false (legacy allowed)"`
-	TargetLevel    float64     `json:"target_level,omitempty" jsonschema:"target level for cost estimation; 0 = max level under league CP cap"`
+	TargetLevel    float64     `json:"target_level,omitempty" jsonschema:"cost target; 0 = deepest fit under cap; positive = 0.5-grid level"`
 }
 
 // TeamMemberAnalysis describes one team member's performance against

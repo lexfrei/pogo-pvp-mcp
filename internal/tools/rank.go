@@ -82,11 +82,27 @@ var standardLeagues = []leagueSpec{
 // shadow atk/def multipliers are applied. The parameter will reappear
 // once that wiring is in place so callers get a different CP / SP when
 // they ask for shadow.
+//
+// CPCap nuance:
+//
+//   - Omitted / zero — the league's canonical cap is used (500 /
+//     1500 / 2500 / 10000 for little / great / ultra / master).
+//   - Positive override — the supplied cap replaces the league
+//     default. The optimal-level search re-runs under that cap,
+//     so all of Level / CP / StatProduct / PercentOfBest reflect
+//     the overridden cap, not the league's default. Use-case:
+//     exploring hypothetical tournament formats (e.g. cpCap=2000,
+//     league="ultra"). The rankings_by_cup lookup uses the same
+//     resolved cap — overriding with a non-standard value (not
+//     500 / 1500 / 2500 / 10000) yields an empty rankings_by_cup
+//     because pvpoke publishes per-cup rankings only at standard
+//     league caps. That's deliberate: silently falling back to
+//     the league default would mask the CP-cap mismatch.
 type RankParams struct {
 	Species string           `json:"species" jsonschema:"species id in the pvpoke gamemaster (e.g. \"medicham\")"`
 	IV      [3]int           `json:"iv" jsonschema:"individual values in [atk, def, sta] order, each 0..15"`
 	League  string           `json:"league" jsonschema:"little|great|ultra|master"`
-	CPCap   int              `json:"cp_cap,omitempty" jsonschema:"overrides the league default CP cap"`
+	CPCap   int              `json:"cp_cap,omitempty" jsonschema:"override (0 = league default); optimal level re-searched under the override"`
 	XL      bool             `json:"xl,omitempty" jsonschema:"allow XL candy levels above 40"`
 	Options CombatantOptions `json:"options,omitzero" jsonschema:"shadow / lucky / purified flags; Shadow flips to the pvpoke _shadow entry"`
 }
