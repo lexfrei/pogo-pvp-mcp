@@ -380,6 +380,58 @@ func TestCounterFinder_DisallowLegacyRejectsTarget(t *testing.T) {
 	}
 }
 
+// TestCounterFinder_DisallowLegacyFiltersMetaFallback pins the
+// Phase-1E review-round-2 blocker fix: when FromPool is empty and
+// DisallowLegacy=true, ranking entries whose pvpoke recommended
+// moveset contains a species-legacy move must be filtered out
+// before scoring, so the tool never recommends a counter the caller
+// cannot actually field. medicham has PSYCHIC as legacy in the
+// fixture; a ranks list where medicham's recommended moveset is
+// [COUNTER, PSYCHIC] must not appear in the Counters slice under
+// DisallowLegacy=true, but azumarill (all-legal moveset) must.
+func TestCounterFinder_DisallowLegacyFiltersMetaFallback(t *testing.T) {
+	t.Parallel()
+
+	const ranksJSON = `[
+  {"speciesId": "medicham", "speciesName": "Medicham", "rating": 900,
+   "moveset": ["COUNTER", "PSYCHIC"],
+   "matchups": [], "counters": [],
+   "stats": {"product": 2400, "atk": 120, "def": 150, "hp": 155}},
+  {"speciesId": "azumarill", "speciesName": "Azumarill", "rating": 880,
+   "moveset": ["BUBBLE", "ICE_BEAM"],
+   "matchups": [], "counters": [],
+   "stats": {"product": 2500, "atk": 80, "def": 150, "hp": 200}}
+]`
+
+	tool := newCounterFinderTool(t, legacyFixtureGamemaster, ranksJSON)
+	handler := tool.Handler()
+
+	_, result, err := handler(t.Context(), nil, tools.CounterFinderParams{
+		Target: tools.Combatant{
+			Species: "machamp", IV: [3]int{15, 15, 15}, Level: 40,
+			FastMove: moveCounter, ChargedMoves: []string{"CROSS_CHOP"},
+		},
+		League:         leagueGreat,
+		TopN:           5,
+		DisallowLegacy: true,
+	})
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+
+	for _, counter := range result.Counters {
+		if counter.Counter.Species == speciesMedicham {
+			t.Errorf(
+				"medicham surfaced under DisallowLegacy=true with legacy PSYCHIC in recommended moveset; "+
+					"counters = %+v", result.Counters)
+		}
+	}
+
+	if len(result.Counters) == 0 {
+		t.Error("Counters empty; expected azumarill (all-legal moveset) to remain after filtering")
+	}
+}
+
 // TestCounterFinder_InvalidTopN rejects negative top_n.
 func TestCounterFinder_InvalidTopN(t *testing.T) {
 	t.Parallel()

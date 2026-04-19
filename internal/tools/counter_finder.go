@@ -283,6 +283,10 @@ func (tool *CounterFinderTool) resolveMetaCandidates(
 
 	metaEntries := entries[:min(metaTopN, len(entries))]
 
+	if params.DisallowLegacy {
+		metaEntries = filterLegacyMetaEntries(snapshot, metaEntries)
+	}
+
 	combatants, kept, _, err := buildMetaCombatants(snapshot, metaEntries, cpCap, shields)
 	if err != nil {
 		return nil, nil, err
@@ -311,6 +315,31 @@ func (tool *CounterFinderTool) resolveMetaCandidates(
 	}
 
 	return combatants, specs, nil
+}
+
+// filterLegacyMetaEntries drops ranking entries whose pvpoke
+// recommended moveset contains a legacy move for the species, so
+// DisallowLegacy=true in the meta-fallback branch honours the same
+// contract as the explicit-pool branch (rejectTeamLegacy). Entries
+// whose species is missing from the snapshot are kept — the
+// downstream buildMetaCombatants will skip them with ErrUnknownSpecies
+// in line with the existing tolerance for gamemaster / rankings
+// cache skew.
+func filterLegacyMetaEntries(
+	snapshot *pogopvp.Gamemaster, entries []rankings.RankingEntry,
+) []rankings.RankingEntry {
+	out := make([]rankings.RankingEntry, 0, len(entries))
+
+	for i := range entries {
+		species, ok := snapshot.Pokemon[entries[i].SpeciesID]
+		if ok && anyLegacyMove(&species, entries[i].Moveset) {
+			continue
+		}
+
+		out = append(out, entries[i])
+	}
+
+	return out
 }
 
 // scoreCandidates runs the core simulation sweep: for every
@@ -375,7 +404,7 @@ func scoreCounter(
 			continue
 		}
 
-		rating := scenarioRating(&att, &def, &result)
+		rating := ratingFromResult(&att, &def, &result)
 
 		results = append(results, CounterScenarioResult{
 			Shields:            shields,
@@ -396,25 +425,4 @@ func scoreCounter(
 		BattleRating:    sum / counted,
 		ScenarioResults: results,
 	}, true
-}
-
-// scenarioRating computes the same 0..1000 rating that
-// team_analysis.ratingFor produces, but from an existing
-// BattleResult rather than re-running Simulate. Duplicates the
-// rating formula on purpose — factoring a shared helper would
-// couple counter_finder to the team_analysis scoring internals.
-func scenarioRating(
-	attacker, defender *pogopvp.Combatant, result *pogopvp.BattleResult,
-) int {
-	attMax := initialHP(attacker)
-	defMax := initialHP(defender)
-
-	switch result.Winner {
-	case 0:
-		return ratingMidpoint + scaleHP(result.HPRemaining[0], attMax)
-	case 1:
-		return ratingMidpoint - scaleHP(result.HPRemaining[1], defMax)
-	default:
-		return ratingMidpoint
-	}
 }
