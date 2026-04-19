@@ -90,3 +90,25 @@ func TestReadmeDocumentsEngineShadowLimitation(t *testing.T) {
 		t.Errorf("README.md must call out that the simulator does NOT apply shadow ATK/DEF multipliers")
 	}
 }
+
+// TestReadmeToolCountConsistent catches the round-1 blocker that
+// landed during pvp_report_data_issue: README.md had the header
+// count updated (nineteen → twenty) but a downstream paragraph
+// still said "nineteen". Locks both numeric words the README
+// uses against each other: if the header says "twenty" then the
+// walkthrough body must say "twenty" too, and "nineteen" must not
+// appear anywhere in the README once the new tool has landed.
+func TestReadmeToolCountConsistent(t *testing.T) {
+	t.Parallel()
+
+	readme := readRepoFile(t, "README.md")
+
+	// "nineteen" is the stale word the round-1 reviewer caught.
+	// Any occurrence is doc drift relative to the current tool
+	// count, so ban it outright. If a future phase drops a tool
+	// and the count goes back to 19, re-enable the word in a
+	// focused doc update.
+	if strings.Contains(readme, "nineteen") {
+		t.Errorf("README.md still contains stale tool count \"nineteen\" (current count is 20)")
+	}
+}

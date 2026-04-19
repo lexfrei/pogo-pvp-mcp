@@ -8,9 +8,10 @@ import (
 
 // ReportDataIssueParams is intentionally empty — the tool is a
 // zero-arg static response pointing callers at the GitHub issue
-// workflow. Keeping the struct for future extensibility (a caller
-// might want to pass a category hint one day) without shipping
-// that surface prematurely.
+// workflow. The struct (rather than a bare `any`) is required by
+// the MCP SDK's ToolHandlerFor[In, Out] signature; no fields are
+// planned here because the Result-level godoc explains why
+// categorisation of issue types is a bad idea.
 type ReportDataIssueParams struct{}
 
 // ReportDataIssueResult carries the guidance text. RepositoryURL
@@ -79,10 +80,10 @@ const (
 // and community correction is the primary signal channel).
 const reportDataIssueMessage = "Several tools in this MCP server carry hardcoded Niantic data (weather-boost " +
 	"table, encounter CP rules, powerup stardust buckets, shadow/purified cost multipliers, evolution " +
-	"structure). Those values can drift when Niantic adjusts a mechanic between the reference date stamped " +
-	"in the source and the current live game. If you spot a mismatch between a tool response and the " +
-	"authoritative source (Bulbapedia, in-game display, Niantic patch notes), open an issue on GitHub with " +
-	"the checklist items below so the maintainer can verify and patch the table."
+	"structure). Those values can drift when Niantic adjusts a mechanic after the table was captured. " +
+	"If you spot a mismatch between a tool response and the authoritative source (Bulbapedia, in-game " +
+	"display, Niantic patch notes), open an issue on GitHub with the checklist items below so the " +
+	"maintainer can verify and patch the table."
 
 // handle returns the static response. No context work, no
 // external I/O, no validation — this is a pure constant payload.

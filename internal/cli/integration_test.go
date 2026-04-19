@@ -268,3 +268,67 @@ func TestIntegration_CallRank(t *testing.T) {
 		t.Errorf("StatProduct = %f, want positive", decoded.StatProduct)
 	}
 }
+
+// TestIntegration_CallReportDataIssue round-trips the zero-arg
+// static-response tool over the MCP transport. Its params struct
+// is empty — some JSON-schema generators treat empty object
+// schemas inconsistently, so the over-the-wire path is worth a
+// dedicated pin alongside the direct handler test in the tools
+// package.
+func TestIntegration_CallReportDataIssue(t *testing.T) {
+	t.Parallel()
+
+	ctx := t.Context()
+	server := buildWiredServer(t)
+
+	serverTransport, clientTransport := mcp.NewInMemoryTransports()
+
+	_, err := server.Connect(ctx, serverTransport, nil)
+	if err != nil {
+		t.Fatalf("server.Connect: %v", err)
+	}
+
+	client := mcp.NewClient(&mcp.Implementation{Name: "test-client", Version: "test"}, nil)
+
+	session, err := client.Connect(ctx, clientTransport, nil)
+	if err != nil {
+		t.Fatalf("client.Connect: %v", err)
+	}
+	defer session.Close()
+
+	result, err := session.CallTool(ctx, &mcp.CallToolParams{
+		Name:      "pvp_report_data_issue",
+		Arguments: map[string]any{},
+	})
+	if err != nil {
+		t.Fatalf("CallTool: %v", err)
+	}
+
+	if result.IsError {
+		t.Fatalf("CallTool returned IsError: %+v", result)
+	}
+
+	rawJSON, err := json.Marshal(result.StructuredContent)
+	if err != nil {
+		t.Fatalf("marshal structured content: %v", err)
+	}
+
+	var decoded tools.ReportDataIssueResult
+
+	err = json.Unmarshal(rawJSON, &decoded)
+	if err != nil {
+		t.Fatalf("unmarshal ReportDataIssueResult: %v", err)
+	}
+
+	if decoded.RepositoryURL == "" {
+		t.Errorf("RepositoryURL empty on wire payload")
+	}
+
+	if decoded.IssuesURL == "" {
+		t.Errorf("IssuesURL empty on wire payload")
+	}
+
+	if len(decoded.ChecklistHints) == 0 {
+		t.Errorf("ChecklistHints empty on wire payload")
+	}
+}
