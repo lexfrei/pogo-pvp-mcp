@@ -108,11 +108,14 @@ func buildWiredServer(t *testing.T) *mcp.Server {
 	counterFinderTool := tools.NewCounterFinderTool(mgr, ranks)
 	mcp.AddTool(mcpServer, counterFinderTool.Tool(), counterFinderTool.Handler())
 
+	evolutionPreviewTool := tools.NewEvolutionPreviewTool(mgr)
+	mcp.AddTool(mcpServer, evolutionPreviewTool.Tool(), evolutionPreviewTool.Handler())
+
 	return mcpServer
 }
 
 // TestIntegration_ListTools verifies that a client connected via the
-// in-memory transport sees all eleven currently implemented tools
+// in-memory transport sees all twelve currently implemented tools
 // advertised. Guards against a silent drop of a registered tool from
 // buildMCPServer.
 func TestIntegration_ListTools(t *testing.T) {
@@ -159,6 +162,7 @@ func TestIntegration_ListTools(t *testing.T) {
 		"pvp_type_matchup",
 		"pvp_level_from_cp",
 		"pvp_counter_finder",
+		"pvp_evolution_preview",
 	}
 
 	for _, name := range expected {
