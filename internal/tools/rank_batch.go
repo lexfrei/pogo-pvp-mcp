@@ -207,6 +207,7 @@ func runRankBatchEntry(
 		Cup:     params.Cup,
 		CPCap:   resolvedCPCap,
 		XL:      params.XL,
+		Options: params.Options,
 	}
 
 	_, result, err := handler(ctx, req, single)

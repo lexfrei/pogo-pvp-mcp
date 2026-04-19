@@ -310,3 +310,59 @@ func TestCPLimitsTool_NoGamemasterLoaded(t *testing.T) {
 		t.Errorf("error = %v, want wrapping ErrGamemasterNotLoaded", err)
 	}
 }
+
+// cplimitsShadowFixture augments the default fixture with
+// medicham_shadow so Phase X-II shadow-option tests can flip the
+// lookup to the dedicated shadow entry.
+const cplimitsShadowFixture = `{
+  "id": "gamemaster",
+  "timestamp": "2026-04-19 00:00:00",
+  "pokemon": [
+    {"dex": 308, "speciesId": "medicham", "speciesName": "Medicham",
+     "baseStats": {"atk": 121, "def": 152, "hp": 155},
+     "types": ["fighting", "psychic"],
+     "fastMoves": ["COUNTER"], "chargedMoves": ["ICE_PUNCH"],
+     "released": true},
+    {"dex": 308, "speciesId": "medicham_shadow", "speciesName": "Medicham (Shadow)",
+     "baseStats": {"atk": 121, "def": 152, "hp": 155},
+     "types": ["fighting", "psychic"],
+     "fastMoves": ["COUNTER"], "chargedMoves": ["ICE_PUNCH"],
+     "released": true}
+  ],
+  "moves": [
+    {"moveId": "COUNTER", "name": "Counter", "type": "fighting",
+     "power": 8, "energy": 0, "energyGain": 7, "cooldown": 1000, "turns": 2},
+    {"moveId": "ICE_PUNCH", "name": "Ice Punch", "type": "ice",
+     "power": 55, "energy": 40, "energyGain": 0, "cooldown": 500}
+  ]
+}`
+
+// TestCPLimitsTool_ShadowOptionResolvesToShadowEntry pins Phase
+// X-II: Options.Shadow=true on pvp_cp_limits flips the lookup to
+// the "_shadow" gamemaster entry. Shadow stats in pvpoke are
+// identical to base, so the CP numbers match — the behavioural
+// signal is ResolvedSpeciesID.
+func TestCPLimitsTool_ShadowOptionResolvesToShadowEntry(t *testing.T) {
+	t.Parallel()
+
+	mgr := newManagerWithFixture(t, cplimitsShadowFixture)
+	handler := tools.NewCPLimitsTool(mgr).Handler()
+
+	_, result, err := handler(t.Context(), nil, tools.CPLimitsParams{
+		Species: speciesMedicham,
+		IV:      [3]int{15, 15, 15},
+		Options: tools.CombatantOptions{Shadow: true},
+	})
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+
+	if result.ResolvedSpeciesID != speciesMedichamShadow {
+		t.Errorf("ResolvedSpeciesID = %q, want %q (Options.Shadow must flip lookup)",
+			result.ResolvedSpeciesID, speciesMedichamShadow)
+	}
+
+	if result.ShadowVariantMissing {
+		t.Errorf("ShadowVariantMissing = true; fixture publishes _shadow — must not signal missing")
+	}
+}

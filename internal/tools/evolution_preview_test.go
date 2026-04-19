@@ -762,3 +762,82 @@ func TestEvolutionPreview_DepthCap(t *testing.T) {
 		}
 	}
 }
+
+// evolutionShadowFixture publishes scyther + scizor (single-hop
+// evolution) plus scyther_shadow so the Phase X-II test can verify
+// Options.Shadow flips the base-species lookup while evolutions
+// themselves still come from the non-shadow chain (pvpoke does not
+// publish per-stage shadow descendants).
+const evolutionShadowFixture = `{
+  "id": "gamemaster",
+  "timestamp": "2026-04-19 00:00:00",
+  "pokemon": [
+    {"dex": 123, "speciesId": "scyther", "speciesName": "Scyther",
+     "baseStats": {"atk": 218, "def": 170, "hp": 172},
+     "types": ["bug", "flying"],
+     "fastMoves": ["FURY_CUTTER"], "chargedMoves": ["NIGHT_SLASH"],
+     "family": {"id": "FAMILY_SCYTHER", "evolutions": ["scizor"]},
+     "released": true},
+    {"dex": 123, "speciesId": "scyther_shadow", "speciesName": "Scyther (Shadow)",
+     "baseStats": {"atk": 218, "def": 170, "hp": 172},
+     "types": ["bug", "flying"],
+     "fastMoves": ["FURY_CUTTER"], "chargedMoves": ["NIGHT_SLASH"],
+     "family": {"id": "FAMILY_SCYTHER", "evolutions": ["scizor"]},
+     "released": true},
+    {"dex": 212, "speciesId": "scizor", "speciesName": "Scizor",
+     "baseStats": {"atk": 236, "def": 181, "hp": 172},
+     "types": ["bug", "steel"],
+     "fastMoves": ["BULLET_PUNCH"], "chargedMoves": ["IRON_HEAD"],
+     "family": {"id": "FAMILY_SCYTHER", "parent": "scyther"},
+     "released": true}
+  ],
+  "moves": [
+    {"moveId": "FURY_CUTTER", "name": "Fury Cutter", "type": "bug",
+     "power": 3, "energy": 0, "energyGain": 6, "cooldown": 500, "turns": 1},
+    {"moveId": "NIGHT_SLASH", "name": "Night Slash", "type": "dark",
+     "power": 50, "energy": 35, "cooldown": 500},
+    {"moveId": "BULLET_PUNCH", "name": "Bullet Punch", "type": "steel",
+     "power": 6, "energy": 0, "energyGain": 7, "cooldown": 500, "turns": 1},
+    {"moveId": "IRON_HEAD", "name": "Iron Head", "type": "steel",
+     "power": 70, "energy": 50, "cooldown": 500}
+  ]
+}`
+
+// TestEvolutionPreview_ShadowOptionResolvesToShadowEntry pins
+// Phase X-II: Options.Shadow=true on pvp_evolution_preview flips
+// the base-species lookup to the "_shadow" entry, and the response
+// echoes ResolvedSpeciesID. Descendants are still drawn from the
+// shadow row's Evolutions list, which in pvpoke practice points
+// back to the non-shadow evolved form (scyther_shadow evolves to
+// scizor, not scizor_shadow).
+func TestEvolutionPreview_ShadowOptionResolvesToShadowEntry(t *testing.T) {
+	t.Parallel()
+
+	tool := newEvolutionPreviewTool(t, evolutionShadowFixture)
+	handler := tool.Handler()
+
+	_, result, err := handler(t.Context(), nil, tools.EvolutionPreviewParams{
+		Species: "scyther",
+		IV:      [3]int{15, 15, 15},
+		CP:      2500,
+		XL:      true,
+		Options: tools.CombatantOptions{Shadow: true},
+	})
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+
+	if result.ResolvedSpeciesID != "scyther_shadow" {
+		t.Errorf("ResolvedSpeciesID = %q, want %q (Options.Shadow must flip lookup)",
+			result.ResolvedSpeciesID, "scyther_shadow")
+	}
+
+	if result.ShadowVariantMissing {
+		t.Errorf("ShadowVariantMissing = true; fixture publishes _shadow — must not signal missing")
+	}
+
+	if len(result.Evolutions) != 1 || result.Evolutions[0].Species != "scizor" {
+		t.Errorf("Evolutions = %+v, want [scizor] (shadow evolves to non-shadow form)",
+			result.Evolutions)
+	}
+}

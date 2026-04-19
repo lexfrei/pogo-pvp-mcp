@@ -191,3 +191,132 @@ func TestLevelFromCP_NoGamemasterLoaded(t *testing.T) {
 		t.Errorf("error = %v, want wrapping ErrGamemasterNotLoaded", err)
 	}
 }
+
+// levelFromCPShadowFixture mirrors levelFromCPFixture but also
+// publishes "medicham_shadow" as a distinct gamemaster entry so
+// Options.Shadow can flip the lookup. Stats are identical (pvpoke
+// publishes shadow rows with the same BaseStats; the flag is
+// semantic, not stat-multiplicative in the gamemaster).
+const levelFromCPShadowFixture = `{
+  "id": "gamemaster",
+  "timestamp": "2026-04-19 00:00:00",
+  "pokemon": [
+    {"dex": 308, "speciesId": "medicham", "speciesName": "Medicham",
+     "baseStats": {"atk": 121, "def": 152, "hp": 155},
+     "types": ["fighting", "psychic"],
+     "fastMoves": ["COUNTER"], "chargedMoves": ["ICE_PUNCH"],
+     "released": true},
+    {"dex": 308, "speciesId": "medicham_shadow", "speciesName": "Medicham (Shadow)",
+     "baseStats": {"atk": 121, "def": 152, "hp": 155},
+     "types": ["fighting", "psychic"],
+     "fastMoves": ["COUNTER"], "chargedMoves": ["ICE_PUNCH"],
+     "released": true}
+  ],
+  "moves": [
+    {"moveId": "COUNTER", "name": "Counter", "type": "fighting",
+     "power": 8, "energy": 0, "energyGain": 7, "cooldown": 1000, "turns": 2},
+    {"moveId": "ICE_PUNCH", "name": "Ice Punch", "type": "ice",
+     "power": 55, "energy": 40, "cooldown": 500}
+  ]
+}`
+
+// TestLevelFromCP_ShadowOptionResolvesToShadowEntry pins Phase X-II:
+// Options.Shadow=true must flip the species lookup to the "_shadow"
+// pvpoke entry, and the response must echo ResolvedSpeciesID =
+// "medicham_shadow" so callers can verify the redirect happened.
+func TestLevelFromCP_ShadowOptionResolvesToShadowEntry(t *testing.T) {
+	t.Parallel()
+
+	mgr := newManagerWithFixture(t, levelFromCPShadowFixture)
+	handler := tools.NewLevelFromCPTool(mgr).Handler()
+
+	_, result, err := handler(t.Context(), nil, tools.LevelFromCPParams{
+		Species: speciesMedicham,
+		IV:      [3]int{15, 15, 15},
+		CP:      1500,
+		XL:      true,
+		Options: tools.CombatantOptions{Shadow: true},
+	})
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+
+	if result.ResolvedSpeciesID != speciesMedichamShadow {
+		t.Errorf("ResolvedSpeciesID = %q, want %q (Options.Shadow must flip to _shadow entry)",
+			result.ResolvedSpeciesID, speciesMedichamShadow)
+	}
+
+	if result.ShadowVariantMissing {
+		t.Errorf("ShadowVariantMissing = true; fixture publishes _shadow entry — must not signal missing")
+	}
+}
+
+// TestLevelFromCP_ShadowMissingFallback pins the converse path:
+// Options.Shadow=true when pvpoke does not publish the shadow row
+// falls back to the base species with ShadowVariantMissing=true.
+func TestLevelFromCP_ShadowMissingFallback(t *testing.T) {
+	t.Parallel()
+
+	mgr := newManagerWithFixture(t, levelFromCPFixture)
+	handler := tools.NewLevelFromCPTool(mgr).Handler()
+
+	_, result, err := handler(t.Context(), nil, tools.LevelFromCPParams{
+		Species: speciesMedicham,
+		IV:      [3]int{15, 15, 15},
+		CP:      1500,
+		XL:      true,
+		Options: tools.CombatantOptions{Shadow: true},
+	})
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+
+	if result.ResolvedSpeciesID != speciesMedicham {
+		t.Errorf("ResolvedSpeciesID = %q, want %q (fallback to base)",
+			result.ResolvedSpeciesID, speciesMedicham)
+	}
+
+	if !result.ShadowVariantMissing {
+		t.Errorf("ShadowVariantMissing = false; fixture does not publish _shadow — must signal missing")
+	}
+}
+
+// TestLevelFromCP_LuckyPurifiedAreNoOp pins the intentional no-op
+// contract for Options.Lucky / Options.Purified in the info-path
+// tools. CP inversion is stat-driven; Lucky is a stardust-only
+// discount (powerup-side) and Purified affects costs, not stats.
+// Both flags must be accepted without error and must yield the
+// identical result as a no-flags call.
+func TestLevelFromCP_LuckyPurifiedAreNoOp(t *testing.T) {
+	t.Parallel()
+
+	mgr := newManagerWithFixture(t, levelFromCPFixture)
+	handler := tools.NewLevelFromCPTool(mgr).Handler()
+
+	base := tools.LevelFromCPParams{
+		Species: speciesMedicham,
+		IV:      [3]int{0, 15, 15},
+		CP:      1500,
+		XL:      true,
+	}
+
+	_, baseline, err := handler(t.Context(), nil, base)
+	if err != nil {
+		t.Fatalf("baseline: %v", err)
+	}
+
+	withFlags := base
+	withFlags.Options = tools.CombatantOptions{Lucky: true, Purified: true}
+
+	_, flagged, err := handler(t.Context(), nil, withFlags)
+	if err != nil {
+		t.Fatalf("flagged: %v", err)
+	}
+
+	if baseline.Level != flagged.Level ||
+		baseline.CP != flagged.CP ||
+		baseline.StatProduct != flagged.StatProduct {
+		t.Errorf("Lucky/Purified must be no-op on CP inversion; got baseline=%+v flagged=%+v",
+			baseline, flagged)
+	}
+}

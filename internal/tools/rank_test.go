@@ -373,7 +373,7 @@ func TestRankTool_CPCapOverride(t *testing.T) {
 
 	// Ultra-tight CP cap that only level-1 / 0-IV entries can meet.
 	_, result, err := handler(t.Context(), nil, tools.RankParams{
-		Species: "medicham",
+		Species: speciesMedicham,
 		IV:      [3]int{0, 0, 0},
 		League:  "great",
 		CPCap:   100,
@@ -384,5 +384,66 @@ func TestRankTool_CPCapOverride(t *testing.T) {
 
 	if result.CP > 100 {
 		t.Errorf("CP = %d, exceeds override cap 100", result.CP)
+	}
+}
+
+// rankShadowFixtureGamemaster publishes both medicham and
+// medicham_shadow so Phase X-II pvp_rank tests can verify that
+// Options.Shadow=true flips the lookup to the shadow entry.
+const rankShadowFixtureGamemaster = `{
+  "id": "gamemaster",
+  "timestamp": "2026-04-19 00:00:00",
+  "pokemon": [
+    {"dex": 308, "speciesId": "medicham", "speciesName": "Medicham",
+     "baseStats": {"atk": 121, "def": 152, "hp": 155},
+     "types": ["fighting", "psychic"],
+     "fastMoves": ["COUNTER"], "chargedMoves": ["ICE_PUNCH"], "released": true},
+    {"dex": 308, "speciesId": "medicham_shadow", "speciesName": "Medicham (Shadow)",
+     "baseStats": {"atk": 121, "def": 152, "hp": 155},
+     "types": ["fighting", "psychic"],
+     "fastMoves": ["COUNTER"], "chargedMoves": ["ICE_PUNCH"], "released": true}
+  ],
+  "moves": [
+    {"moveId": "COUNTER", "name": "Counter", "type": "fighting",
+     "power": 8, "energy": 0, "energyGain": 7, "cooldown": 1000, "turns": 2},
+    {"moveId": "ICE_PUNCH", "name": "Ice Punch", "type": "ice",
+     "power": 55, "energy": 40, "energyGain": 0, "cooldown": 500}
+  ]
+}`
+
+// TestRankTool_ShadowOptionResolvesToShadowEntry pins Phase X-II:
+// Options.Shadow=true on pvp_rank flips the species lookup to the
+// "_shadow" entry. The response echoes ResolvedSpeciesID so the
+// caller can tell that the redirect happened (stats line is the
+// same because pvpoke publishes shadow rows with identical
+// BaseStats; the signal is purely the id).
+func TestRankTool_ShadowOptionResolvesToShadowEntry(t *testing.T) {
+	t.Parallel()
+
+	mgr := newManagerWithFixture(t, rankShadowFixtureGamemaster)
+	handler := tools.NewRankTool(mgr, nil).Handler()
+
+	_, result, err := handler(t.Context(), nil, tools.RankParams{
+		Species: speciesMedicham,
+		IV:      [3]int{15, 15, 15},
+		League:  leagueGreat,
+		Options: tools.CombatantOptions{Shadow: true},
+	})
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+
+	if result.Species != speciesMedicham {
+		t.Errorf("Species = %q, want %q (echo of input)",
+			result.Species, speciesMedicham)
+	}
+
+	if result.ResolvedSpeciesID != "medicham_shadow" {
+		t.Errorf("ResolvedSpeciesID = %q, want %q (Options.Shadow must flip lookup)",
+			result.ResolvedSpeciesID, "medicham_shadow")
+	}
+
+	if result.ShadowVariantMissing {
+		t.Errorf("ShadowVariantMissing = true; fixture publishes _shadow — must not signal missing")
 	}
 }

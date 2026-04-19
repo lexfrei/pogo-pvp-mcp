@@ -334,3 +334,141 @@ func TestRankBatch_DuplicateIVsPreserveOrder(t *testing.T) {
 		}
 	}
 }
+
+// rankBatchShadowFixtureGamemaster publishes medicham +
+// medicham_shadow so Phase X-II can verify batch-wide Options
+// application.
+const rankBatchShadowFixtureGamemaster = `{
+  "id": "gamemaster",
+  "timestamp": "2026-04-19 00:00:00",
+  "pokemon": [
+    {"dex": 308, "speciesId": "medicham", "speciesName": "Medicham",
+     "baseStats": {"atk": 121, "def": 152, "hp": 155},
+     "types": ["fighting", "psychic"],
+     "fastMoves": ["COUNTER"], "chargedMoves": ["ICE_PUNCH"], "released": true},
+    {"dex": 308, "speciesId": "medicham_shadow", "speciesName": "Medicham (Shadow)",
+     "baseStats": {"atk": 121, "def": 152, "hp": 155},
+     "types": ["fighting", "psychic"],
+     "fastMoves": ["COUNTER"], "chargedMoves": ["ICE_PUNCH"], "released": true}
+  ],
+  "moves": [
+    {"moveId": "COUNTER", "name": "Counter", "type": "fighting",
+     "power": 8, "energy": 0, "energyGain": 7, "cooldown": 1000, "turns": 2},
+    {"moveId": "ICE_PUNCH", "name": "Ice Punch", "type": "ice",
+     "power": 55, "energy": 40, "cooldown": 500}
+  ]
+}`
+
+func newRankBatchToolShadowFixture(t *testing.T) *tools.RankBatchTool {
+	t.Helper()
+
+	gmServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(rankBatchShadowFixtureGamemaster))
+	}))
+	t.Cleanup(gmServer.Close)
+
+	gmMgr, err := gamemaster.NewManager(config.GamemasterConfig{
+		Source:    gmServer.URL,
+		LocalPath: filepath.Join(t.TempDir(), "gm.json"),
+	})
+	if err != nil {
+		t.Fatalf("NewManager gm: %v", err)
+	}
+
+	err = gmMgr.Refresh(t.Context())
+	if err != nil {
+		t.Fatalf("Refresh gm: %v", err)
+	}
+
+	rankServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte("[]"))
+	}))
+	t.Cleanup(rankServer.Close)
+
+	ranksMgr, err := rankings.NewManager(rankings.Config{
+		BaseURL:  rankServer.URL,
+		LocalDir: filepath.Join(t.TempDir(), "rankings"),
+	})
+	if err != nil {
+		t.Fatalf("NewManager rankings: %v", err)
+	}
+
+	return tools.NewRankBatchTool(gmMgr, ranksMgr)
+}
+
+// TestRankBatch_ShadowOptionAppliesBatchWide pins Phase X-II: when
+// Options.Shadow=true, every per-IV RankResult in the batch carries
+// ResolvedSpeciesID="medicham_shadow" — Options is applied once at
+// the batch level and propagated to every entry, rather than
+// needing to be set per-IV.
+func TestRankBatch_ShadowOptionAppliesBatchWide(t *testing.T) {
+	t.Parallel()
+
+	tool := newRankBatchToolShadowFixture(t)
+	handler := tool.Handler()
+
+	_, result, err := handler(t.Context(), nil, tools.RankBatchParams{
+		Species: speciesMedicham,
+		IVs:     [][3]int{{0, 15, 15}, {15, 15, 15}},
+		League:  leagueGreat,
+		Options: tools.CombatantOptions{Shadow: true},
+	})
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+
+	if len(result.Entries) != 2 {
+		t.Fatalf("Entries len = %d, want 2", len(result.Entries))
+	}
+
+	for i, entry := range result.Entries {
+		if !entry.OK {
+			t.Errorf("Entries[%d].OK = false, error = %q (expected all succeed under shadow)",
+				i, entry.Error)
+
+			continue
+		}
+
+		if entry.Result.ResolvedSpeciesID != speciesMedichamShadow {
+			t.Errorf("Entries[%d].Result.ResolvedSpeciesID = %q, want %q",
+				i, entry.Result.ResolvedSpeciesID, speciesMedichamShadow)
+		}
+	}
+}
+
+// TestRankBatch_ShadowMissingFailsBatch pins the converse: when
+// Options.Shadow is set but the gamemaster has no matching _shadow
+// row, the batch validator still succeeds (resolveSpeciesLookup
+// falls back to the base species with shadow_variant_missing=true).
+// Per-entry ResolvedSpeciesID echoes the base id in that case.
+func TestRankBatch_ShadowMissingFailsBatch(t *testing.T) {
+	t.Parallel()
+
+	tool := newRankBatchTool(t)
+	handler := tool.Handler()
+
+	_, result, err := handler(t.Context(), nil, tools.RankBatchParams{
+		Species: speciesMedicham,
+		IVs:     [][3]int{{15, 15, 15}},
+		League:  leagueGreat,
+		Options: tools.CombatantOptions{Shadow: true},
+	})
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+
+	if len(result.Entries) != 1 || !result.Entries[0].OK {
+		t.Fatalf("expected one OK entry, got %+v", result.Entries)
+	}
+
+	if !result.Entries[0].Result.ShadowVariantMissing {
+		t.Errorf("ShadowVariantMissing = false; fixture does not publish _shadow — must signal missing")
+	}
+
+	if result.Entries[0].Result.ResolvedSpeciesID != speciesMedicham {
+		t.Errorf("ResolvedSpeciesID = %q, want %q (fallback to base)",
+			result.Entries[0].Result.ResolvedSpeciesID, speciesMedicham)
+	}
+}
