@@ -139,8 +139,19 @@ type Manager struct {
 	localDir string
 	client   *http.Client
 
-	mu       sync.RWMutex
-	cache    map[cacheKey][]RankingEntry
+	mu    sync.RWMutex
+	cache map[cacheKey][]RankingEntry
+	// notFound memoises (cap, cup) pairs the upstream returned 404 /
+	// ErrUnknownCup for. Without this every repeated call fans out a
+	// fresh HTTP request per unsupported cup — pvp_rank iterates all
+	// cups in the gamemaster and the cups actually published per CP
+	// cap is a small subset (typically 4-6 of ~20), so most lookups
+	// per call would repeat 404s against the remaining cups forever.
+	// The set is never evicted during the process' lifetime; the
+	// gamemaster refresh cycle already bounces the process, so
+	// stale-404 drift across pvpoke publishes is bounded by the
+	// same refresh interval as positive entries.
+	notFound map[cacheKey]struct{}
 	fetchMu  map[cacheKey]*sync.Mutex
 	fetchMuG sync.Mutex
 }
@@ -160,6 +171,7 @@ func NewManager(cfg Config) (*Manager, error) {
 		localDir: cfg.LocalDir,
 		client:   &http.Client{Timeout: fetchTimeout},
 		cache:    make(map[cacheKey][]RankingEntry),
+		notFound: make(map[cacheKey]struct{}),
 		fetchMu:  make(map[cacheKey]*sync.Mutex),
 	}, nil
 }
@@ -184,35 +196,74 @@ func (m *Manager) Get(ctx context.Context, cpCap int, cup string) ([]RankingEntr
 func (m *Manager) GetRole(
 	ctx context.Context, cpCap int, cup string, role Role,
 ) ([]RankingEntry, error) {
+	key, err := validateAndKey(cpCap, cup, role)
+	if err != nil {
+		return nil, err
+	}
+
+	entries, err := m.cachedOrNotFound(key)
+	if err != nil || entries != nil {
+		return entries, err
+	}
+
+	return m.loadOrFetchLocked(ctx, key)
+}
+
+// validateAndKey does the upfront input checks (cap whitelist, cup
+// id sanitisation, role default) and returns the cacheKey for the
+// caller's normalised inputs. Extracted so GetRole stays under the
+// gocyclo budget.
+func validateAndKey(cpCap int, cup string, role Role) (cacheKey, error) {
 	if !supportedCaps[cpCap] {
-		return nil, fmt.Errorf("%w: %d not in {500, 1500, 2500, 10000}", ErrUnsupportedCap, cpCap)
+		return cacheKey{},
+			fmt.Errorf("%w: %d not in {500, 1500, 2500, 10000}", ErrUnsupportedCap, cpCap)
 	}
 
 	err := validateCupID(cup)
 	if err != nil {
-		return nil, err
+		return cacheKey{}, err
 	}
 
 	if role == "" {
 		role = RoleOverall
 	}
 
-	key := cacheKey{Cup: resolveCup(cup), Role: role, Cap: cpCap}
+	return cacheKey{Cup: resolveCup(cup), Role: role, Cap: cpCap}, nil
+}
 
+// cachedOrNotFound returns (entries, nil) on a positive cache hit,
+// (nil, ErrUnknownCup-wrapped) on a negative cache hit, or
+// (nil, nil) when the caller must fall through to the slower
+// locked path. Kept separate so GetRole flows linearly.
+func (m *Manager) cachedOrNotFound(key cacheKey) ([]RankingEntry, error) {
 	entries, ok := m.lookup(key)
 	if ok {
 		return entries, nil
 	}
 
+	if m.isNotFound(key) {
+		return nil, fmt.Errorf("%w: cup=%q cap=%d (cached)", ErrUnknownCup, key.Cup, key.Cap)
+	}
+
+	return nil, nil
+}
+
+// loadOrFetchLocked serialises first-time (cap, cup, role) loads
+// through the per-key mutex, then tries the local disk cache and
+// finally the upstream. Negative (ErrUnknownCup) results are
+// memoised via storeNotFound so subsequent calls for the same key
+// short-circuit in cachedOrNotFound.
+func (m *Manager) loadOrFetchLocked(ctx context.Context, key cacheKey) ([]RankingEntry, error) {
 	perKey := m.lockFor(key)
 	perKey.Lock()
 	defer perKey.Unlock()
 
 	// Re-check under the per-key lock: a concurrent winner may have
-	// populated the cache while we were waiting.
-	entries, ok = m.lookup(key)
-	if ok {
-		return entries, nil
+	// populated either the positive or negative cache while we were
+	// waiting for the mutex.
+	entries, err := m.cachedOrNotFound(key)
+	if err != nil || entries != nil {
+		return entries, err
 	}
 
 	entries, err = m.loadLocal(key)
@@ -224,12 +275,37 @@ func (m *Manager) GetRole(
 
 	entries, err = m.fetchUpstream(ctx, key)
 	if err != nil {
+		if errors.Is(err, ErrUnknownCup) {
+			m.storeNotFound(key)
+		}
+
 		return nil, err
 	}
 
 	m.storeInMemory(key, entries)
 
 	return entries, nil
+}
+
+// isNotFound reports whether the given (cap, cup, role) key has
+// previously returned ErrUnknownCup from the upstream. Read-locked
+// so concurrent Get calls can short-circuit without serialising.
+func (m *Manager) isNotFound(key cacheKey) bool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	_, ok := m.notFound[key]
+
+	return ok
+}
+
+// storeNotFound memoises a (cap, cup) pair the upstream 404'd on.
+// Takes the same write lock as storeInMemory so the positive and
+// negative caches stay coherent.
+func (m *Manager) storeNotFound(key cacheKey) {
+	m.mu.Lock()
+	m.notFound[key] = struct{}{}
+	m.mu.Unlock()
 }
 
 // resolveCup normalises empty strings to defaultCup so callers can

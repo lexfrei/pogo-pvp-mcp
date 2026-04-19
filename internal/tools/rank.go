@@ -305,16 +305,18 @@ func (tool *RankTool) lookupMoveset(
 // requested league cap and returns the species' entry per cup
 // (rank / rating / moveset). The "all" (open-league) cup is
 // always attempted first; then every named cup published in the
-// gamemaster whose LevelCap is 0 (inherits the league cap) or equal
-// to inputs.cpCap is tried. Cups where the species is not present
-// in pvpoke's per-cup ranking slice are dropped — the array stays
-// signal-dense.
+// gamemaster is tried. No LevelCap-based filtering — that field
+// is the Pokémon level cap (40 / 50), not the CP cap, so any
+// such filter silently dropped real cups like `little` at CPCap=500.
+// Cups where the species is not present in pvpoke's per-cup
+// ranking slice are dropped — the array stays signal-dense.
 //
-// The rankings manager caches per-(cap, cup) fetches so the O(N)
-// Get calls across all cups are cheap after the first warm-up.
-// Unknown / missing cup rankings surface as a silently-skipped
-// entry — rank is a best-effort info tool, not a transactional
-// pipeline.
+// The rankings manager caches per-(cap, cup) fetches — both
+// positive and negative (404) results — so the O(N) Get calls
+// across all cups are cheap after the first warm-up. Unknown /
+// missing cup rankings surface as a silently-skipped entry. The
+// ctx.Err() check at the loop boundary honours the project-wide
+// invariant that handlers release on client disconnect mid-sweep.
 func (tool *RankTool) buildRankingsByCup(
 	ctx context.Context, inputs *rankInputs,
 ) []CupRanking {
@@ -332,6 +334,10 @@ func (tool *RankTool) buildRankingsByCup(
 	out := make([]CupRanking, 0, len(cupIDs))
 
 	for _, cupID := range cupIDs {
+		if ctx.Err() != nil {
+			return out
+		}
+
 		entry := lookupCupRanking(ctx, tool.rankings, inputs.cpCap, cupID, &inputs.species)
 		if entry == nil {
 			continue
@@ -344,11 +350,10 @@ func (tool *RankTool) buildRankingsByCup(
 }
 
 // openLeagueCupID is pvpoke's conventional id for the open-league
-// ranking slice — keyed both as empty string (Manager.Get's default)
-// and as the literal "all" in the gamemaster's Cups map, depending
-// on the version. cupIDsForCup skips both spellings to avoid
-// emitting a duplicate open-league entry alongside the implicit
-// leading "" we already prepend.
+// ranking slice. The cacheKey code in rankings.Manager maps empty
+// cup names to this literal; cupIDsForLookup skips both spellings
+// to avoid emitting a duplicate open-league entry alongside the
+// implicit leading "" we already prepend.
 const openLeagueCupID = "all"
 
 // cupIDsForLookup returns the list of pvpoke cup ids to try: "" for

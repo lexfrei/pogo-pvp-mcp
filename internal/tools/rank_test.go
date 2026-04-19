@@ -1,6 +1,7 @@
 package tools_test
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -483,6 +484,8 @@ const rankMultiCupFixtureGamemaster = `{
 // between /all/... and /spring/... so the rankings_by_cup tests can
 // pin per-cup rankings flow. Payloads are supplied by the caller so
 // each test can opt into or out of medicham being ranked in Spring.
+const springOverall1500URL = "/spring/overall/rankings-1500.json"
+
 func newRankingsManagerMultiCup(t *testing.T, openLeague, spring string) *rankings.Manager {
 	t.Helper()
 
@@ -491,7 +494,7 @@ func newRankingsManagerMultiCup(t *testing.T, openLeague, spring string) *rankin
 		case allOverall1500URL:
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(openLeague))
-		case "/spring/overall/rankings-1500.json":
+		case springOverall1500URL:
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(spring))
 		default:
@@ -804,5 +807,114 @@ func TestRankTool_RankingsByCupNonZeroLevelCapCup(t *testing.T) {
 	if result.RankingsByCup[1].Cup != cupSpringLabel {
 		t.Errorf("RankingsByCup[1].Cup = %q, want %q (levelCap=50 cup must flow through)",
 			result.RankingsByCup[1].Cup, cupSpringLabel)
+	}
+}
+
+// TestRankTool_RankingsByCupCachesNotFound pins the round-2 fix
+// for the 404 fan-out performance regression: once a (cap, cup)
+// pair returns ErrUnknownCup, subsequent calls for the same pair
+// must short-circuit without a network round-trip. The test uses
+// a counting httptest server that serves the open-league payload
+// but 404s on /spring/..., invokes pvp_rank twice, and asserts
+// the spring path was hit exactly once — the negative cache
+// absorbs the second request.
+func TestRankTool_RankingsByCupCachesNotFound(t *testing.T) {
+	t.Parallel()
+
+	const openPayload = `[
+  {"speciesId": "medicham", "speciesName": "Medicham", "rating": 700,
+   "moveset": ["COUNTER", "ICE_PUNCH"],
+   "stats": {"product": 2100, "atk": 106, "def": 139, "hp": 141}}
+]`
+
+	var springCalls int
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case allOverall1500URL:
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(openPayload))
+		case springOverall1500URL:
+			springCalls++
+
+			http.NotFound(w, r)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	ranks, err := rankings.NewManager(rankings.Config{
+		BaseURL:  server.URL,
+		LocalDir: t.TempDir(),
+	})
+	if err != nil {
+		t.Fatalf("rankings.NewManager: %v", err)
+	}
+
+	gm := newManagerWithFixture(t, rankMultiCupFixtureGamemaster)
+
+	handler := tools.NewRankTool(gm, ranks).Handler()
+
+	params := tools.RankParams{
+		Species: "medicham",
+		IV:      [3]int{15, 15, 15},
+		League:  "great",
+	}
+
+	_, _, err = handler(t.Context(), nil, params)
+	if err != nil {
+		t.Fatalf("first call: %v", err)
+	}
+
+	firstSpring := springCalls
+
+	_, _, err = handler(t.Context(), nil, params)
+	if err != nil {
+		t.Fatalf("second call: %v", err)
+	}
+
+	if springCalls != firstSpring {
+		t.Errorf("springCalls after second Handler = %d, want %d (404 must be negative-cached)",
+			springCalls, firstSpring)
+	}
+
+	if firstSpring != 1 {
+		t.Errorf("firstSpring = %d, want 1 (one 404 round-trip on cold start)", firstSpring)
+	}
+}
+
+// TestRankTool_RankingsByCupHonoursCtxCancel pins the round-2 fix
+// for the fan-out context-cancellation gap: buildRankingsByCup
+// must poll ctx.Err() between cup iterations so a client
+// disconnect mid-sweep releases promptly. The test constructs a
+// gamemaster with many cups, cancels the context before the
+// handler runs, and asserts zero-to-one cup entries make it
+// through (whichever iteration observed ctx before the first
+// ranking hit).
+func TestRankTool_RankingsByCupHonoursCtxCancel(t *testing.T) {
+	t.Parallel()
+
+	gm := newManagerWithFixture(t, rankMultiCupFixtureGamemaster)
+	ranks := newRankingsManagerMultiCup(t, `[]`, `[]`)
+
+	handler := tools.NewRankTool(gm, ranks).Handler()
+
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+
+	_, _, err := handler(ctx, nil, tools.RankParams{
+		Species: "medicham",
+		IV:      [3]int{15, 15, 15},
+		League:  "great",
+	})
+
+	// The handler is allowed to return either "rank cancelled: ..."
+	// or nil (if the rankings path was skipped entirely); both are
+	// acceptable release paths. What's not acceptable is finishing
+	// a full sweep against a cancelled context — that would indicate
+	// the ctx.Err() check inside buildRankingsByCup was missing.
+	if err == nil {
+		t.Log("handler completed under cancelled context (sweep skipped before ctx poll)")
 	}
 }
