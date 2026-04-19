@@ -2,7 +2,7 @@
 
 MCP server that will expose a Pokémon GO PvP battle simulator and ranker to LLM assistants. The simulation math will live in a companion engine module developed alongside this server.
 
-**Status**: approaching v0.1. Twelve MCP tools plus a `diff-gm` CLI helper are implemented:
+**Status**: approaching v0.1. Thirteen MCP tools plus a `diff-gm` CLI helper are implemented:
 
 - `pvp_rank` — rank one Pokémon in a league/cup by IV and level, with percent-of-best vs the species' global stat-product optimum, a pvpoke-recommended `optimal_moveset` carrying an aggregate `has_legacy` boolean, a `non_legacy_moveset` alternative (populated only when the optimal build contains at least one legacy move, with `rating_delta` vs the optimal build), and a `comparison_to_hundo` block showing the best-case 15/15/15 spread.
 - `pvp_matchup` — 1v1 simulation returning winner, turns, HP / energy / shields used, charged-move firing counts, and the resolved moveset used on each side (so omitted `fast_move` / `charged_moves` get auto-filled from the cup/league recommended build).
@@ -16,6 +16,7 @@ MCP server that will expose a Pokémon GO PvP battle simulator and ranker to LLM
 - `pvp_level_from_cp` — given species + IVs + observed CP, invert back to the highest level (on the 0.5 grid) that fits under that CP; returns the resolved stats so clients don't need a second `pvp_rank` call.
 - `pvp_counter_finder` — given a target (species + IV + optional moveset), find the top-N counters. Accepts an optional `from_pool` to scan the caller's box; omit it to scan the top-N pvpoke meta for the cup instead. Returns per-counter battle rating, per-shield-scenario breakdown, and remaining HP.
 - `pvp_evolution_preview` — given current species + IVs + observed CP, invert CP to level and project each reachable descendant form's stats at that same level (evolution preserves level). Returns CP, stat line, and the subset of standard leagues (little / great / ultra / master) each evolved form fits under. Supports branching chains (eevee → vaporeon/jolteon/etc.) and multi-hop paths.
+- `pvp_rank_batch` — score the same species + league under many IV triples in one call. Response carries one `RankBatchEntry` per input IV in order (OK / error / RankResult) plus a top-level `success_count`. Capped at 64 IVs per call to bound server work.
 - `diff-gm` (CLI-only, not an MCP tool) — diff the upstream gamemaster against the local cache. Exits non-zero on any difference so cron / CI can alert on unexpected drift. See "Gamemaster drift" below.
 
 Every MCP tool accepts an optional `cup` parameter naming a pvpoke cup (`spring`, `retro`, `jungle`, ...); empty resolves to the open-league `all` rankings. 404s on unsupported (cup, cap) pairs surface as `ErrUnknownCup` rather than silently falling back.
@@ -81,7 +82,7 @@ Add the server to `~/Library/Application Support/Claude/claude_desktop_config.js
 }
 ```
 
-Restart Claude Desktop. The twelve `pvp_*` tools will appear in the tool list. If a tool returns "gamemaster not loaded", run `pogo-pvp-mcp fetch-gm` once to warm the cache.
+Restart Claude Desktop. The thirteen `pvp_*` tools will appear in the tool list. If a tool returns "gamemaster not loaded", run `pogo-pvp-mcp fetch-gm` once to warm the cache.
 
 ## Container image
 
