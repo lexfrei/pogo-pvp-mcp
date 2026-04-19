@@ -149,6 +149,121 @@ func TestTeamBuilder_DisallowLegacyExplicit(t *testing.T) {
 	}
 }
 
+// TestTeamBuilder_DisallowLegacyRejectsResolvedLegacy pins the
+// round-2 fix: DisallowLegacy=true with an EMPTY moveset (auto-
+// fill path) must still reject when the pvpoke-recommended
+// moveset is legacy. Before the fix, the guard only checked
+// explicit movesets — auto-fill routed around it silently.
+func TestTeamBuilder_DisallowLegacyRejectsResolvedLegacy(t *testing.T) {
+	t.Parallel()
+
+	// Ranking fixture recommends PSYCHIC (legacy on medicham).
+	const ranksJSON = `[
+  {"speciesId": "medicham", "speciesName": "Medicham", "rating": 700,
+   "moveset": ["COUNTER", "PSYCHIC", "ICE_PUNCH"],
+   "matchups": [], "counters": [],
+   "stats": {"product": 2100, "atk": 106, "def": 139, "hp": 141}}
+]`
+
+	tool := newTeamBuilderToolFromFixture(t, legacyFixtureGamemaster, ranksJSON)
+	handler := tool.Handler()
+
+	// Medicham with empty moveset → auto-fill will pull PSYCHIC
+	// from the rankings recommendation; DisallowLegacy must
+	// trip ErrLegacyConflict before simulation.
+	pool := []tools.Combatant{
+		{Species: "medicham", IV: [3]int{15, 15, 15}, Level: 40},
+		{
+			Species: "azumarill", IV: [3]int{15, 15, 15}, Level: 40,
+			FastMove: "BUBBLE", ChargedMoves: []string{"ICE_BEAM"},
+		},
+		{
+			Species: "machamp", IV: [3]int{15, 15, 15}, Level: 30,
+			FastMove: "COUNTER", ChargedMoves: []string{"CROSS_CHOP"},
+		},
+	}
+
+	_, _, err := handler(t.Context(), nil, tools.TeamBuilderParams{
+		Pool:           pool,
+		League:         leagueGreat,
+		DisallowLegacy: true,
+	})
+	if !errors.Is(err, tools.ErrLegacyConflict) {
+		t.Errorf("error = %v, want wrapping ErrLegacyConflict (auto-fill landed on legacy PSYCHIC)", err)
+	}
+}
+
+// TestMeta_MoveRefCarriesLegacyFlag pins that pvp_meta emits each
+// recommended move as a MoveRef with Legacy tagged from the
+// species' LegacyMoves list.
+func TestMeta_MoveRefCarriesLegacyFlag(t *testing.T) {
+	t.Parallel()
+
+	const ranksJSON = `[
+  {"speciesId": "medicham", "speciesName": "Medicham", "rating": 800,
+   "moveset": ["COUNTER", "PSYCHIC", "ICE_PUNCH"],
+   "matchups": [], "counters": [],
+   "stats": {"product": 2100, "atk": 106, "def": 139, "hp": 141}}
+]`
+
+	gmServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(legacyFixtureGamemaster))
+	}))
+	t.Cleanup(gmServer.Close)
+
+	gmMgr, err := gamemaster.NewManager(config.GamemasterConfig{
+		Source:    gmServer.URL,
+		LocalPath: filepath.Join(t.TempDir(), "gm.json"),
+	})
+	if err != nil {
+		t.Fatalf("NewManager gm: %v", err)
+	}
+
+	err = gmMgr.Refresh(t.Context())
+	if err != nil {
+		t.Fatalf("Refresh gm: %v", err)
+	}
+
+	rankServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(ranksJSON))
+	}))
+	t.Cleanup(rankServer.Close)
+
+	ranksMgr, err := rankings.NewManager(rankings.Config{
+		BaseURL:  rankServer.URL,
+		LocalDir: filepath.Join(t.TempDir(), "rankings"),
+	})
+	if err != nil {
+		t.Fatalf("NewManager rankings: %v", err)
+	}
+
+	handler := tools.NewMetaTool(ranksMgr, gmMgr).Handler()
+
+	_, result, err := handler(t.Context(), nil, tools.MetaParams{League: leagueGreat, TopN: 1})
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+
+	if len(result.Entries) != 1 {
+		t.Fatalf("Entries len = %d, want 1", len(result.Entries))
+	}
+
+	entry := result.Entries[0]
+
+	if len(entry.Moveset) != 3 {
+		t.Fatalf("Moveset len = %d, want 3", len(entry.Moveset))
+	}
+
+	for _, ref := range entry.Moveset {
+		wantLegacy := ref.ID == movePsychic
+		if ref.Legacy != wantLegacy {
+			t.Errorf("MoveRef{%q}.Legacy = %v, want %v", ref.ID, ref.Legacy, wantLegacy)
+		}
+	}
+}
+
 // TestTeamBuilder_DisallowLegacyAllowsNonLegacy confirms the
 // converse: DisallowLegacy=true with non-legacy explicit movesets
 // succeeds without error.

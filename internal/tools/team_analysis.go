@@ -220,7 +220,8 @@ func (tool *TeamAnalysisTool) prepareTeam(
 	}
 
 	for i := range params.Team {
-		err = applyMovesetDefaults(ctx, tool.rankings, &params.Team[i], cpCap, params.Cup)
+		err = applyMovesetDefaults(ctx, tool.rankings, &params.Team[i], cpCap, params.Cup,
+			snapshot, params.DisallowLegacy)
 		if err != nil {
 			return nil, fmt.Errorf("team[%d] moveset: %w", i, err)
 		}

@@ -4,8 +4,8 @@ package tools
 // legacy-move flags. Engine already carries the source of truth
 // (Species.LegacyMoves + pogopvp.IsLegacyMove); this file adapts
 // that into the MCP wire shapes (MoveRef) and the resolver used by
-// pvp_rank's non-legacy moveset search and the allow_legacy flag on
-// the team tools.
+// pvp_rank's non-legacy moveset search and the disallow_legacy flag
+// on the team tools.
 
 import (
 	"errors"
@@ -16,10 +16,10 @@ import (
 
 // ErrLegacyConflict is returned by pvp_team_analysis /
 // pvp_team_builder when a Combatant carries an explicit moveset
-// whose ids include a legacy move while AllowLegacy=false. Hard
+// whose ids include a legacy move while DisallowLegacy=true. Hard
 // failure before any simulation so the client learns about the
 // incompatibility instead of getting a subtly-weaker result.
-var ErrLegacyConflict = errors.New("legacy move present but allow_legacy=false")
+var ErrLegacyConflict = errors.New("legacy move present but disallow_legacy=true")
 
 // MoveRef is the per-move JSON projection that pvp_meta and
 // pvp_rank use when they need to surface the legacy flag alongside
@@ -97,11 +97,12 @@ func nonLegacyMoves(species *pogopvp.Species, ids []string) []string {
 }
 
 // assertNoLegacyInCombatant inspects a Combatant's explicit moveset
-// under allow_legacy=false and returns ErrLegacyConflict with a
+// under disallow_legacy=true and returns ErrLegacyConflict with a
 // descriptive message if any of its moves are legacy on the target
 // species. Empty FastMove / ChargedMoves skip the check — the
-// caller either plans to resolve via applyMovesetDefaults (which
-// honours allow_legacy itself) or is exercising a fast-only build.
+// caller is expected to then call applyMovesetDefaults with the
+// same disallowLegacy flag, which routes through rejectResolvedLegacy
+// and enforces the gate on the auto-resolved moveset too.
 //
 // snapshot is the active gamemaster. A nil or species-missing
 // snapshot returns nil (no conflict detected) — downstream code
@@ -127,6 +128,38 @@ func assertNoLegacyInCombatant(
 	if conflicting, found := containsLegacyMove(&species, spec.ChargedMoves); found {
 		return fmt.Errorf("%w: species=%q charged_move=%q",
 			ErrLegacyConflict, spec.Species, conflicting)
+	}
+
+	return nil
+}
+
+// rejectResolvedLegacy guards the output of ResolveMoveset against
+// legacy moves when the caller has disallowLegacy=true. pvpoke's
+// recommended moveset can itself contain legacy moves (community-day
+// or event-exclusive picks); without this guard the team tools would
+// silently auto-fill a combatant with a move the caller explicitly
+// rejected. A nil snapshot or disallowLegacy=false fast-exits.
+func rejectResolvedLegacy(
+	snapshot *pogopvp.Gamemaster,
+	speciesID, fast string, charged []string, disallowLegacy bool,
+) error {
+	if !disallowLegacy || snapshot == nil {
+		return nil
+	}
+
+	species, ok := snapshot.Pokemon[speciesID]
+	if !ok {
+		return nil
+	}
+
+	if pogopvp.IsLegacyMove(&species, fast) {
+		return fmt.Errorf("%w: species=%q recommended fast=%q is legacy",
+			ErrLegacyConflict, speciesID, fast)
+	}
+
+	if conflict, found := containsLegacyMove(&species, charged); found {
+		return fmt.Errorf("%w: species=%q recommended charged=%q is legacy",
+			ErrLegacyConflict, speciesID, conflict)
 	}
 
 	return nil

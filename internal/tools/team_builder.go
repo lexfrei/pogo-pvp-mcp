@@ -224,8 +224,11 @@ func (tool *TeamBuilderTool) resolveTeamBuilderInputs(
 func (tool *TeamBuilderTool) defaultPoolMovesets(
 	ctx context.Context, params *TeamBuilderParams, cpCap int,
 ) error {
+	snapshot := tool.gm.Current()
+
 	for i := range params.Pool {
-		err := applyMovesetDefaults(ctx, tool.rankings, &params.Pool[i], cpCap, params.Cup)
+		err := applyMovesetDefaults(ctx, tool.rankings, &params.Pool[i],
+			cpCap, params.Cup, snapshot, params.DisallowLegacy)
 		if err != nil {
 			return fmt.Errorf("pool[%d] moveset: %w", i, err)
 		}

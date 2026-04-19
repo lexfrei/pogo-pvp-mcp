@@ -416,7 +416,7 @@ func (tool *RankTool) nonLegacyAlternative(
 	optimalScore := averageMovesetRating(
 		snapshot, inputs, spread.Level, optimal.Fast, optimal.Charged, meta)
 
-	best := enumerateNonLegacyMovesets(
+	best := enumerateNonLegacyMovesets(ctx,
 		snapshot, inputs, spread.Level, subsets.fasts, subsets.chargeds, meta)
 
 	if best.fast == "" {
@@ -568,29 +568,51 @@ func averageMovesetRating(
 // enumerateNonLegacyMovesets iterates every (fast × 1-charged) and
 // (fast × 2-charged) combination over the non-legacy subsets and
 // returns the winning candidate. Deterministic: within ties, the
-// first encountered wins.
+// first encountered wins. ctx.Err() is polled at the outer loop so
+// a client disconnect during a long enumeration releases the
+// worker goroutine — matches the CLAUDE.md invariant "ctx.Err() at
+// loop boundaries, not just on entry".
 func enumerateNonLegacyMovesets(
+	ctx context.Context,
 	snapshot *pogopvp.Gamemaster, inputs *rankInputs, level float64,
 	fasts, chargeds []string, meta []pogopvp.Combatant,
 ) nonLegacyBest {
 	var best nonLegacyBest
 
 	for _, fast := range fasts {
-		for i, first := range chargeds {
-			single := []string{first}
+		if ctx.Err() != nil {
+			return best
+		}
 
-			singleScore := averageMovesetRating(snapshot, inputs, level, fast, single, meta)
-			if best.fast == "" || singleScore > best.score {
-				best = nonLegacyBest{score: singleScore, fast: fast, charged: single}
-			}
+		best = bestPerFast(snapshot, inputs, level, fast, chargeds, meta, best)
+	}
 
-			for j := i + 1; j < len(chargeds); j++ {
-				pair := []string{first, chargeds[j]}
+	return best
+}
 
-				pairScore := averageMovesetRating(snapshot, inputs, level, fast, pair, meta)
-				if pairScore > best.score {
-					best = nonLegacyBest{score: pairScore, fast: fast, charged: pair}
-				}
+// bestPerFast evaluates every 1- and 2-charged combination under
+// the given fast move and returns the running champion. Extracted
+// from enumerateNonLegacyMovesets to keep the outer loop under
+// gocognit budget.
+func bestPerFast(
+	snapshot *pogopvp.Gamemaster, inputs *rankInputs, level float64,
+	fast string, chargeds []string, meta []pogopvp.Combatant,
+	best nonLegacyBest,
+) nonLegacyBest {
+	for i, first := range chargeds {
+		single := []string{first}
+
+		singleScore := averageMovesetRating(snapshot, inputs, level, fast, single, meta)
+		if best.fast == "" || singleScore > best.score {
+			best = nonLegacyBest{score: singleScore, fast: fast, charged: single}
+		}
+
+		for j := i + 1; j < len(chargeds); j++ {
+			pair := []string{first, chargeds[j]}
+
+			pairScore := averageMovesetRating(snapshot, inputs, level, fast, pair, meta)
+			if pairScore > best.score {
+				best = nonLegacyBest{score: pairScore, fast: fast, charged: pair}
 			}
 		}
 	}

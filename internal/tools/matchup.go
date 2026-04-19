@@ -190,12 +190,12 @@ func (tool *MatchupTool) applyDefaults(ctx context.Context, params *MatchupParam
 		return err
 	}
 
-	err = applyMovesetDefaults(ctx, tool.rankings, &params.Attacker, cpCap, params.Cup)
+	err = applyMovesetDefaults(ctx, tool.rankings, &params.Attacker, cpCap, params.Cup, nil, false)
 	if err != nil {
 		return fmt.Errorf("attacker moveset: %w", err)
 	}
 
-	err = applyMovesetDefaults(ctx, tool.rankings, &params.Defender, cpCap, params.Cup)
+	err = applyMovesetDefaults(ctx, tool.rankings, &params.Defender, cpCap, params.Cup, nil, false)
 	if err != nil {
 		return fmt.Errorf("defender moveset: %w", err)
 	}
