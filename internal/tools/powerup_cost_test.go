@@ -116,37 +116,61 @@ func TestPowerupCost_BucketBoundaries(t *testing.T) {
 	}
 }
 
-// TestPowerupCost_XLRangeRejected pins the explicit refusal of
-// post-L40 queries (XL candy era).
-func TestPowerupCost_XLRangeRejected(t *testing.T) {
+// TestPowerupCost_XLEraSingleStep pins the first XL-era step
+// (L40.0→L40.5) at the canonical 10,000 stardust. The step uses
+// the same tier as the final pre-XL bucket; Bulbapedia's Power_up
+// page confirms the 10k/step tier carries forward for two half-
+// steps into the XL era before ramping to 11k/step at L41.
+func TestPowerupCost_XLEraSingleStep(t *testing.T) {
 	t.Parallel()
 
 	tool := tools.NewPowerupCostTool()
 	handler := tool.Handler()
 
-	_, _, err := handler(t.Context(), nil, tools.PowerupCostParams{
+	_, result, err := handler(t.Context(), nil, tools.PowerupCostParams{
 		FromLevel: 40.0,
 		ToLevel:   40.5,
 	})
-	if !errors.Is(err, tools.ErrXLRangeNotSupported) {
-		t.Errorf("error = %v, want wrapping ErrXLRangeNotSupported", err)
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+
+	const wantStardust = 10000
+
+	if result.StardustCost != wantStardust {
+		t.Errorf("StardustCost = %d, want %d", result.StardustCost, wantStardust)
+	}
+
+	if result.XLStepsIncluded != 1 {
+		t.Errorf("XLStepsIncluded = %d, want 1", result.XLStepsIncluded)
+	}
+
+	if !result.CrossesXLBoundary {
+		t.Errorf("CrossesXLBoundary = false, want true (step L40.0 is in XL era)")
 	}
 }
 
-// TestPowerupCost_XLRangeFromLevelRejected also refuses a climb
-// whose starting level is past L40.
-func TestPowerupCost_XLRangeFromLevelRejected(t *testing.T) {
+// TestPowerupCost_XLRangeFromLevelAccepted sums stardust from an
+// XL-era start (L41.0) to cover the 11,000/step tier.
+func TestPowerupCost_XLRangeFromLevelAccepted(t *testing.T) {
 	t.Parallel()
 
 	tool := tools.NewPowerupCostTool()
 	handler := tool.Handler()
 
-	_, _, err := handler(t.Context(), nil, tools.PowerupCostParams{
+	_, result, err := handler(t.Context(), nil, tools.PowerupCostParams{
 		FromLevel: 41.0,
 		ToLevel:   41.5,
 	})
-	if !errors.Is(err, tools.ErrXLRangeNotSupported) {
-		t.Errorf("error = %v, want wrapping ErrXLRangeNotSupported", err)
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+
+	const wantStardust = 11000
+
+	if result.StardustCost != wantStardust {
+		t.Errorf("StardustCost = %d, want %d (L41.0→L41.5 is first 11k tier step)",
+			result.StardustCost, wantStardust)
 	}
 }
 
@@ -291,7 +315,12 @@ func TestPowerupCost_JSONShape(t *testing.T) {
 		t.Fatalf("unmarshal: %v", err)
 	}
 
-	wantKeys := []string{"from_level", "to_level", "steps", "stardust_cost", "note"}
+	wantKeys := []string{
+		"from_level", "to_level", "steps",
+		"stardust_cost", "baseline_stardust_cost",
+		"cost_multiplier", "stardust_multiplier",
+		"note",
+	}
 
 	gotKeys := make([]string, 0, len(decoded))
 	for k := range decoded {
@@ -355,10 +384,247 @@ func TestPowerupCost_DescriptionSanity(t *testing.T) {
 
 	descLower := strings.ToLower(desc)
 
-	wantFragments := []string{"l1-l40", "xl", "candy"}
+	wantFragments := []string{"l1-l50", "xl", "candy", "shadow", "purified", "lucky"}
 	for _, frag := range wantFragments {
 		if !strings.Contains(descLower, frag) {
 			t.Errorf("description missing fragment %q; got %q", frag, desc)
 		}
+	}
+}
+
+// TestPowerupCost_XLEraFullClimbTotal pins Niantic's published
+// L40→L50 stardust total at 250,000 (20 half-level steps summing
+// to the Bulbapedia Power_up table's XL-era figure). A future
+// table edit that miscalibrates even one bucket flips this.
+func TestPowerupCost_XLEraFullClimbTotal(t *testing.T) {
+	t.Parallel()
+
+	tool := tools.NewPowerupCostTool()
+	handler := tool.Handler()
+
+	_, result, err := handler(t.Context(), nil, tools.PowerupCostParams{
+		FromLevel: 40.0,
+		ToLevel:   50.0,
+	})
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+
+	const wantStardust = 250000
+
+	if result.StardustCost != wantStardust {
+		t.Errorf("StardustCost L40→L50 = %d, want %d", result.StardustCost, wantStardust)
+	}
+
+	if result.Steps != 20 {
+		t.Errorf("Steps = %d, want 20 (L40→L50 is 20 half-steps)", result.Steps)
+	}
+
+	if result.XLStepsIncluded != 20 {
+		t.Errorf("XLStepsIncluded = %d, want 20 (entire climb is XL era)", result.XLStepsIncluded)
+	}
+
+	if !result.CrossesXLBoundary {
+		t.Errorf("CrossesXLBoundary = false, want true")
+	}
+}
+
+// TestPowerupCost_FullClimbL1toL50 pins the combined L1→L50 total
+// at 520,000 (270,000 pre-XL + 250,000 XL era).
+func TestPowerupCost_FullClimbL1toL50(t *testing.T) {
+	t.Parallel()
+
+	tool := tools.NewPowerupCostTool()
+	handler := tool.Handler()
+
+	_, result, err := handler(t.Context(), nil, tools.PowerupCostParams{
+		FromLevel: 1.0,
+		ToLevel:   50.0,
+	})
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+
+	const wantStardust = 520000
+
+	if result.StardustCost != wantStardust {
+		t.Errorf("StardustCost L1→L50 = %d, want %d", result.StardustCost, wantStardust)
+	}
+
+	if result.Steps != 98 {
+		t.Errorf("Steps = %d, want 98 (78 pre-XL + 20 XL era)", result.Steps)
+	}
+
+	if result.XLStepsIncluded != 20 {
+		t.Errorf("XLStepsIncluded = %d, want 20", result.XLStepsIncluded)
+	}
+}
+
+// TestPowerupCost_XLEraBucketTransitions pins the exact stardust
+// tier at each Bulbapedia-published XL-era bucket boundary so a
+// future re-sourcing that misplaces a transition is caught.
+func TestPowerupCost_XLEraBucketTransitions(t *testing.T) {
+	t.Parallel()
+
+	tool := tools.NewPowerupCostTool()
+	handler := tool.Handler()
+
+	cases := []struct {
+		name         string
+		from, to     float64
+		wantStardust int
+	}{
+		// Bucket cost applies to steps STARTING at each half-level
+		// in the named range, so e.g. bucket L41.0-L42.5 covers
+		// steps starting at 41.0 / 41.5 / 42.0 / 42.5 (4 half-steps
+		// ending at L43.0). The "enters N-k tier" marker is the
+		// step that STARTS at the first half-level where the new
+		// tier kicks in.
+		{"L40.5->L41 still 10k tier", 40.5, 41.0, 10000},
+		{"L41->L41.5 enters 11k tier", 41.0, 41.5, 11000},
+		{"L43->L43.5 enters 12k tier", 43.0, 43.5, 12000},
+		{"L45->L45.5 enters 13k tier", 45.0, 45.5, 13000},
+		{"L47->L47.5 enters 14k tier", 47.0, 47.5, 14000},
+		{"L49->L49.5 enters 15k tier", 49.0, 49.5, 15000},
+		{"L49.5->L50 last step 15k", 49.5, 50.0, 15000},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			_, result, err := handler(t.Context(), nil, tools.PowerupCostParams{
+				FromLevel: tc.from,
+				ToLevel:   tc.to,
+			})
+			if err != nil {
+				t.Fatalf("handler: %v", err)
+			}
+
+			if result.StardustCost != tc.wantStardust {
+				t.Errorf("L%.1f→L%.1f StardustCost = %d, want %d",
+					tc.from, tc.to, result.StardustCost, tc.wantStardust)
+			}
+		})
+	}
+}
+
+// TestPowerupCost_LuckyStardustHalved pins Niantic's 50% stardust
+// discount for Lucky Pokémon applied on the full L1→L40 climb:
+// 270,000 / 2 = 135,000. Integer division is exact because every
+// pre-XL bucket is a multiple of 200 (divisible by 2).
+func TestPowerupCost_LuckyStardustHalved(t *testing.T) {
+	t.Parallel()
+
+	tool := tools.NewPowerupCostTool()
+	handler := tool.Handler()
+
+	_, result, err := handler(t.Context(), nil, tools.PowerupCostParams{
+		FromLevel: 1.0,
+		ToLevel:   40.0,
+		Options:   tools.CombatantOptions{Lucky: true},
+	})
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+
+	const (
+		wantBaseline = 270000
+		wantStardust = 135000
+	)
+
+	if result.BaselineStardustCost != wantBaseline {
+		t.Errorf("BaselineStardustCost = %d, want %d", result.BaselineStardustCost, wantBaseline)
+	}
+
+	if result.StardustCost != wantStardust {
+		t.Errorf("Lucky StardustCost = %d, want %d", result.StardustCost, wantStardust)
+	}
+
+	if result.StardustMultiplier != 0.5 {
+		t.Errorf("StardustMultiplier = %v, want 0.5", result.StardustMultiplier)
+	}
+}
+
+// TestPowerupCost_ShadowStardustPremium pins the Shadow ×1.2
+// multiplier on a 10k baseline step: L40.0→L40.5 costs 10000
+// baseline, 12000 with Shadow. Uses integer arithmetic ×12/÷10 so
+// the result is exact.
+func TestPowerupCost_ShadowStardustPremium(t *testing.T) {
+	t.Parallel()
+
+	tool := tools.NewPowerupCostTool()
+	handler := tool.Handler()
+
+	_, result, err := handler(t.Context(), nil, tools.PowerupCostParams{
+		FromLevel: 40.0,
+		ToLevel:   40.5,
+		Options:   tools.CombatantOptions{Shadow: true},
+	})
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+
+	if result.StardustCost != 12000 {
+		t.Errorf("Shadow StardustCost = %d, want 12000 (10000 × 1.2)", result.StardustCost)
+	}
+
+	if result.StardustMultiplier != 1.2 {
+		t.Errorf("StardustMultiplier = %v, want 1.2", result.StardustMultiplier)
+	}
+}
+
+// TestPowerupCost_PurifiedStardustDiscount pins the Purified ×0.9
+// multiplier: L40.0→L40.5 costs 10000 baseline, 9000 with Purified.
+func TestPowerupCost_PurifiedStardustDiscount(t *testing.T) {
+	t.Parallel()
+
+	tool := tools.NewPowerupCostTool()
+	handler := tool.Handler()
+
+	_, result, err := handler(t.Context(), nil, tools.PowerupCostParams{
+		FromLevel: 40.0,
+		ToLevel:   40.5,
+		Options:   tools.CombatantOptions{Purified: true},
+	})
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+
+	if result.StardustCost != 9000 {
+		t.Errorf("Purified StardustCost = %d, want 9000 (10000 × 0.9)", result.StardustCost)
+	}
+
+	if result.StardustMultiplier != 0.9 {
+		t.Errorf("StardustMultiplier = %v, want 0.9", result.StardustMultiplier)
+	}
+}
+
+// TestPowerupCost_LuckyPurifiedStack pins the stacking multiplier:
+// Lucky ×0.5 × Purified ×0.9 = 0.45. A 10k baseline step becomes
+// 4500 stardust.
+func TestPowerupCost_LuckyPurifiedStack(t *testing.T) {
+	t.Parallel()
+
+	tool := tools.NewPowerupCostTool()
+	handler := tool.Handler()
+
+	_, result, err := handler(t.Context(), nil, tools.PowerupCostParams{
+		FromLevel: 40.0,
+		ToLevel:   40.5,
+		Options:   tools.CombatantOptions{Lucky: true, Purified: true},
+	})
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+
+	if result.StardustCost != 4500 {
+		t.Errorf("Lucky+Purified StardustCost = %d, want 4500 (10000 × 0.45)", result.StardustCost)
+	}
+
+	const wantMult = 0.45
+
+	if math.Abs(result.StardustMultiplier-wantMult) > 1e-9 {
+		t.Errorf("StardustMultiplier = %v, want %v", result.StardustMultiplier, wantMult)
 	}
 }
