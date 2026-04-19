@@ -94,6 +94,18 @@ func (tool *SpeciesInfoTool) Handler() mcp.ToolHandlerFor[SpeciesInfoParams, Spe
 	return tool.handle
 }
 
+// nonNilStrings normalises a possibly-nil string slice to a
+// guaranteed non-nil empty slice so JSON marshalling emits `[]`
+// rather than `null`. Matches the wire-shape invariant established
+// by legacyReverseIndex / projectSpeciesMoves / chargedMoveIDs.
+func nonNilStrings(in []string) []string {
+	if in == nil {
+		return []string{}
+	}
+
+	return in
+}
+
 // leagueRankLookup lists the leagues pvp_species_info queries.
 //
 //nolint:gochecknoglobals // fixed domain table
@@ -133,14 +145,14 @@ func (tool *SpeciesInfoTool) handle(
 		Species:      species.ID,
 		Name:         species.Name,
 		Dex:          species.Dex,
-		Types:        species.Types,
+		Types:        nonNilStrings(species.Types),
 		BaseStats:    SpeciesBaseStats{Atk: species.BaseStats.Atk, Def: species.BaseStats.Def, HP: species.BaseStats.HP},
 		FastMoves:    projectSpeciesMoves(snapshot, &species, species.FastMoves),
 		ChargedMoves: projectSpeciesMoves(snapshot, &species, species.ChargedMoves),
-		LegacyMoves:  species.LegacyMoves,
-		Evolutions:   species.Evolutions,
+		LegacyMoves:  nonNilStrings(species.LegacyMoves),
+		Evolutions:   nonNilStrings(species.Evolutions),
 		PreEvolution: species.PreEvolution,
-		Tags:         species.Tags,
+		Tags:         nonNilStrings(species.Tags),
 		Released:     species.Released,
 		LeagueRanks:  lookupLeagueRanks(ctx, tool.rankings, species.ID),
 	}

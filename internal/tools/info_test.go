@@ -1,11 +1,13 @@
 package tools_test
 
 import (
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/lexfrei/pogo-pvp-mcp/internal/config"
@@ -336,6 +338,93 @@ const speciesInfoRankingsFixture = `[
    "moveset": ["COUNTER", "ICE_PUNCH", "PSYCHIC"], "matchups": [], "counters": [],
    "stats": {"product": 2100, "atk": 106, "def": 139, "hp": 141}}
 ]`
+
+// TestSpeciesInfo_EmptyListsNotNull pins the wire-shape invariant
+// for optional list fields. Bulbasaur in the fixture has no
+// legacyMoves, no family.evolutions (only .evolutions=[ivysaur] on
+// the ivy side — wait, bulb DOES have evolutions), and no tags.
+// Build a minimal fixture species without any list fields and
+// assert that LegacyMoves / Evolutions / Tags serialise as []
+// rather than null.
+func TestSpeciesInfo_EmptyListsNotNull(t *testing.T) {
+	t.Parallel()
+
+	// Minimal species with no legacyMoves, no family block, no tags.
+	const bareFixture = `{
+  "id": "gamemaster",
+  "timestamp": "2026-04-19 00:00:00",
+  "pokemon": [
+    {
+      "dex": 132,
+      "speciesId": "ditto",
+      "speciesName": "Ditto",
+      "baseStats": {"atk": 91, "def": 91, "hp": 134},
+      "types": ["normal"],
+      "fastMoves": ["POUND"],
+      "chargedMoves": ["STRUGGLE"],
+      "released": true
+    }
+  ],
+  "moves": [
+    {"moveId": "POUND", "name": "Pound", "type": "normal",
+     "power": 4, "energy": 0, "energyGain": 4, "cooldown": 1000, "turns": 2},
+    {"moveId": "STRUGGLE", "name": "Struggle", "type": "normal",
+     "power": 35, "energy": 33, "cooldown": 500}
+  ]
+}`
+
+	mgr := newManagerWithFixture(t, bareFixture)
+	handler := tools.NewSpeciesInfoTool(mgr, nil).Handler()
+
+	_, result, err := handler(t.Context(), nil, tools.SpeciesInfoParams{Species: "ditto"})
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+
+	payload, err := json.Marshal(result)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+
+	raw := string(payload)
+
+	for _, field := range []string{"legacy_moves", "evolutions", "tags"} {
+		wantEmpty := `"` + field + `":[]`
+		badNull := `"` + field + `":null`
+
+		if strings.Contains(raw, badNull) {
+			t.Errorf("JSON contains %q, want %q: %s", badNull, wantEmpty, raw)
+		}
+	}
+
+	if result.LegacyMoves == nil {
+		t.Error("LegacyMoves = nil, want non-nil empty slice")
+	}
+	if result.Evolutions == nil {
+		t.Error("Evolutions = nil, want non-nil empty slice")
+	}
+	if result.Tags == nil {
+		t.Error("Tags = nil, want non-nil empty slice")
+	}
+}
+
+// TestTypeMatchup_TooManyDefenderTypes pins the ≤2 defender-types
+// guard. Niantic caps Pokémon at 2 types; a 3-entry list is
+// malformed input that previously produced a plausible-looking
+// multiplier with no way for the caller to detect the nonsense.
+func TestTypeMatchup_TooManyDefenderTypes(t *testing.T) {
+	t.Parallel()
+
+	handler := tools.NewTypeMatchupTool().Handler()
+
+	_, _, err := handler(t.Context(), nil, tools.TypeMatchupParams{
+		AttackerType:  "grass",
+		DefenderTypes: []string{"water", "ground", "rock"},
+	})
+	if !errors.Is(err, tools.ErrTooManyDefenderTypes) {
+		t.Errorf("error = %v, want wrapping ErrTooManyDefenderTypes", err)
+	}
+}
 
 // TestSpeciesInfo_LeagueRanksFromManager exercises the branch in
 // lookupLeagueRanks that the happy-path (ranks=nil) skipped

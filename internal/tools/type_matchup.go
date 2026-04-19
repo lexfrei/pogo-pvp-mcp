@@ -24,8 +24,8 @@ type TypeMatchupParams struct {
 }
 
 // TypeMatchupResult reports the composite multiplier plus a
-// human-readable calculation breakdown (e.g. `"grass vs water(1.6)
-// × ground(1.6) = 2.56"`) so clients can explain WHY the multiplier
+// human-readable calculation breakdown (e.g. `"grass vs water(1.60)
+// × ground(1.60) = 2.56"`) so clients can explain WHY the multiplier
 // landed where it did without re-running the math.
 type TypeMatchupResult struct {
 	AttackerType  string   `json:"attacker_type"`
@@ -145,6 +145,16 @@ var knownPvPTypes = map[string]struct{}{
 // reject explicitly so the caller can fix and retry.
 var ErrUnknownType = errors.New("unknown type name")
 
+// ErrTooManyDefenderTypes is returned when defender_types has more
+// than 2 entries. Niantic's type system caps every Pokémon at 2
+// types (primary, secondary); a 3+-entry list would produce a
+// meaningless multiplier that an LLM consumer could not detect as
+// nonsense from the multiplier alone.
+var ErrTooManyDefenderTypes = errors.New("defender_types has more than 2 entries")
+
+// maxDefenderTypes is the Niantic cap on a Pokémon's type count.
+const maxDefenderTypes = 2
+
 // validateTypeNames rejects any attacker or defender type outside
 // the canonical 18. Empty defender-type entries are tolerated
 // (they're trimmed by the composite calculation); nil / empty
@@ -154,6 +164,11 @@ func validateTypeNames(attacker string, defenders []string) error {
 	if !ok {
 		return fmt.Errorf("%w: attacker_type=%q not in pvpoke's 18 types",
 			ErrUnknownType, attacker)
+	}
+
+	if len(defenders) > maxDefenderTypes {
+		return fmt.Errorf("%w: got %d, max %d (Niantic caps Pokémon at 2 types)",
+			ErrTooManyDefenderTypes, len(defenders), maxDefenderTypes)
 	}
 
 	for _, def := range defenders {
