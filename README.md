@@ -54,11 +54,19 @@ Two filesystem caches live alongside each other by default:
 
 - `$XDG_CACHE_HOME/pogo-pvp-mcp/gamemaster.json` — the upstream
   pvpoke gamemaster, refreshed every 24h or forced via `fetch-gm`.
-- `$XDG_CACHE_HOME/pogo-pvp-mcp/rankings/rankings-{500,1500,2500,10000}.json` —
-  per-league pvpoke rankings, fetched lazily the first time a meta-
-  driven tool (`pvp_meta`, `pvp_team_analysis`, `pvp_team_builder`)
-  touches that cap. Each file expires after 24h and is re-fetched on
-  the next access.
+- `$XDG_CACHE_HOME/pogo-pvp-mcp/rankings/{cup}/rankings-{500,1500,2500,10000}.json` —
+  per-(cup, league) pvpoke rankings, fetched lazily the first time a
+  meta-driven tool (`pvp_meta`, `pvp_team_analysis`, `pvp_team_builder`)
+  touches that pair. Each file expires after 24h and is re-fetched on
+  the next access. `{cup}` is `all` when no cup is requested; current
+  pvpoke cups include `spring`, `retro`, `jungle`, `bayou`, `maelstrom`,
+  `spellcraft`, `fantasy`, `premier`, `championship`, `naic2026`,
+  `laic2025remix`, `catch`, `chrono`, `classic`, `electric`, `equinox`,
+  `battlefrontiermaster`, `bfretro`, `gobattleleague`, `little` — any
+  id pvpoke publishes under `src/data/rankings/{id}/` is accepted. Not
+  every (cup, cap) pair exists upstream (Spring Cup only publishes at
+  1500); the manager surfaces `rankings.ErrUnknownCup` when upstream
+  returns 404.
 
 ## Debug HTTP surface
 

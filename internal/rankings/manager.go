@@ -27,8 +27,17 @@ var ErrInvalidConfig = errors.New("invalid rankings config")
 // not one of the canonical league values (500/1500/2500/10000).
 var ErrUnsupportedCap = errors.New("unsupported cp cap")
 
-// ErrUpstreamStatus wraps non-200 upstream responses.
+// ErrUnknownCup is returned by Get when the upstream 404s on the
+// requested (cup, cap) pair — either the cup does not exist in pvpoke
+// or the cup exists but does not have rankings for that CP cap (e.g.
+// Spring Cup is published only for 1500).
+var ErrUnknownCup = errors.New("unknown cup or (cup, cap) combination")
+
+// ErrUpstreamStatus wraps non-200 upstream responses other than 404.
 var ErrUpstreamStatus = errors.New("rankings upstream returned non-200 status")
+
+// defaultCup is the pvpoke URL segment for open-league (no cup) rankings.
+const defaultCup = "all"
 
 // fetchTimeout caps each rankings download.
 const fetchTimeout = 30 * time.Second
@@ -87,18 +96,26 @@ type RankingEntry struct {
 	Stats       Stats     `json:"stats"`
 }
 
-// Manager owns the per-cap ranking snapshots. Get lazily fetches and
-// caches on first access; subsequent calls return the in-memory
-// snapshot. Concurrent Get calls for the same cap coalesce into a
-// single fetch via per-cap mutexes. Thread-safe.
+// cacheKey identifies one (cup, cap) ranking snapshot. cup=="" is
+// normalised to defaultCup on every entry into the cache so lookups
+// and inserts always agree.
+type cacheKey struct {
+	Cup string
+	Cap int
+}
+
+// Manager owns the per-(cup, cap) ranking snapshots. Get lazily
+// fetches and caches on first access; subsequent calls return the
+// in-memory snapshot. Concurrent Get calls for the same (cup, cap)
+// coalesce into a single fetch via per-key mutexes. Thread-safe.
 type Manager struct {
 	baseURL  string
 	localDir string
 	client   *http.Client
 
 	mu       sync.RWMutex
-	cache    map[int][]RankingEntry
-	fetchMu  map[int]*sync.Mutex
+	cache    map[cacheKey][]RankingEntry
+	fetchMu  map[cacheKey]*sync.Mutex
 	fetchMuG sync.Mutex
 }
 
@@ -116,93 +133,108 @@ func NewManager(cfg Config) (*Manager, error) {
 		baseURL:  cfg.BaseURL,
 		localDir: cfg.LocalDir,
 		client:   &http.Client{Timeout: fetchTimeout},
-		cache:    make(map[int][]RankingEntry),
-		fetchMu:  make(map[int]*sync.Mutex),
+		cache:    make(map[cacheKey][]RankingEntry),
+		fetchMu:  make(map[cacheKey]*sync.Mutex),
 	}, nil
 }
 
-// Get returns the rankings for the given CP cap. On first call the
-// manager tries the local cache; on miss it fetches from upstream and
-// persists to disk. Subsequent calls return the in-memory snapshot.
-// Concurrent first-time calls for the same cap coalesce into a single
-// fetch via per-cap mutexes, so cold-start traffic from multiple
-// tools does not trigger duplicate HTTP requests.
-func (m *Manager) Get(ctx context.Context, cpCap int) ([]RankingEntry, error) {
+// Get returns the rankings for the given CP cap and cup. An empty cup
+// resolves to the open-league "all" cup, matching pvpoke's URL scheme.
+// On first call the manager tries the local cache; on miss it fetches
+// from upstream and persists to disk. Subsequent calls return the
+// in-memory snapshot. Concurrent first-time calls for the same
+// (cup, cap) coalesce into a single fetch via per-key mutexes, so
+// cold-start traffic from multiple tools does not trigger duplicate
+// HTTP requests.
+func (m *Manager) Get(ctx context.Context, cpCap int, cup string) ([]RankingEntry, error) {
 	if !supportedCaps[cpCap] {
 		return nil, fmt.Errorf("%w: %d not in {500, 1500, 2500, 10000}", ErrUnsupportedCap, cpCap)
 	}
 
-	entries, ok := m.lookup(cpCap)
+	key := cacheKey{Cup: resolveCup(cup), Cap: cpCap}
+
+	entries, ok := m.lookup(key)
 	if ok {
 		return entries, nil
 	}
 
-	perCap := m.lockFor(cpCap)
-	perCap.Lock()
-	defer perCap.Unlock()
+	perKey := m.lockFor(key)
+	perKey.Lock()
+	defer perKey.Unlock()
 
-	// Re-check under the per-cap lock: a concurrent winner may have
+	// Re-check under the per-key lock: a concurrent winner may have
 	// populated the cache while we were waiting.
-	entries, ok = m.lookup(cpCap)
+	entries, ok = m.lookup(key)
 	if ok {
 		return entries, nil
 	}
 
-	entries, err := m.loadLocal(cpCap)
+	entries, err := m.loadLocal(key)
 	if err == nil {
-		m.storeInMemory(cpCap, entries)
+		m.storeInMemory(key, entries)
 
 		return entries, nil
 	}
 
-	entries, err = m.fetchUpstream(ctx, cpCap)
+	entries, err = m.fetchUpstream(ctx, key)
 	if err != nil {
 		return nil, err
 	}
 
-	m.storeInMemory(cpCap, entries)
+	m.storeInMemory(key, entries)
 
 	return entries, nil
 }
 
+// resolveCup normalises empty strings to defaultCup so callers can
+// pass "" for open-league rankings without special-casing.
+func resolveCup(cup string) string {
+	if cup == "" {
+		return defaultCup
+	}
+
+	return cup
+}
+
 // lookup returns the cached entries under a shared read lock; the
-// second return value reports whether the cap was populated.
-func (m *Manager) lookup(cpCap int) ([]RankingEntry, bool) {
+// second return value reports whether the key was populated.
+func (m *Manager) lookup(key cacheKey) ([]RankingEntry, bool) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
-	entries, ok := m.cache[cpCap]
+	entries, ok := m.cache[key]
 
 	return entries, ok
 }
 
-// lockFor returns (creating if necessary) the per-cap mutex used to
+// lockFor returns (creating if necessary) the per-key mutex used to
 // serialize first-time fetches.
-func (m *Manager) lockFor(cpCap int) *sync.Mutex {
+func (m *Manager) lockFor(key cacheKey) *sync.Mutex {
 	m.fetchMuG.Lock()
 	defer m.fetchMuG.Unlock()
 
-	fetchMu, ok := m.fetchMu[cpCap]
+	fetchMu, ok := m.fetchMu[key]
 	if !ok {
 		fetchMu = &sync.Mutex{}
-		m.fetchMu[cpCap] = fetchMu
+		m.fetchMu[key] = fetchMu
 	}
 
 	return fetchMu
 }
 
 // storeInMemory caches the parsed entries under the write lock.
-func (m *Manager) storeInMemory(cpCap int, entries []RankingEntry) {
+func (m *Manager) storeInMemory(key cacheKey, entries []RankingEntry) {
 	m.mu.Lock()
-	m.cache[cpCap] = entries
+	m.cache[key] = entries
 	m.mu.Unlock()
 }
 
-// loadLocal reads the cached JSON for the given cap from disk. The
-// file is rejected if its mtime is older than [cacheTTL], so a stale
-// cache forces a fresh upstream fetch instead of being served forever.
-func (m *Manager) loadLocal(cpCap int) ([]RankingEntry, error) {
-	path := m.localPath(cpCap)
+// loadLocal reads the cached JSON for the given (cup, cap) from disk.
+// The file is rejected if its mtime is older than [cacheTTL], so a
+// stale cache forces a fresh upstream fetch instead of being served
+// forever.
+func (m *Manager) loadLocal(key cacheKey) ([]RankingEntry, error) {
+	path := m.localPath(key)
 
 	info, err := os.Stat(path)
 	if err != nil {
@@ -226,10 +258,12 @@ func (m *Manager) loadLocal(cpCap int) ([]RankingEntry, error) {
 // paths fall through to fetchUpstream.
 var errStaleCache = errors.New("rankings cache stale")
 
-// fetchUpstream hits the pvpoke rankings URL for the given cap and
-// persists the payload to disk. The parsed entries are returned.
-func (m *Manager) fetchUpstream(ctx context.Context, cpCap int) ([]RankingEntry, error) {
-	url := fmt.Sprintf("%s/all/overall/rankings-%s.json", m.baseURL, strconv.Itoa(cpCap))
+// fetchUpstream hits the pvpoke rankings URL for the given (cup, cap)
+// and persists the payload to disk. The parsed entries are returned.
+// A 404 response wraps ErrUnknownCup to let callers distinguish
+// unsupported (cup, cap) pairs from generic upstream failures.
+func (m *Manager) fetchUpstream(ctx context.Context, key cacheKey) ([]RankingEntry, error) {
+	url := fmt.Sprintf("%s/%s/overall/rankings-%s.json", m.baseURL, key.Cup, strconv.Itoa(key.Cap))
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, http.NoBody)
 	if err != nil {
@@ -241,6 +275,10 @@ func (m *Manager) fetchUpstream(ctx context.Context, cpCap int) ([]RankingEntry,
 		return nil, fmt.Errorf("fetch %s: %w", url, err)
 	}
 	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusNotFound {
+		return nil, fmt.Errorf("%w: cup=%q cap=%d (%s)", ErrUnknownCup, key.Cup, key.Cap, url)
+	}
 
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("%w: %s returned %d", ErrUpstreamStatus, url, resp.StatusCode)
@@ -256,7 +294,7 @@ func (m *Manager) fetchUpstream(ctx context.Context, cpCap int) ([]RankingEntry,
 		return nil, err
 	}
 
-	err = m.persist(cpCap, body)
+	err = m.persist(key, body)
 	if err != nil {
 		return nil, err
 	}
@@ -264,20 +302,27 @@ func (m *Manager) fetchUpstream(ctx context.Context, cpCap int) ([]RankingEntry,
 	return entries, nil
 }
 
-// localPath returns the on-disk cache location for the given CP cap.
-func (m *Manager) localPath(cpCap int) string {
-	return filepath.Join(m.localDir, fmt.Sprintf("rankings-%d.json", cpCap))
+// localDirFor returns the on-disk cache directory for the given cup.
+func (m *Manager) localDirFor(cup string) string {
+	return filepath.Join(m.localDir, cup)
+}
+
+// localPath returns the on-disk cache location for the given (cup, cap).
+func (m *Manager) localPath(key cacheKey) string {
+	return filepath.Join(m.localDirFor(key.Cup), fmt.Sprintf("rankings-%d.json", key.Cap))
 }
 
 // persist writes the fetched payload to disk atomically via temp file
 // + rename so partial writes cannot corrupt the cache.
-func (m *Manager) persist(cpCap int, body []byte) error {
-	err := os.MkdirAll(m.localDir, cacheDirPerm)
+func (m *Manager) persist(key cacheKey, body []byte) error {
+	dir := m.localDirFor(key.Cup)
+
+	err := os.MkdirAll(dir, cacheDirPerm)
 	if err != nil {
-		return fmt.Errorf("mkdir %s: %w", m.localDir, err)
+		return fmt.Errorf("mkdir %s: %w", dir, err)
 	}
 
-	tmp, err := os.CreateTemp(m.localDir, fmt.Sprintf(".rankings-%d-*.tmp", cpCap))
+	tmp, err := os.CreateTemp(dir, fmt.Sprintf(".rankings-%d-*.tmp", key.Cap))
 	if err != nil {
 		return fmt.Errorf("create temp: %w", err)
 	}
@@ -299,7 +344,7 @@ func (m *Manager) persist(cpCap int, body []byte) error {
 		return fmt.Errorf("close temp: %w", closeErr)
 	}
 
-	err = os.Rename(tmpName, m.localPath(cpCap))
+	err = os.Rename(tmpName, m.localPath(key))
 	if err != nil {
 		_ = os.Remove(tmpName)
 
