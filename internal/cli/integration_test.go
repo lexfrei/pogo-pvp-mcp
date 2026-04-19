@@ -35,7 +35,7 @@ const integrationFixtureGamemaster = `{
   ]
 }`
 
-// buildWiredServer stands up a fully-wired MCP server with all fifteen
+// buildWiredServer stands up a fully-wired MCP server with all sixteen
 // currently implemented tools registered and pre-populated managers.
 func buildWiredServer(t *testing.T) *mcp.Server {
 	t.Helper()
@@ -120,11 +120,14 @@ func buildWiredServer(t *testing.T) *mcp.Server {
 	weatherBoostTool := tools.NewWeatherBoostTool()
 	mcp.AddTool(mcpServer, weatherBoostTool.Tool(), weatherBoostTool.Handler())
 
+	encounterCPRangeTool := tools.NewEncounterCPRangeTool(mgr)
+	mcp.AddTool(mcpServer, encounterCPRangeTool.Tool(), encounterCPRangeTool.Handler())
+
 	return mcpServer
 }
 
 // TestIntegration_ListTools verifies that a client connected via the
-// in-memory transport sees all fifteen currently implemented tools
+// in-memory transport sees all sixteen currently implemented tools
 // advertised. Guards against a silent drop of a registered tool from
 // buildMCPServer.
 func TestIntegration_ListTools(t *testing.T) {
@@ -175,6 +178,7 @@ func TestIntegration_ListTools(t *testing.T) {
 		"pvp_rank_batch",
 		"pvp_threat_coverage",
 		"pvp_weather_boost",
+		"pvp_encounter_cp_range",
 	}
 
 	for _, name := range expected {
