@@ -35,7 +35,7 @@ const integrationFixtureGamemaster = `{
   ]
 }`
 
-// buildWiredServer stands up a fully-wired MCP server with all twenty
+// buildWiredServer stands up a fully-wired MCP server with all twenty-one
 // currently implemented tools registered and pre-populated managers.
 func buildWiredServer(t *testing.T) *mcp.Server {
 	t.Helper()
@@ -135,11 +135,14 @@ func buildWiredServer(t *testing.T) *mcp.Server {
 	reportDataIssueTool := tools.NewReportDataIssueTool()
 	mcp.AddTool(mcpServer, reportDataIssueTool.Tool(), reportDataIssueTool.Handler())
 
+	pokedexLookupTool := tools.NewPokedexLookupTool(mgr)
+	mcp.AddTool(mcpServer, pokedexLookupTool.Tool(), pokedexLookupTool.Handler())
+
 	return mcpServer
 }
 
 // TestIntegration_ListTools verifies that a client connected via the
-// in-memory transport sees all twenty currently implemented tools
+// in-memory transport sees all twenty-one currently implemented tools
 // advertised. Guards against a silent drop of a registered tool from
 // buildMCPServer.
 func TestIntegration_ListTools(t *testing.T) {
@@ -195,6 +198,7 @@ func TestIntegration_ListTools(t *testing.T) {
 		"pvp_second_move_cost",
 		"pvp_powerup_cost",
 		"pvp_report_data_issue",
+		"pvp_pokedex_lookup",
 	}
 
 	for _, name := range expected {
