@@ -201,6 +201,52 @@ func TestRankTool_RecommendedMovesetAbsentForUnknownInRanking(t *testing.T) {
 	}
 }
 
+// TestRankTool_HundoComparisonPresent asserts the new comparison_to_hundo
+// field is populated under a capped league and absent under master.
+// The hundo spread for the same species must match the main spread
+// when the caller already supplies 15/15/15 IVs (PercentOfBest == 100,
+// Hundo.StatProduct == StatProduct).
+func TestRankTool_HundoComparisonPresent(t *testing.T) {
+	t.Parallel()
+
+	mgr := newManagerWithFixture(t, rankFixtureGamemaster)
+	handler := tools.NewRankTool(mgr, nil).Handler()
+
+	_, great, err := handler(t.Context(), nil, tools.RankParams{
+		Species: "medicham",
+		IV:      [3]int{15, 15, 15},
+		League:  "great",
+	})
+	if err != nil {
+		t.Fatalf("great: %v", err)
+	}
+
+	if great.Hundo == nil {
+		t.Fatal("Hundo is nil under great league, want populated")
+	}
+	if great.Hundo.StatProduct != great.StatProduct {
+		t.Errorf("Hundo.StatProduct = %f, want == main StatProduct %f",
+			great.Hundo.StatProduct, great.StatProduct)
+	}
+	if great.Hundo.Level != great.Level {
+		t.Errorf("Hundo.Level = %.1f, want == main Level %.1f",
+			great.Hundo.Level, great.Level)
+	}
+
+	_, master, err := handler(t.Context(), nil, tools.RankParams{
+		Species: "medicham",
+		IV:      [3]int{0, 15, 15},
+		League:  "master",
+	})
+	if err != nil {
+		t.Fatalf("master: %v", err)
+	}
+
+	if master.Hundo != nil {
+		t.Errorf("Hundo = %+v, want nil under master league", master.Hundo)
+	}
+}
+
 func TestRankTool_UnknownSpecies(t *testing.T) {
 	t.Parallel()
 
