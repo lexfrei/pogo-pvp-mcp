@@ -524,3 +524,160 @@ func TestTeamBuilderTool_NegativeMaxResults(t *testing.T) {
 		t.Errorf("error = %v, want wrapping ErrMaxResultsInvalid", err)
 	}
 }
+
+// teamBuilderShadowFixtureGamemaster publishes both a base species "a"
+// and the shadow variant "a_shadow" with a distinct charged-move list,
+// so the round-trip test can prove the shadow moveset was selected.
+const teamBuilderShadowFixtureGamemaster = `{
+  "id": "gamemaster",
+  "timestamp": "2026-04-19 00:00:00",
+  "pokemon": [
+    {"dex": 1, "speciesId": "a", "speciesName": "A",
+     "baseStats": {"atk": 121, "def": 152, "hp": 155},
+     "types": ["fighting", "psychic"],
+     "fastMoves": ["FAST1"], "chargedMoves": ["CH1","CH2"], "released": true},
+    {"dex": 1, "speciesId": "a_shadow", "speciesName": "A (Shadow)",
+     "baseStats": {"atk": 121, "def": 152, "hp": 155},
+     "types": ["fighting", "psychic"],
+     "fastMoves": ["FAST1"], "chargedMoves": ["CH1","CH2"], "released": true},
+    {"dex": 2, "speciesId": "b", "speciesName": "B",
+     "baseStats": {"atk": 152, "def": 143, "hp": 216},
+     "types": ["water", "ground"],
+     "fastMoves": ["FAST1"], "chargedMoves": ["CH1"], "released": true},
+    {"dex": 3, "speciesId": "c", "speciesName": "C",
+     "baseStats": {"atk": 234, "def": 159, "hp": 207},
+     "types": ["fighting", "none"],
+     "fastMoves": ["FAST1"], "chargedMoves": ["CH1"], "released": true}
+  ],
+  "moves": [
+    {"moveId": "FAST1", "name": "Fast 1", "type": "normal",
+     "power": 3, "energy": 0, "energyGain": 5, "cooldown": 1000, "turns": 2},
+    {"moveId": "CH1", "name": "Charged 1", "type": "normal",
+     "power": 50, "energy": 35, "energyGain": 0, "cooldown": 500},
+    {"moveId": "CH2", "name": "Charged 2", "type": "psychic",
+     "power": 70, "energy": 55, "energyGain": 0, "cooldown": 500}
+  ]
+}`
+
+// teamBuilderShadowRankingsFixture ranks the shadow row with a
+// DIFFERENT moveset (CH2) than the base row (CH1), so the resolved
+// ChargedMoves is a ground-truth signal for which row was picked.
+const teamBuilderShadowRankingsFixture = `[
+  {"speciesId": "a", "speciesName": "A", "rating": 700, "score": 95,
+   "moveset": ["FAST1", "CH1"],
+   "stats": {"product": 2100, "atk": 107, "def": 139, "hp": 141}},
+  {"speciesId": "a_shadow", "speciesName": "A (Shadow)", "rating": 720, "score": 96,
+   "moveset": ["FAST1", "CH2"],
+   "stats": {"product": 2150, "atk": 130, "def": 116, "hp": 141}},
+  {"speciesId": "b", "speciesName": "B", "rating": 680, "score": 93,
+   "moveset": ["FAST1", "CH1"],
+   "stats": {"product": 2000, "atk": 111, "def": 113, "hp": 161}},
+  {"speciesId": "c", "speciesName": "C", "rating": 650, "score": 90,
+   "moveset": ["FAST1", "CH1"],
+   "stats": {"product": 1900, "atk": 125, "def": 120, "hp": 130}}
+]`
+
+func newTeamBuilderToolShadowFixture(t *testing.T) *tools.TeamBuilderTool {
+	t.Helper()
+
+	gmServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(teamBuilderShadowFixtureGamemaster))
+	}))
+	t.Cleanup(gmServer.Close)
+
+	gmMgr, err := gamemaster.NewManager(config.GamemasterConfig{
+		Source:    gmServer.URL,
+		LocalPath: filepath.Join(t.TempDir(), "gm.json"),
+	})
+	if err != nil {
+		t.Fatalf("NewManager gm: %v", err)
+	}
+
+	err = gmMgr.Refresh(t.Context())
+	if err != nil {
+		t.Fatalf("Refresh gm: %v", err)
+	}
+
+	rankServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(teamBuilderShadowRankingsFixture))
+	}))
+	t.Cleanup(rankServer.Close)
+
+	ranksMgr, err := rankings.NewManager(rankings.Config{
+		BaseURL:  rankServer.URL,
+		LocalDir: filepath.Join(t.TempDir(), "rankings"),
+	})
+	if err != nil {
+		t.Fatalf("NewManager rankings: %v", err)
+	}
+
+	return tools.NewTeamBuilderTool(gmMgr, ranksMgr)
+}
+
+// TestTeamBuilderTool_ShadowAutoResolvesShadowRankings pins Phase X-I
+// round-1 review blocker #4: when a team member has Options.Shadow=true
+// and FastMove is empty, applyMovesetDefaults must resolve against the
+// "_shadow" gamemaster+rankings entry. The fixture ranks the shadow row
+// with a distinct charged move (CH2 vs CH1) — the builder must surface
+// CH2 on the resolved member and echo "a_shadow" as ResolvedSpeciesID.
+func TestTeamBuilderTool_ShadowAutoResolvesShadowRankings(t *testing.T) {
+	t.Parallel()
+
+	tool := newTeamBuilderToolShadowFixture(t)
+	handler := tool.Handler()
+
+	shadowA := tools.Combatant{
+		Species: "a",
+		IV:      [3]int{15, 15, 15},
+		Level:   40,
+		// FastMove intentionally omitted — triggers applyMovesetDefaults
+		// which must flip to the shadow row because Options.Shadow=true.
+		Options: tools.CombatantOptions{Shadow: true},
+	}
+
+	_, result, err := handler(t.Context(), nil, tools.TeamBuilderParams{
+		Pool: []tools.Combatant{
+			shadowA,
+			baseCombatant("b"),
+			baseCombatant("c"),
+		},
+		League: leagueGreat,
+	})
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+
+	if len(result.Teams) == 0 {
+		t.Fatalf("Teams is empty; fixture pool is C(3,3) = 1 triple and must produce one team")
+	}
+
+	var shadowMember *tools.ResolvedCombatant
+
+	for i := range result.Teams[0].Members {
+		if result.Teams[0].Members[i].Species == "a" {
+			shadowMember = &result.Teams[0].Members[i]
+
+			break
+		}
+	}
+
+	if shadowMember == nil {
+		t.Fatalf("Members does not include species 'a' — fixture triple must contain it")
+	}
+
+	if shadowMember.ResolvedSpeciesID != "a_shadow" {
+		t.Errorf("ResolvedSpeciesID = %q, want %q (shadow variant must be picked)",
+			shadowMember.ResolvedSpeciesID, "a_shadow")
+	}
+
+	if shadowMember.ShadowVariantMissing {
+		t.Errorf("ShadowVariantMissing = true; fixture publishes a_shadow entry — must not signal missing")
+	}
+
+	if len(shadowMember.ChargedMoves) != 1 || shadowMember.ChargedMoves[0] != "CH2" {
+		t.Errorf("ChargedMoves = %v, want [CH2] (resolved from shadow rankings row)",
+			shadowMember.ChargedMoves)
+	}
+}

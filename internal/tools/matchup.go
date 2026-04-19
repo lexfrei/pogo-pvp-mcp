@@ -23,10 +23,10 @@ var ErrMoveCategoryMismatch = errors.New("move category mismatch")
 
 // CombatantOptions carries per-Pokémon modifier flags that affect
 // either combat resolution (shadow form uses a distinct pvpoke
-// entry with shadow-exclusive legacy moves) or cost estimation
-// (shadow ×1.2, purified ×0.9, lucky ×0.5 on stardust-only).
-// Flags are orthogonal — a Shadow Pokémon is never Purified, but
-// Lucky can stack with either.
+// entry with shadow-exclusive legacy moves, rankings, and recommended
+// moveset) or cost estimation (shadow ×1.2, purified ×0.9, lucky
+// ×0.5 on stardust-only). Flags are orthogonal — a Shadow Pokémon
+// is never Purified, but Lucky can stack with either.
 //
 // The `_shadow` suffix on species ids is no longer the convention
 // for signalling shadow form — set Shadow=true in Options and leave
@@ -36,8 +36,17 @@ var ErrMoveCategoryMismatch = errors.New("move category mismatch")
 // the fallback reports the base species with a shadow_variant_missing
 // flag so the caller knows shadow-specific legacy moves / rankings
 // were not applied.
+//
+// Known engine limitation: the battle simulator does NOT yet apply
+// the in-game shadow ATK×1.2 / DEF÷1.2 multipliers to damage math
+// (see CLAUDE.md "shadow atk/def multipliers" in the engine limits
+// list). Options.Shadow therefore affects legacy-move resolution,
+// cost estimation, and recommended-moveset lookup today — combat
+// damage numbers still use base stats. Clients relying on strict
+// combat accuracy for shadow forms should treat the result as
+// approximate until the engine closes this gap.
 type CombatantOptions struct {
-	Shadow   bool `json:"shadow,omitempty" jsonschema:"shadow form (×1.2 cost, distinct gamemaster entry)"`
+	Shadow   bool `json:"shadow,omitempty" jsonschema:"shadow form (×1.2 cost; simulator does NOT yet apply shadow atk/def multipliers)"`
 	Lucky    bool `json:"lucky,omitempty" jsonschema:"lucky Pokémon (×0.5 powerup stardust only)"`
 	Purified bool `json:"purified,omitempty" jsonschema:"purified form (×0.9 stardust and candy costs)"`
 }
@@ -303,12 +312,18 @@ func (tool *MatchupTool) applyDefaults(ctx context.Context, params *MatchupParam
 		return err
 	}
 
-	err = applyMovesetDefaults(ctx, tool.rankings, &params.Attacker, cpCap, params.Cup, nil, false)
+	// Pass the gamemaster snapshot so resolvedSpeciesIDForMoveset can
+	// flip to the "_shadow" entry when Options.Shadow=true. Without
+	// this, auto-resolve for shadow combatants returns the base
+	// species' moveset instead of pvpoke's shadow-specific build.
+	snapshot := tool.manager.Current()
+
+	err = applyMovesetDefaults(ctx, tool.rankings, &params.Attacker, cpCap, params.Cup, snapshot, false)
 	if err != nil {
 		return fmt.Errorf("attacker moveset: %w", err)
 	}
 
-	err = applyMovesetDefaults(ctx, tool.rankings, &params.Defender, cpCap, params.Cup, nil, false)
+	err = applyMovesetDefaults(ctx, tool.rankings, &params.Defender, cpCap, params.Cup, snapshot, false)
 	if err != nil {
 		return fmt.Errorf("defender moveset: %w", err)
 	}

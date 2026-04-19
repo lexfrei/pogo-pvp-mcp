@@ -2,10 +2,41 @@ package tools_test
 
 import (
 	"errors"
+	"net/http"
+	"net/http/httptest"
+	"path/filepath"
 	"testing"
 
+	"github.com/lexfrei/pogo-pvp-mcp/internal/rankings"
 	"github.com/lexfrei/pogo-pvp-mcp/internal/tools"
 )
+
+// newMatchupRankingsFromFixture wires a one-shot rankings manager
+// from an inline JSON payload; used by the auto-resolve shadow
+// moveset test which needs both medicham and medicham_shadow
+// ranked so ResolveMoveset can pick between them based on
+// Options.Shadow.
+func newMatchupRankingsFromFixture(t *testing.T, payload string) *rankings.Manager {
+	t.Helper()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(payload))
+	}))
+	t.Cleanup(srv.Close)
+
+	mgr, err := rankings.NewManager(rankings.Config{
+		BaseURL:  srv.URL,
+		LocalDir: filepath.Join(t.TempDir(), "rankings"),
+	})
+	if err != nil {
+		t.Fatalf("NewManager rankings: %v", err)
+	}
+
+	return mgr
+}
+
+const speciesMedichamShadow = "medicham_shadow"
 
 const matchupFixtureGamemaster = `{
   "id": "gamemaster",
@@ -273,9 +304,9 @@ func TestMatchupTool_ShadowOptionResolvesToShadowEntry(t *testing.T) {
 			result.Attacker.Species, speciesMedicham)
 	}
 
-	if result.Attacker.ResolvedSpeciesID != "medicham_shadow" {
-		t.Errorf("Attacker.ResolvedSpeciesID = %q, want \"medicham_shadow\"",
-			result.Attacker.ResolvedSpeciesID)
+	if result.Attacker.ResolvedSpeciesID != speciesMedichamShadow {
+		t.Errorf("Attacker.ResolvedSpeciesID = %q, want %q",
+			result.Attacker.ResolvedSpeciesID, speciesMedichamShadow)
 	}
 
 	if !result.Attacker.Options.Shadow {
@@ -325,5 +356,93 @@ func TestMatchupTool_ShadowOptionFallsBackWhenVariantMissing(t *testing.T) {
 
 	if !result.Attacker.ShadowVariantMissing {
 		t.Errorf("ShadowVariantMissing = false; fixture doesn't publish _shadow entry — must signal")
+	}
+}
+
+// TestMatchupTool_ShadowAutoResolvesShadowRankings pins Phase X-I
+// round-1 review blocker: when Options.Shadow=true and FastMove is
+// empty, ResolveMoveset must key on the shadow species id so the
+// caller gets pvpoke's shadow-form recommended build, not the base
+// species' moveset. The fixture ranks "medicham_shadow" with a
+// distinct moveset (COUNTER + PSYCHIC) vs "medicham" (COUNTER +
+// ICE_PUNCH) — the auto-resolve must pick the shadow row.
+func TestMatchupTool_ShadowAutoResolvesShadowRankings(t *testing.T) {
+	t.Parallel()
+
+	const shadowFixtureGM = `{
+  "id": "gamemaster",
+  "timestamp": "2026-04-19 00:00:00",
+  "pokemon": [
+    {"dex": 308, "speciesId": "medicham", "speciesName": "Medicham",
+     "baseStats": {"atk": 121, "def": 152, "hp": 155},
+     "types": ["fighting", "psychic"],
+     "fastMoves": ["COUNTER"], "chargedMoves": ["ICE_PUNCH","PSYCHIC"], "released": true},
+    {"dex": 308, "speciesId": "medicham_shadow", "speciesName": "Medicham (Shadow)",
+     "baseStats": {"atk": 121, "def": 152, "hp": 155},
+     "types": ["fighting", "psychic"],
+     "fastMoves": ["COUNTER"], "chargedMoves": ["ICE_PUNCH","PSYCHIC"], "released": true},
+    {"dex": 68, "speciesId": "machamp", "speciesName": "Machamp",
+     "baseStats": {"atk": 234, "def": 159, "hp": 207},
+     "types": ["fighting"],
+     "fastMoves": ["COUNTER"], "chargedMoves": ["CROSS_CHOP"], "released": true}
+  ],
+  "moves": [
+    {"moveId": "COUNTER", "name": "Counter", "type": "fighting",
+     "power": 8, "energy": 0, "energyGain": 7, "cooldown": 1000, "turns": 2},
+    {"moveId": "ICE_PUNCH", "name": "Ice Punch", "type": "ice",
+     "power": 55, "energy": 40, "cooldown": 500},
+    {"moveId": "PSYCHIC", "name": "Psychic", "type": "psychic",
+     "power": 90, "energy": 55, "cooldown": 500},
+    {"moveId": "CROSS_CHOP", "name": "Cross Chop", "type": "fighting",
+     "power": 50, "energy": 35, "cooldown": 500}
+  ]
+}`
+
+	const ranksFixture = `[
+  {"speciesId": "medicham", "speciesName": "Medicham", "rating": 900,
+   "moveset": ["COUNTER", "ICE_PUNCH"],
+   "matchups": [], "counters": [],
+   "stats": {"product": 2400, "atk": 107, "def": 139, "hp": 141}},
+  {"speciesId": "medicham_shadow", "speciesName": "Medicham (Shadow)", "rating": 920,
+   "moveset": ["COUNTER", "PSYCHIC"],
+   "matchups": [], "counters": [],
+   "stats": {"product": 2500, "atk": 130, "def": 116, "hp": 141}}
+]`
+
+	mgr := newManagerWithFixture(t, shadowFixtureGM)
+	ranks := newMatchupRankingsFromFixture(t, ranksFixture)
+	handler := tools.NewMatchupTool(mgr, ranks).Handler()
+
+	_, result, err := handler(t.Context(), nil, tools.MatchupParams{
+		Attacker: tools.Combatant{
+			Species: speciesMedicham,
+			IV:      [3]int{15, 15, 15},
+			Level:   40,
+			// FastMove omitted on purpose — triggers applyMovesetDefaults.
+			Options: tools.CombatantOptions{Shadow: true},
+		},
+		Defender: tools.Combatant{
+			Species:  "machamp",
+			IV:       [3]int{15, 15, 15},
+			Level:    40,
+			FastMove: "COUNTER", ChargedMoves: []string{"CROSS_CHOP"},
+		},
+		League:  "great",
+		Shields: [2]int{1, 1},
+	})
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+
+	wantCharged := []string{"PSYCHIC"}
+	if len(result.Attacker.ChargedMoves) != 1 ||
+		result.Attacker.ChargedMoves[0] != wantCharged[0] {
+		t.Errorf("Attacker.ChargedMoves = %v, want %v (resolved from shadow rankings row)",
+			result.Attacker.ChargedMoves, wantCharged)
+	}
+
+	if result.Attacker.ResolvedSpeciesID != speciesMedichamShadow {
+		t.Errorf("Attacker.ResolvedSpeciesID = %q, want %q",
+			result.Attacker.ResolvedSpeciesID, speciesMedichamShadow)
 	}
 }
