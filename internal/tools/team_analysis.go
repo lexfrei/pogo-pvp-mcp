@@ -26,16 +26,13 @@ const TeamSize = 3
 // dependency; kept in sync with the engine constant.
 const maxShieldCount = 2
 
-// validateShields rejects nil (accepted as default) elsewhere, but
-// any provided slice must have exactly two entries, each in
-// [0, maxShieldCount].
+// validateShields accepts an optional list of shield-scenario counts.
+// Each entry must be in [0, maxShieldCount]; every scenario runs with
+// that shield count on both sides. Empty / nil is treated as the
+// default single-scenario [1].
 func validateShields(shields []int) error {
 	if len(shields) == 0 {
 		return nil
-	}
-
-	if len(shields) != 2 {
-		return fmt.Errorf("%w: shields length %d, want 2", ErrInvalidShields, len(shields))
 	}
 
 	for i, value := range shields {
@@ -87,7 +84,7 @@ type TeamAnalysisParams struct {
 	League  string      `json:"league" jsonschema:"little|great|ultra|master"`
 	Cup     string      `json:"cup,omitempty" jsonschema:"cup id from pvpoke (e.g. spring, retro); empty = open-league all"`
 	TopN    int         `json:"top_n,omitempty" jsonschema:"how many meta species to sweep (default 30)"`
-	Shields []int       `json:"shields,omitempty" jsonschema:"[team, meta] shield counts; omit for [1, 1]; each 0..2"`
+	Shields []int       `json:"shields,omitempty" jsonschema:"symmetric shield scenarios; omit for [1]; averaged across; each 0..2"`
 }
 
 // TeamMemberAnalysis describes one team member's performance against
@@ -159,12 +156,15 @@ func (tool *TeamAnalysisTool) Handler() mcp.ToolHandlerFor[TeamAnalysisParams, T
 // teamAnalysisWorkspace is the fully-resolved state the simulation
 // phase consumes. Building it happens in prepareTeamAnalysis; the
 // handler then just runs the simulation and labels the result.
+// Scenarios is the list of symmetric shield counts to simulate per
+// (member, opponent) pair; their ratings are averaged.
 type teamAnalysisWorkspace struct {
 	TeamCombatants []pogopvp.Combatant
 	MetaCombatants []pogopvp.Combatant
 	KeptEntries    []rankings.RankingEntry
 	SkippedMeta    []string
 	CPCap          int
+	Scenarios      []int
 }
 
 // handle orchestrates the analysis: resolve the user team into engine
@@ -186,7 +186,8 @@ func (tool *TeamAnalysisTool) handle(
 	}
 
 	result := runTeamAnalysis(ctx, workspace.TeamCombatants, workspace.MetaCombatants,
-		workspace.KeptEntries, params.League, workspace.CPCap, len(workspace.KeptEntries))
+		workspace.KeptEntries, params.League, workspace.CPCap,
+		len(workspace.KeptEntries), workspace.Scenarios)
 	result.Cup = resolveCupLabel(params.Cup)
 	result.SkippedMetaSpecies = workspace.SkippedMeta
 
@@ -223,7 +224,7 @@ func (tool *TeamAnalysisTool) prepareTeamAnalysis(
 	metaEntries := entries[:min(defaults.TopN, len(entries))]
 
 	metaCombatants, keptEntries, skipped, err := buildMetaCombatants(
-		snapshot, metaEntries, cpCap, defaults.MetaShields)
+		snapshot, metaEntries, cpCap, defaults.Scenarios[0])
 	if err != nil {
 		return nil, err
 	}
@@ -235,7 +236,7 @@ func (tool *TeamAnalysisTool) prepareTeamAnalysis(
 		}
 	}
 
-	teamCombatants, err := buildTeamCombatants(snapshot, params.Team, defaults.TeamShields)
+	teamCombatants, err := buildTeamCombatants(snapshot, params.Team, defaults.Scenarios[0])
 	if err != nil {
 		return nil, err
 	}
@@ -245,6 +246,7 @@ func (tool *TeamAnalysisTool) prepareTeamAnalysis(
 		MetaCombatants: metaCombatants,
 		KeptEntries:    keptEntries,
 		SkippedMeta:    skipped,
+		Scenarios:      defaults.Scenarios,
 		CPCap:          cpCap,
 	}, nil
 }
@@ -268,33 +270,33 @@ func validateTeamAnalysisParams(ctx context.Context, params *TeamAnalysisParams)
 	return validateShields(params.Shields)
 }
 
-// teamAnalysisDefaults bundles the three values resolveTeamDefaults
-// applies when the caller leaves them zeroed.
+// teamAnalysisDefaults bundles the two values resolveTeamDefaults
+// applies when the caller leaves them zeroed. Scenarios lists the
+// shield counts — each entry simulates both sides at that count;
+// ratings are averaged across the list.
 type teamAnalysisDefaults struct {
-	TopN        int
-	TeamShields int
-	MetaShields int
+	TopN      int
+	Scenarios []int
 }
 
 // resolveTeamDefaults applies the defaults for TopN and shields. An
-// omitted Shields field (nil / empty slice) falls back to
-// [defaultShieldsPerSide, defaultShieldsPerSide]; a present slice is
-// taken literally so [0, 2] means "no shields on our side, two on the
-// opponent".
+// omitted Shields field (nil / empty slice) falls back to [1] (one
+// scenario of 1v1 shields — the v0.1 default). A present slice is
+// taken as the list of symmetric shield scenarios to simulate; the
+// final rating is the mean across scenarios. Breaking change relative
+// to the v0.1 [team, meta] semantics; documented in CLAUDE.md.
 func resolveTeamDefaults(shields []int, topN int) teamAnalysisDefaults {
 	out := teamAnalysisDefaults{
-		TopN:        topN,
-		TeamShields: defaultShieldsPerSide,
-		MetaShields: defaultShieldsPerSide,
+		TopN:      topN,
+		Scenarios: []int{defaultShieldsPerSide},
 	}
 
 	if out.TopN == 0 {
 		out.TopN = defaultTeamTopN
 	}
 
-	if len(shields) == 2 {
-		out.TeamShields = shields[0]
-		out.MetaShields = shields[1]
+	if len(shields) > 0 {
+		out.Scenarios = append(out.Scenarios[:0], shields...)
 	}
 
 	return out
@@ -443,7 +445,7 @@ func runTeamAnalysis(
 	ctx context.Context,
 	team, meta []pogopvp.Combatant,
 	metaEntries []rankings.RankingEntry,
-	league string, cpCap, topN int,
+	league string, cpCap, topN int, scenarios []int,
 ) TeamAnalysisResult {
 	perMember := make([]TeamMemberAnalysis, len(team))
 	coverage := make(map[string]int, len(meta))
@@ -458,7 +460,7 @@ func runTeamAnalysis(
 			break
 		}
 
-		tally := analyzeMember(&team[memberIdx], meta, metaEntries, coverage)
+		tally := analyzeMember(&team[memberIdx], meta, metaEntries, coverage, scenarios)
 		perMember[memberIdx] = tally.Analysis
 		overallSum += tally.RatingSum
 		failures += tally.Failures
@@ -500,11 +502,16 @@ type memberTally struct {
 // analyzeMember simulates one team member against the full meta slice
 // and returns its memberTally. The caller-supplied coverage map is
 // updated in place with the best rating-per-opponent seen so far.
+// Each (member, opponent) pair is simulated once per scenario in
+// `scenarios`; the rating used for aggregation is the mean across
+// scenarios. A failed scenario skips the rating for that (pair,
+// scenario) but does not skip the whole pair.
 func analyzeMember(
 	member *pogopvp.Combatant,
 	meta []pogopvp.Combatant,
 	metaEntries []rankings.RankingEntry,
 	coverage map[string]int,
+	scenarios []int,
 ) memberTally {
 	analysis := TeamMemberAnalysis{
 		Species:      member.Species.ID,
@@ -518,8 +525,8 @@ func analyzeMember(
 	)
 
 	for oppIdx := range meta {
-		rating, err := ratingFor(member, &meta[oppIdx])
-		if err != nil {
+		rating, ok := averageRatingAcrossScenarios(member, &meta[oppIdx], scenarios)
+		if !ok {
 			failures++
 
 			continue
@@ -541,6 +548,45 @@ func analyzeMember(
 	}
 
 	return memberTally{Analysis: analysis, RatingSum: memberSum, Failures: failures}
+}
+
+// averageRatingAcrossScenarios runs ratingFor with both sides' shield
+// counts forced to each scenario value, averages the numeric ratings,
+// and reports ok=false if every scenario failed. A partial failure
+// (some scenarios errored, others produced a rating) still counts as
+// success with the mean of the successful scenarios.
+func averageRatingAcrossScenarios(
+	member, opponent *pogopvp.Combatant, scenarios []int,
+) (int, bool) {
+	if len(scenarios) == 0 {
+		return ratingMidpoint, true
+	}
+
+	var (
+		sum     int
+		counted int
+	)
+
+	for _, shields := range scenarios {
+		attacker := *member
+		defender := *opponent
+		attacker.Shields = shields
+		defender.Shields = shields
+
+		rating, err := ratingFor(&attacker, &defender)
+		if err != nil {
+			continue
+		}
+
+		sum += rating
+		counted++
+	}
+
+	if counted == 0 {
+		return 0, false
+	}
+
+	return sum / counted, true
 }
 
 // tallyMatchup updates a per-member analysis with one matchup rating:

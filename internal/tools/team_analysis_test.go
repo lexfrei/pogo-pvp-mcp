@@ -211,7 +211,57 @@ func TestTeamAnalysisTool_ZeroShieldsHonoured(t *testing.T) {
 	}
 }
 
-func TestTeamAnalysisTool_InvalidShieldsLength(t *testing.T) {
+// TestTeamAnalysisTool_ScenariosAreAveraged asserts that passing
+// multiple scenarios (Phase E semantics) averages the per-scenario
+// ratings. A scenario list of [0, 2] must produce a team_score
+// strictly between the pure [0] and pure [2] runs.
+func TestTeamAnalysisTool_ScenariosAreAveraged(t *testing.T) {
+	t.Parallel()
+
+	tool := newTeamAnalysisTool(t)
+	handler := tool.Handler()
+
+	valid := tools.Combatant{
+		Species: "a", IV: [3]int{15, 15, 15}, Level: 40,
+		FastMove: "FAST1", ChargedMoves: []string{"CH1"},
+	}
+	team := []tools.Combatant{valid, valid, valid}
+
+	_, zero, err := handler(t.Context(), nil, tools.TeamAnalysisParams{
+		Team: team, League: leagueGreat, Shields: []int{0},
+	})
+	if err != nil {
+		t.Fatalf("[0]: %v", err)
+	}
+
+	_, two, err := handler(t.Context(), nil, tools.TeamAnalysisParams{
+		Team: team, League: leagueGreat, Shields: []int{2},
+	})
+	if err != nil {
+		t.Fatalf("[2]: %v", err)
+	}
+
+	_, mixed, err := handler(t.Context(), nil, tools.TeamAnalysisParams{
+		Team: team, League: leagueGreat, Shields: []int{0, 2},
+	})
+	if err != nil {
+		t.Fatalf("[0, 2]: %v", err)
+	}
+
+	minScore := min(zero.TeamScore, two.TeamScore)
+	maxScore := max(zero.TeamScore, two.TeamScore)
+
+	if mixed.TeamScore < minScore || mixed.TeamScore > maxScore {
+		t.Errorf("mixed [0,2] team_score %.2f outside [%.2f, %.2f] — averaging is broken",
+			mixed.TeamScore, minScore, maxScore)
+	}
+}
+
+// TestTeamAnalysisTool_InvalidShieldsValue asserts that out-of-range
+// shield values (> maxShieldCount) still fail cleanly under the new
+// scenarios-list semantics. Phase E dropped the length==2 requirement
+// — the per-entry range check remains the only rejection criterion.
+func TestTeamAnalysisTool_InvalidShieldsValue(t *testing.T) {
 	t.Parallel()
 
 	tool := newTeamAnalysisTool(t)
@@ -225,7 +275,7 @@ func TestTeamAnalysisTool_InvalidShieldsLength(t *testing.T) {
 	_, _, err := handler(t.Context(), nil, tools.TeamAnalysisParams{
 		Team:    []tools.Combatant{valid, valid, valid},
 		League:  leagueGreat,
-		Shields: []int{1},
+		Shields: []int{3},
 	})
 	if !errors.Is(err, tools.ErrInvalidShields) {
 		t.Errorf("error = %v, want wrapping ErrInvalidShields", err)
