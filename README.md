@@ -78,6 +78,24 @@ Setting `server.http_port` (or `POGO_PVP_SERVER_HTTP_PORT`) to a non-zero port o
 
 It binds `127.0.0.1` by default; override via `server.http_host` if you need to expose it externally (don't — it's intended for local readiness probes and on-demand cache primes).
 
+## Public MCP HTTP listener
+
+Setting `server.mcp_http_listen` (or `POGO_PVP_SERVER_MCP_HTTP_LISTEN`) to a non-empty Go listen-address opens a second, **public-facing** HTTP endpoint that speaks Streamable HTTP MCP. Intended for remote LLM clients that don't run a local stdio proxy.
+
+```bash
+POGO_PVP_SERVER_MCP_HTTP_LISTEN=0.0.0.0:8080 ./pogo-pvp-mcp serve
+# → both stdio transport AND http://<host>:8080 accept MCP requests
+```
+
+Behaviour:
+
+- **Opt-in**: empty / unset = disabled; stdio remains the only transport.
+- **Stateless**: each request is self-contained (`Stateless:true` + `JSONResponse:true` on the SDK handler); no session state across requests. Fine for read-only data.
+- **Timeouts**: ReadHeader 5s, Read 30s, Write 60s, Idle 90s, MaxHeaderBytes 64 KiB. Graceful shutdown drains in 60s on `SIGTERM`.
+- **Separate from debug**: the loopback debug server (`server.http_port`) stays on `127.0.0.1` with its auth-free `/healthz` / `/refresh` endpoints. The two listeners are orthogonal.
+
+**Phase 1 ships without rate-limit, request-size cap, or tool-call timeout middleware**. Until Phases 2–3 land, run this listener only behind a trusted reverse proxy that enforces those controls upstream, or keep it bound to a private network. Direct exposure to the public internet is premature.
+
 ## Claude Desktop integration
 
 Add the server to `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS) or `%APPDATA%\Claude\claude_desktop_config.json` (Windows):

@@ -8,9 +8,11 @@ package config
 import (
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -75,11 +77,27 @@ type Config struct {
 	Engine     EngineConfig     `mapstructure:"engine"`
 }
 
-// ServerConfig covers transport selection and debug HTTP surface.
+// ServerConfig covers transport selection, the debug HTTP surface, and
+// the public MCP HTTP endpoint.
+//
+// Transport / HTTPHost / HTTPPort govern the LOOPBACK debug server
+// (/healthz, POST /refresh, /debug/gamemaster). That server is not
+// intended to be exposed publicly — its endpoints include unauth'd
+// mutations (refresh) and diagnostics dumps.
+//
+// MCPHTTPListen governs the PUBLIC MCP endpoint (Streamable HTTP). It
+// is bound on whatever address the operator chooses (":8080" or
+// "0.0.0.0:8080" typically). Rate limit, max body size, and real IP
+// resolution will be protected by a net/http middleware chain added
+// in a follow-up phase; Phase 1 ships without those controls, so
+// operators running this listener today should only expose it behind
+// a trusted reverse proxy that enforces equivalent protections.
+// Empty = disabled; stdio remains the only transport.
 type ServerConfig struct {
-	Transport string `mapstructure:"transport"`
-	HTTPHost  string `mapstructure:"http_host"`
-	HTTPPort  int    `mapstructure:"http_port"`
+	Transport     string `mapstructure:"transport"`
+	HTTPHost      string `mapstructure:"http_host"`
+	HTTPPort      int    `mapstructure:"http_port"`
+	MCPHTTPListen string `mapstructure:"mcp_http_listen"`
 }
 
 // LogConfig toggles slog output level and format.
@@ -145,6 +163,7 @@ func applyDefaults(view *viper.Viper) {
 	view.SetDefault("server.transport", "stdio")
 	view.SetDefault("server.http_host", "127.0.0.1")
 	view.SetDefault("server.http_port", 0)
+	view.SetDefault("server.mcp_http_listen", "")
 
 	view.SetDefault("log.level", "info")
 	view.SetDefault("log.format", "text")
@@ -201,6 +220,14 @@ func (c *Config) validateServerAndLog() error {
 			ErrInvalidConfig, c.Server.HTTPPort, maxPort)
 	}
 
+	if c.Server.MCPHTTPListen != "" {
+		err := validateListenAddress(c.Server.MCPHTTPListen)
+		if err != nil {
+			return fmt.Errorf("%w: server.mcp_http_listen=%q: %w",
+				ErrInvalidConfig, c.Server.MCPHTTPListen, err)
+		}
+	}
+
 	if !slices.Contains(validLogLevels, c.Log.Level) {
 		return fmt.Errorf("%w: log.level=%q, want one of %v",
 			ErrInvalidConfig, c.Log.Level, validLogLevels)
@@ -209,6 +236,59 @@ func (c *Config) validateServerAndLog() error {
 	if !slices.Contains(validLogFormats, c.Log.Format) {
 		return fmt.Errorf("%w: log.format=%q, want one of %v",
 			ErrInvalidConfig, c.Log.Format, validLogFormats)
+	}
+
+	return nil
+}
+
+// errListenAddressEmpty signals the caller passed "" to
+// validateListenAddress. Callers of Config.Validate guard against
+// this before calling, but the helper is still exported-style
+// defensive: the validator should never claim "" is a valid listen
+// address (that form means "disabled").
+var errListenAddressEmpty = errors.New("listen address is empty")
+
+// errListenAddressInvalid covers every non-parse listen-address
+// rejection: empty port, port out of range, non-numeric port. Wrapped
+// with fmt.Errorf so the caller sees the specific value, while the
+// linter stops complaining about dynamic error construction.
+var errListenAddressInvalid = errors.New("listen address invalid")
+
+// validateListenAddress parses a Go listen-address string
+// ("host:port", ":port", "[ipv6]:port") and reports whether it is
+// acceptable for net.Listen. Checks (beyond net.SplitHostPort):
+//
+//   - Port must be non-empty and a decimal integer in [0, maxPort].
+//     Port 0 is permitted at net.Listen time (kernel picks), but
+//     explicit 0 in config is nonsense (the listener would rebind
+//     every restart), so we additionally reject 0 here to align
+//     with the operator's intent when they hand-set the field.
+//
+// Host is deliberately not validated beyond SplitHostPort's parse —
+// DNS names and IPv6 literals both round-trip through SplitHostPort,
+// and resolving DNS at config-load time would add a network
+// dependency that config validation should not have.
+func validateListenAddress(addr string) error {
+	if addr == "" {
+		return errListenAddressEmpty
+	}
+
+	_, portStr, err := net.SplitHostPort(addr)
+	if err != nil {
+		return fmt.Errorf("%w: split host/port: %w", errListenAddressInvalid, err)
+	}
+
+	if portStr == "" {
+		return fmt.Errorf("%w: port is empty", errListenAddressInvalid)
+	}
+
+	port, err := strconv.Atoi(portStr)
+	if err != nil {
+		return fmt.Errorf("%w: port %q: %w", errListenAddressInvalid, portStr, err)
+	}
+
+	if port <= 0 || port > maxPort {
+		return fmt.Errorf("%w: port %d outside (0, %d]", errListenAddressInvalid, port, maxPort)
 	}
 
 	return nil
