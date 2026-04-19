@@ -4,7 +4,7 @@ import (
 	pogopvp "github.com/lexfrei/pogo-pvp-engine"
 )
 
-// stardustBudgetPipeline is the post-enumeration pass that applies
+// applyBudgetFilter is the post-enumeration pass that applies
 // a caller-supplied BudgetSpec to the candidate teams. The flow:
 //
 //  1. Compute a per-pool-member MemberCostBreakdown once (one call
