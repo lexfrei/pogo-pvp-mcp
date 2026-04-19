@@ -2,7 +2,7 @@
 
 MCP server that will expose a Pokémon GO PvP battle simulator and ranker to LLM assistants. The simulation math will live in a companion engine module developed alongside this server.
 
-**Status**: approaching v0.1. Seventeen MCP tools plus a `diff-gm` CLI helper are implemented:
+**Status**: approaching v0.1. Eighteen MCP tools plus a `diff-gm` CLI helper are implemented:
 
 - `pvp_rank` — rank one Pokémon in a league/cup by IV and level, with percent-of-best vs the species' global stat-product optimum, a pvpoke-recommended `optimal_moveset` carrying an aggregate `has_legacy` boolean, a `non_legacy_moveset` alternative (populated only when the optimal build contains at least one legacy move, with `rating_delta` vs the optimal build), and a `comparison_to_hundo` block showing the best-case 15/15/15 spread.
 - `pvp_matchup` — 1v1 simulation returning winner, turns, HP / energy / shields used, charged-move firing counts, and the resolved moveset used on each side (so omitted `fast_move` / `charged_moves` get auto-filled from the cup/league recommended build).
@@ -21,6 +21,7 @@ MCP server that will expose a Pokémon GO PvP battle simulator and ranker to LLM
 - `pvp_weather_boost` — static lookup of Pokémon GO's weather → boosted-types table. Pass an empty `weather` to get all seven conditions (sunny / rainy / partly_cloudy / cloudy / windy / snow / fog) and their boosted types, or a specific name for one row. Response includes the `1.2×` PvE damage bonus as reference data; weather boost is **not applied in PvP / GO Battle League** — the battle simulator engine ignores it. Case-insensitive input.
 - `pvp_encounter_cp_range` — given a species id, report min / max CP for each canonical Pokémon GO encounter source (wild spawns unboosted / boosted, research, raids unboosted / boosted, GBL rewards, egg hatches, Team GO Rocket grunt shadow). Each row carries the pinned level (or level range) and the IV floor (e.g. raids lock IVs to 10..15; weather-boosted raids bump the caught level from 20 to 25).
 - `pvp_cup_rules` — look up the include / exclude filter rules + PartySize / LevelCap overrides for each pvpoke cup (`all`, `spring`, `jungle`, ...). Filter types surface raw (`type` / `tag` / `id` / `evolution`) so clients can reason about cup membership without a second tool call. Pass an empty `cup` for the full table.
+- `pvp_second_move_cost` — per-species stardust + candy cost to unlock a second charged move. Stardust from gamemaster `thirdMoveCost`; candy derived from buddy distance (1km → 25, 3km → 50, 5km → 75, 20km → 100). Shadow species (`_shadow` suffix) pay `1.2×` both currencies. Purified species are not modelled; consult Niantic's published rate table directly if you need that number. `stardust_cost_available` / `candy_cost_available` flags signal missing upstream data; zero costs without the flag are never a valid Pokémon GO value.
 - `diff-gm` (CLI-only, not an MCP tool) — diff the upstream gamemaster against the local cache. Exits non-zero on any difference so cron / CI can alert on unexpected drift. See "Gamemaster drift" below.
 
 Every MCP tool accepts an optional `cup` parameter naming a pvpoke cup (`spring`, `retro`, `jungle`, ...); empty resolves to the open-league `all` rankings. 404s on unsupported (cup, cap) pairs surface as `ErrUnknownCup` rather than silently falling back.
@@ -86,7 +87,7 @@ Add the server to `~/Library/Application Support/Claude/claude_desktop_config.js
 }
 ```
 
-Restart Claude Desktop. The seventeen `pvp_*` tools will appear in the tool list. If a tool returns "gamemaster not loaded", run `pogo-pvp-mcp fetch-gm` once to warm the cache.
+Restart Claude Desktop. The eighteen `pvp_*` tools will appear in the tool list. If a tool returns "gamemaster not loaded", run `pogo-pvp-mcp fetch-gm` once to warm the cache.
 
 ## Container image
 
