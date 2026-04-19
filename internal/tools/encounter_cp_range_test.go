@@ -69,8 +69,8 @@ func TestEncounterCPRange_FullTable(t *testing.T) {
 		t.Fatalf("handler: %v", err)
 	}
 
-	if len(result.Ranges) != 7 {
-		t.Fatalf("Ranges len = %d, want 7 (canonical encounter types)", len(result.Ranges))
+	if len(result.Ranges) != 8 {
+		t.Fatalf("Ranges len = %d, want 8 (canonical encounter types)", len(result.Ranges))
 	}
 
 	seen := make(map[string]bool, len(result.Ranges))
@@ -87,8 +87,8 @@ func TestEncounterCPRange_FullTable(t *testing.T) {
 	}
 
 	for _, name := range []string{
-		"wild_unboosted", "wild_boosted", "research_15", "raid",
-		"gbl_reward", "hatch_10km", "rocket_shadow",
+		"wild_unboosted", "wild_boosted", "research", "raid", "raid_boosted",
+		"gbl_reward", "hatch_egg", "rocket_shadow",
 	} {
 		if !seen[name] {
 			t.Errorf("missing encounter type %q from Ranges", name)
@@ -182,6 +182,109 @@ func TestEncounterCPRange_UnknownSpecies(t *testing.T) {
 	_, _, err := handler(t.Context(), nil, tools.EncounterCPRangeParams{Species: "missingno"})
 	if !errors.Is(err, tools.ErrUnknownSpecies) {
 		t.Errorf("error = %v, want wrapping ErrUnknownSpecies", err)
+	}
+}
+
+// TestEncounterCPRange_RaidBoostedIsHigherThanRaid pins the
+// weather-boosted raid mechanic: a raid boss caught in boosting
+// weather lands at level 25 instead of the default 20, producing
+// strictly higher MaxCP for any species with monotone-positive
+// base stats.
+func TestEncounterCPRange_RaidBoostedIsHigherThanRaid(t *testing.T) {
+	t.Parallel()
+
+	tool := newEncounterCPRangeTool(t)
+	handler := tool.Handler()
+
+	_, result, err := handler(t.Context(), nil, tools.EncounterCPRangeParams{
+		Species: speciesMedicham,
+	})
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+
+	rangesByType := make(map[string]tools.EncounterCPRange, len(result.Ranges))
+	for _, r := range result.Ranges {
+		rangesByType[r.EncounterType] = r
+	}
+
+	raid := rangesByType["raid"]
+	raidBoosted := rangesByType["raid_boosted"]
+
+	if raidBoosted.MaxCP <= raid.MaxCP {
+		t.Errorf("raid_boosted MaxCP %d ≤ raid MaxCP %d, want strictly greater",
+			raidBoosted.MaxCP, raid.MaxCP)
+	}
+
+	if raid.MinLevel != 20 || raidBoosted.MinLevel != 25 {
+		t.Errorf("level pins: raid=%f raid_boosted=%f, want 20 / 25",
+			raid.MinLevel, raidBoosted.MinLevel)
+	}
+}
+
+// TestEncounterCPRange_GamemasterNotLoaded pins the cold-start
+// sentinel the same way every other gamemaster-dependent tool does.
+func TestEncounterCPRange_GamemasterNotLoaded(t *testing.T) {
+	t.Parallel()
+
+	gmMgr, err := gamemaster.NewManager(config.GamemasterConfig{
+		Source:    "http://127.0.0.1:1",
+		LocalPath: filepath.Join(t.TempDir(), "gm.json"),
+	})
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+
+	tool := tools.NewEncounterCPRangeTool(gmMgr)
+	handler := tool.Handler()
+
+	_, _, err = handler(t.Context(), nil, tools.EncounterCPRangeParams{
+		Species: speciesMedicham,
+	})
+	if !errors.Is(err, tools.ErrGamemasterNotLoaded) {
+		t.Errorf("error = %v, want wrapping ErrGamemasterNotLoaded", err)
+	}
+}
+
+// TestEncounterCPRange_EmptySpeciesRejected rejects an empty species
+// id up-front rather than producing a confusing "not found" message.
+func TestEncounterCPRange_EmptySpeciesRejected(t *testing.T) {
+	t.Parallel()
+
+	tool := newEncounterCPRangeTool(t)
+	handler := tool.Handler()
+
+	_, _, err := handler(t.Context(), nil, tools.EncounterCPRangeParams{Species: ""})
+	if !errors.Is(err, tools.ErrUnknownSpecies) {
+		t.Errorf("error = %v, want wrapping ErrUnknownSpecies", err)
+	}
+}
+
+// TestEncounterCPRange_HatchEggCoversAllTiers documents the
+// single-rule design: every egg tier (2km / 5km / 7km / 10km /
+// 12km) shares the same level + IV floor, so one `hatch_egg`
+// entry covers all of them.
+func TestEncounterCPRange_HatchEggCoversAllTiers(t *testing.T) {
+	t.Parallel()
+
+	tool := newEncounterCPRangeTool(t)
+	handler := tool.Handler()
+
+	_, result, err := handler(t.Context(), nil, tools.EncounterCPRangeParams{
+		Species: speciesMedicham, EncounterType: "hatch_egg",
+	})
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+
+	if len(result.Ranges) != 1 {
+		t.Fatalf("Ranges len = %d, want 1", len(result.Ranges))
+	}
+
+	hatch := result.Ranges[0]
+	if hatch.MinLevel != 20 || hatch.MaxLevel != 20 || hatch.MinIV != 10 {
+		t.Errorf("hatch rule = (level %f-%f, IV floor %d), want (20, 20, 10)",
+			hatch.MinLevel, hatch.MaxLevel, hatch.MinIV)
 	}
 }
 

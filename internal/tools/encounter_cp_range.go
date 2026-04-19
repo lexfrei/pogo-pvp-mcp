@@ -60,24 +60,27 @@ func NewEncounterCPRangeTool(gm *gamemaster.Manager) *EncounterCPRangeTool {
 }
 
 // Canonical Pokémon GO encounter-source level / IV floors. Values
-// sourced from Niantic documentation and pvpoke; update when
-// Niantic shifts a mechanic (2022 raid rework moved caught-level
-// from 20 to 20 with IV floor 10; weather boost still +5 levels).
+// sourced from Niantic documentation and community reverse-engineering;
+// update when Niantic shifts a mechanic (2022 raid rework set the raid
+// IV floor to 10; weather boost still adds +5 levels).
 const (
 	encounterWildUnboostedMinLevel = 1
 	encounterWildUnboostedMaxLevel = 30
+	encounterWildUnboostedMinIV    = 0
 	encounterWildBoostedMinLevel   = 6
 	encounterWildBoostedMaxLevel   = 35
 	encounterWildBoostedMinIV      = 4
 	encounterResearchLevel         = 15
 	encounterResearchMinIV         = 10
 	encounterRaidLevel             = 20
+	encounterRaidBoostedLevel      = 25
 	encounterRaidMinIV             = 10
 	encounterGBLRewardLevel        = 20
+	encounterGBLRewardMinIV        = 0
 	encounterHatchLevel            = 20
 	encounterHatchMinIV            = 10
 	encounterRocketShadowLevel     = 8
-	encounterRocketShadowMinIV     = 1
+	encounterRocketShadowMinIV     = 0
 )
 
 // encounterRule captures the Pokémon GO rules for one encounter
@@ -100,28 +103,35 @@ type encounterRule struct {
 var encounterRules = []encounterRule{
 	{
 		Type: "gbl_reward", Display: "GO Battle League reward encounter",
-		MinLevel: encounterGBLRewardLevel, MaxLevel: encounterGBLRewardLevel, MinIV: 0,
+		MinLevel: encounterGBLRewardLevel, MaxLevel: encounterGBLRewardLevel, MinIV: encounterGBLRewardMinIV,
 		Note: "Pinned at level 20 with standard 0..15 IV range.",
 	},
 	{
-		Type: "hatch_10km", Display: "10km egg hatch",
+		Type: "hatch_egg", Display: "Egg hatch (all tiers: 2km / 5km / 7km / 10km / 12km)",
 		MinLevel: encounterHatchLevel, MaxLevel: encounterHatchLevel, MinIV: encounterHatchMinIV,
-		Note: "Hatched Pokémon arrive at level 20 with IVs floor-clamped to 10..15.",
+		Note: "All egg tiers share the same rule: level 20 with IV floor 10.",
 	},
 	{
-		Type: "raid", Display: "Tier 1-5 raid reward",
+		Type: "raid", Display: "Raid reward (unboosted)",
 		MinLevel: encounterRaidLevel, MaxLevel: encounterRaidLevel, MinIV: encounterRaidMinIV,
-		Note: "Post-2022 raid rework: caught at level 20 with IV floor 10.",
+		Note: "Post-2022 raid rework: caught at level 20 with IV floor 10 when weather does not boost the boss.",
 	},
 	{
-		Type: "research_15", Display: "Research / field task encounter",
+		Type: "raid_boosted", Display: "Raid reward (weather-boosted)",
+		MinLevel: encounterRaidBoostedLevel, MaxLevel: encounterRaidBoostedLevel, MinIV: encounterRaidMinIV,
+		Note: "Raid boss in boosting weather: caught at level 25 with the same IV floor 10.",
+	},
+	{
+		Type: "research", Display: "Research / field task encounter",
 		MinLevel: encounterResearchLevel, MaxLevel: encounterResearchLevel, MinIV: encounterResearchMinIV,
-		Note: "Fixed level 15 with IV floor 10. Also covers Research Breakthrough.",
+		Note: "Fixed level 15 with IV floor 10. Covers field tasks and Research Breakthrough.",
 	},
 	{
-		Type: "rocket_shadow", Display: "Team GO Rocket shadow encounter",
+		Type: "rocket_shadow", Display: "Team GO Rocket grunt shadow encounter",
 		MinLevel: encounterRocketShadowLevel, MaxLevel: encounterRocketShadowLevel, MinIV: encounterRocketShadowMinIV,
-		Note: "Shadow Pokémon are level 8 with IVs floor 1. Purification adds +2 levels and sets IVs to 15/15/15.",
+		Note: "Grunt shadows arrive at level 8 with standard 0..15 IV range. " +
+			"Purification adds +2 levels and sets IVs to 15/15/15. " +
+			"Leader / Giovanni shadows use higher floors and are not modelled here.",
 	},
 	{
 		Type: "wild_boosted", Display: "Wild spawn (weather-boosted)",
@@ -130,8 +140,8 @@ var encounterRules = []encounterRule{
 	},
 	{
 		Type: "wild_unboosted", Display: "Wild spawn (not weather-boosted)",
-		MinLevel: encounterWildUnboostedMinLevel, MaxLevel: encounterWildUnboostedMaxLevel, MinIV: 0,
-		Note: "Standard wild spawn window. Lures / incense obey the same rule.",
+		MinLevel: encounterWildUnboostedMinLevel, MaxLevel: encounterWildUnboostedMaxLevel, MinIV: encounterWildUnboostedMinIV,
+		Note: "Standard wild spawn window at level 1..30 with full 0..15 IV range.",
 	},
 }
 
@@ -241,33 +251,68 @@ func knownEncounterTypes() []string {
 // level, 15/15/15 IVs). Stat floors apply the encounter-type's
 // MinIV to every component (atk, def, sta) — this matches Niantic's
 // documented mechanic for weather-boosted spawns and raids.
+//
+// Every rule entry has already been validated at package init via
+// validateEncounterRules, so NewIV / CPMAt cannot fail for any
+// in-table value and we panic on an impossible error to surface a
+// corrupt table instead of returning a silent zero CP to the caller.
 func computeEncounterRange(species *pogopvp.Species, rule encounterRule) EncounterCPRange {
-	minIV, _ := pogopvp.NewIV(rule.MinIV, rule.MinIV, rule.MinIV)
-	maxIV, _ := pogopvp.NewIV(pogopvp.MaxIV, pogopvp.MaxIV, pogopvp.MaxIV)
-
-	var (
-		minCP int
-		maxCP int
-	)
-
-	minCPM, err := pogopvp.CPMAt(rule.MinLevel)
-	if err == nil {
-		minCP = pogopvp.ComputeCP(species.BaseStats, minIV, minCPM)
-	}
-
-	maxCPM, err := pogopvp.CPMAt(rule.MaxLevel)
-	if err == nil {
-		maxCP = pogopvp.ComputeCP(species.BaseStats, maxIV, maxCPM)
-	}
-
 	return EncounterCPRange{
 		EncounterType: rule.Type,
 		Display:       rule.Display,
 		MinLevel:      rule.MinLevel,
 		MaxLevel:      rule.MaxLevel,
 		MinIV:         rule.MinIV,
-		MinCP:         minCP,
-		MaxCP:         maxCP,
+		MinCP:         mustComputeCP(species.BaseStats, rule.MinIV, rule.MinLevel),
+		MaxCP:         mustComputeCP(species.BaseStats, pogopvp.MaxIV, rule.MaxLevel),
 		Note:          rule.Note,
 	}
+}
+
+// mustComputeCP is the CP-lookup wrapper that panics if the IV
+// triple or the level can't be accepted by the engine. Only safe to
+// call with pre-validated domain-constant inputs.
+func mustComputeCP(base pogopvp.BaseStats, ivFloor int, level float64) int {
+	ivs, err := pogopvp.NewIV(ivFloor, ivFloor, ivFloor)
+	if err != nil {
+		panic(fmt.Sprintf("encounter_cp_range: invalid IV floor %d: %v", ivFloor, err))
+	}
+
+	cpm, err := pogopvp.CPMAt(level)
+	if err != nil {
+		panic(fmt.Sprintf("encounter_cp_range: invalid level %.1f: %v", level, err))
+	}
+
+	return pogopvp.ComputeCP(base, ivs, cpm)
+}
+
+// validateEncounterRules runs at package init to ensure every
+// encounter rule uses engine-accepted IV floors and level grid
+// positions. A bad rule panics the server on startup rather than
+// silently returning zero CP to a user.
+func validateEncounterRules() {
+	for _, rule := range encounterRules {
+		_, err := pogopvp.NewIV(rule.MinIV, rule.MinIV, rule.MinIV)
+		if err != nil {
+			panic(fmt.Sprintf("encounter_cp_range: rule %q invalid MinIV %d: %v",
+				rule.Type, rule.MinIV, err))
+		}
+
+		_, err = pogopvp.CPMAt(rule.MinLevel)
+		if err != nil {
+			panic(fmt.Sprintf("encounter_cp_range: rule %q invalid MinLevel %.1f: %v",
+				rule.Type, rule.MinLevel, err))
+		}
+
+		_, err = pogopvp.CPMAt(rule.MaxLevel)
+		if err != nil {
+			panic(fmt.Sprintf("encounter_cp_range: rule %q invalid MaxLevel %.1f: %v",
+				rule.Type, rule.MaxLevel, err))
+		}
+	}
+}
+
+//nolint:gochecknoinits // one-shot domain-table validation; safer than runtime silent zeros
+func init() {
+	validateEncounterRules()
 }
