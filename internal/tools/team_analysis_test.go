@@ -1,6 +1,7 @@
 package tools_test
 
 import (
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -208,6 +209,63 @@ func TestTeamAnalysisTool_ZeroShieldsHonoured(t *testing.T) {
 	if withOneShield.TeamScore == withZeroShields.TeamScore {
 		t.Errorf("team_score unchanged across shield counts (%.2f) — zero likely coerced to default",
 			withOneShield.TeamScore)
+	}
+}
+
+// TestTeamAnalysisTool_ChargedMovesEmptyIsJSONArray pins the
+// wire-shape invariant: a team member with no charged moves must
+// render as `"charged_moves": []`, not `"charged_moves": null`.
+// The invariant exists because ResolvedCombatant (matchup /
+// team_builder) and TeamMemberAnalysis (team_analysis) share a
+// logical field and must marshal identically. Runs through the
+// real handler so the bug would reappear if chargedMoveIDs ever
+// reverts to returning nil on empty input.
+func TestTeamAnalysisTool_ChargedMovesEmptyIsJSONArray(t *testing.T) {
+	t.Parallel()
+
+	tool := newTeamAnalysisTool(t)
+	handler := tool.Handler()
+
+	// FastMove explicit so applyMovesetDefaults does not auto-fill
+	// charged moves from the rankings; ChargedMoves deliberately
+	// empty so analyzeMember projects an empty engine slice.
+	fastOnly := tools.Combatant{
+		Species:  "a",
+		IV:       [3]int{15, 15, 15},
+		Level:    40,
+		FastMove: "FAST1",
+	}
+
+	_, result, err := handler(t.Context(), nil, tools.TeamAnalysisParams{
+		Team:   []tools.Combatant{fastOnly, fastOnly, fastOnly},
+		League: leagueGreat,
+	})
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+
+	if len(result.PerMember) == 0 {
+		t.Fatal("PerMember is empty")
+	}
+
+	payload, err := json.Marshal(result.PerMember[0])
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+
+	decoded := map[string]any{}
+
+	err = json.Unmarshal(payload, &decoded)
+	if err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	value, present := decoded["charged_moves"]
+	if !present {
+		t.Fatal("charged_moves key missing from JSON output")
+	}
+	if value == nil {
+		t.Errorf("charged_moves = null, want [] (empty array); raw=%s", payload)
 	}
 }
 

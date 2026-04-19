@@ -7,11 +7,22 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"time"
 
 	pogopvp "github.com/lexfrei/pogo-pvp-engine"
 	"github.com/lexfrei/pogo-pvp-mcp/internal/gamemaster"
 	"github.com/spf13/cobra"
 )
+
+// diffGMFetchTimeout caps the one-shot upstream GET that diff-gm
+// issues. Matches the 30s timeout used by rankings.Manager so a slow
+// pvpoke CDN does not hang a cron-driven drift check indefinitely —
+// `http.DefaultClient` has no timeout at all. Declared as a var so
+// tests can drop it below 30s without waiting out the real ceiling;
+// production code never reassigns it.
+//
+//nolint:gochecknoglobals // test-overridable timeout, never reassigned in production
+var diffGMFetchTimeout = 30 * time.Second
 
 // ErrDiffDirty signals a non-empty diff so cron / CI drivers can
 // exit 1 without further plumbing. The command prints the full
@@ -122,7 +133,9 @@ func loadRemoteGamemaster(
 
 // fetchUpstreamGamemaster does a one-shot GET of the configured
 // source URL without going through gamemaster.Manager — we do not
-// want to mutate the cache as a side effect of a diff command.
+// want to mutate the cache as a side effect of a diff command. Uses
+// a dedicated client with diffGMFetchTimeout so a slow / hung
+// upstream cannot hang a cron-driven drift check indefinitely.
 func fetchUpstreamGamemaster(
 	ctx context.Context, source string,
 ) (*pogopvp.Gamemaster, error) {
@@ -131,7 +144,9 @@ func fetchUpstreamGamemaster(
 		return nil, fmt.Errorf("build request: %w", err)
 	}
 
-	resp, err := http.DefaultClient.Do(req)
+	client := &http.Client{Timeout: diffGMFetchTimeout}
+
+	resp, err := client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("fetch %s: %w", source, err)
 	}

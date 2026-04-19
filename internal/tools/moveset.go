@@ -10,12 +10,12 @@ import (
 )
 
 // chargedMoveIDs projects an engine Combatant's charged moves to a
-// slice of string ids for the tool-level echo shapes.
+// slice of string ids for the tool-level echo shapes. An empty input
+// returns an empty (non-nil) slice so JSON marshalling emits `[]`
+// rather than `null` — the echo field on the several result types
+// (TeamMemberAnalysis, ResolvedCombatant) needs a consistent wire
+// shape regardless of whether the engine Combatant was fast-only.
 func chargedMoveIDs(moves []pogopvp.Move) []string {
-	if len(moves) == 0 {
-		return nil
-	}
-
 	out := make([]string, len(moves))
 	for i := range moves {
 		out[i] = moves[i].ID

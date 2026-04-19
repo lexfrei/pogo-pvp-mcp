@@ -75,10 +75,10 @@ const uncoveredThreshold = 400
 const rankingsMaxLevelCap = 50
 
 // TeamAnalysisParams is the JSON input contract for pvp_team_analysis.
-// Shields is an optional 2-slot slice; an omitted/empty value defaults
-// to [1, 1]. An explicit [0, 2] is honoured literally — setting
-// individual 0s would be ambiguous with the zero value, so the whole
-// field must be present or omitted together.
+// Shields is a list of symmetric shield scenarios: each entry forces
+// both sides to that count; ratings are averaged across scenarios.
+// nil / empty → [1] (single 1v1 scenario). Phase E broke the v0.1
+// `[team, meta]` asymmetric pair — pre-v0.1 rename.
 type TeamAnalysisParams struct {
 	Team    []Combatant `json:"team" jsonschema:"exactly 3 team members"`
 	League  string      `json:"league" jsonschema:"little|great|ultra|master"`
@@ -552,14 +552,22 @@ func analyzeMember(
 
 // averageRatingAcrossScenarios runs ratingFor with both sides' shield
 // counts forced to each scenario value, averages the numeric ratings,
-// and reports ok=false if every scenario failed. A partial failure
-// (some scenarios errored, others produced a rating) still counts as
-// success with the mean of the successful scenarios.
+// and reports ok=false if every scenario failed OR the scenarios
+// slice is empty. A partial failure (some scenarios errored, others
+// produced a rating) still counts as success with the mean of the
+// successful scenarios.
+//
+// An empty scenarios slice returns (0, false) — not a 500 tie — so
+// the pair is counted as a failure rather than a silently-injected
+// midpoint score. resolveTeamDefaults always supplies at least one
+// scenario, so this path is defensive, but the CLAUDE.md invariant
+// against 500-midpoint fallbacks must hold regardless of caller
+// correctness.
 func averageRatingAcrossScenarios(
 	member, opponent *pogopvp.Combatant, scenarios []int,
 ) (int, bool) {
 	if len(scenarios) == 0 {
-		return ratingMidpoint, true
+		return 0, false
 	}
 
 	var (

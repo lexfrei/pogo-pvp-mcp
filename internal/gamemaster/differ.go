@@ -25,11 +25,16 @@ type Diff struct {
 
 // ChangedSpecies captures the before/after projection of a single
 // species. Only the fields that affect PvP math are compared —
-// cosmetic fields (Tags, Dex, Released) are ignored.
+// cosmetic fields (Tags, Dex, Released) are ignored. Types matter
+// because STAB and type-effectiveness resolution are driven off
+// Species.Types; a silent Types-only change would flip matchup
+// outcomes while the differ reported "no changes".
 type ChangedSpecies struct {
 	ID                 string
 	BaseStatsBefore    pogopvp.BaseStats
 	BaseStatsAfter     pogopvp.BaseStats
+	TypesBefore        []string
+	TypesAfter         []string
 	FastMovesBefore    []string
 	FastMovesAfter     []string
 	ChargedMovesBefore []string
@@ -118,6 +123,8 @@ func diffSpeciesInto(
 				ID:                 speciesID,
 				BaseStatsBefore:    old.BaseStats,
 				BaseStatsAfter:     current.BaseStats,
+				TypesBefore:        old.Types,
+				TypesAfter:         current.Types,
 				FastMovesBefore:    old.FastMoves,
 				FastMovesAfter:     current.FastMoves,
 				ChargedMovesBefore: old.ChargedMoves,
@@ -134,9 +141,15 @@ func diffSpeciesInto(
 }
 
 // speciesChanged reports whether two species entries differ in any
-// PvP-relevant field.
+// PvP-relevant field: base stats, type list (order-insensitive —
+// pvpoke's primary/secondary ordering is not semantically
+// meaningful to the engine), or legal-move list.
 func speciesChanged(before, after *pogopvp.Species) bool {
 	if before.BaseStats != after.BaseStats {
+		return true
+	}
+
+	if !stringSetEqual(before.Types, after.Types) {
 		return true
 	}
 
@@ -278,6 +291,11 @@ func writeSpeciesEntry(out io.Writer, entry *ChangedSpecies) {
 	if entry.BaseStatsBefore != entry.BaseStatsAfter {
 		fmt.Fprintf(out, "      stats: %+v -> %+v\n",
 			entry.BaseStatsBefore, entry.BaseStatsAfter)
+	}
+
+	if !stringSetEqual(entry.TypesBefore, entry.TypesAfter) {
+		fmt.Fprintf(out, "      types: %v -> %v\n",
+			entry.TypesBefore, entry.TypesAfter)
 	}
 
 	if !stringSetEqual(entry.FastMovesBefore, entry.FastMovesAfter) {

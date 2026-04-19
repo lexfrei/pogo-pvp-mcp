@@ -36,9 +36,12 @@ const defaultMaxResults = 5
 const MaxPoolSize = 50
 
 // TeamBuilderParams is the JSON input contract for pvp_team_builder.
-// Shields follows the same convention as [TeamAnalysisParams.Shields]:
-// omit the field for the [1, 1] default, or supply both slots
-// explicitly.
+// Shields is a list of symmetric shield scenarios (each entry 0..2;
+// nil / empty → [1]). The first scenario seeds the pool/meta
+// combatant shield count; the per-(pool, meta, scenario) matrix
+// then scores each triple under every shield context regardless.
+// OptimizeFor (overall|0s|1s|2s|all_pareto) selects which scenario
+// axis drives the ranking; see TeamBuilderTeam.ParetoLabel.
 type TeamBuilderParams struct {
 	Pool        []Combatant `json:"pool" jsonschema:"candidate combatants to draw the team from"`
 	League      string      `json:"league" jsonschema:"little|great|ultra|master"`
@@ -67,9 +70,13 @@ type TeamBuilderTeam struct {
 }
 
 // TeamBuilderResult is the JSON output for pvp_team_builder.
-// SimulationFailures counts simulate calls that errored across the
-// entire search; non-zero means some triples were scored with tie
-// fallbacks and the ranking is less reliable.
+// SimulationFailures counts individual Simulate calls that errored
+// across the entire search across all three shield scenarios — one
+// (pool, meta) pair can contribute up to 3 failures. Failed cells
+// are excluded from both numerator and denominator when scoring a
+// triple (no tie-midpoint fallback); a non-zero value just means the
+// score sample for some triples was smaller than meta × scenarios
+// would suggest.
 type TeamBuilderResult struct {
 	League             string            `json:"league"`
 	Cup                string            `json:"cup"`
@@ -495,18 +502,39 @@ func enumerateTeams(
 			return teams
 		}
 
-		for jIdx := i + 1; jIdx < len(pool); jIdx++ {
-			for kIdx := jIdx + 1; kIdx < len(pool); kIdx++ {
-				speciesIDs := []string{pool[i].Species, pool[jIdx].Species, pool[kIdx].Species}
-				if !containsAllSpecies(speciesIDs, required) {
-					continue
-				}
+		teams = enumerateFromAnchor(pool, matrix, required,
+			scenarioIdx, label, i, evaluated, teams)
+	}
 
-				score := scoreTripleFromMatrix(matrix, i, jIdx, kIdx, scenarioIdx)
-				*evaluated++
+	return teams
+}
 
-				teams = append(teams, newTeam(pool, i, jIdx, kIdx, score, label))
+// enumerateFromAnchor extends the running `teams` slice with every
+// triple that starts at pool[i] and satisfies the required-anchor
+// set. Split out of [enumerateTeams] so the outer function keeps its
+// ctx-cancellation check at the top while the inner loops stay under
+// the gocognit budget.
+func enumerateFromAnchor(
+	pool []Combatant, matrix [][][scenarioCount]ratingMatrixEntry,
+	required map[string]struct{},
+	scenarioIdx int, label string,
+	i int, evaluated *int, teams []TeamBuilderTeam,
+) []TeamBuilderTeam {
+	for jIdx := i + 1; jIdx < len(pool); jIdx++ {
+		for kIdx := jIdx + 1; kIdx < len(pool); kIdx++ {
+			speciesIDs := []string{pool[i].Species, pool[jIdx].Species, pool[kIdx].Species}
+			if !containsAllSpecies(speciesIDs, required) {
+				continue
 			}
+
+			score, ok := scoreTripleFromMatrix(matrix, i, jIdx, kIdx, scenarioIdx)
+			*evaluated++
+
+			if !ok {
+				continue
+			}
+
+			teams = append(teams, newTeam(pool, i, jIdx, kIdx, score, label))
 		}
 	}
 
@@ -563,7 +591,10 @@ func updateScenarioBests(
 	bestByScenario []TeamBuilderTeam, foundByScenario []bool,
 ) {
 	for scenarioIdx := range scenarioCount {
-		score := scoreTripleFromMatrix(matrix, i, jIdx, kIdx, scenarioIdx)
+		score, ok := scoreTripleFromMatrix(matrix, i, jIdx, kIdx, scenarioIdx)
+		if !ok {
+			continue
+		}
 
 		if !foundByScenario[scenarioIdx] || score > bestByScenario[scenarioIdx].TeamScore {
 			bestByScenario[scenarioIdx] = newTeam(pool, i, jIdx, kIdx,
@@ -645,28 +676,30 @@ func newTeam(
 }
 
 // averageScenarioScore means-of-means across the three scenarios for
-// one triple — the overall-axis score in all_pareto mode.
+// one triple — the overall-axis score in all_pareto mode. Uses the
+// ok signal from scoreTripleFromMatrix to distinguish a legitimate
+// zero (full defender blowout on every matchup in the scenario)
+// from "no valid sample" (every sim failed): only the former
+// contributes to the mean.
 func averageScenarioScore(
 	matrix [][][scenarioCount]ratingMatrixEntry, iIdx, jIdx, kIdx int,
 ) float64 {
 	var (
-		total    float64
-		counted  int
-		anyScore bool
+		total   float64
+		counted int
 	)
 
 	for scenarioIdx := range scenarioCount {
-		score := scoreTripleFromMatrix(matrix, iIdx, jIdx, kIdx, scenarioIdx)
-		if score == 0 {
+		score, ok := scoreTripleFromMatrix(matrix, iIdx, jIdx, kIdx, scenarioIdx)
+		if !ok {
 			continue
 		}
 
 		total += score
 		counted++
-		anyScore = true
 	}
 
-	if !anyScore || counted == 0 {
+	if counted == 0 {
 		return 0
 	}
 
@@ -738,12 +771,16 @@ func precomputeRatingMatrix(
 // scoreTripleFromMatrix averages the ratings for three pool members
 // against the full meta for one shield scenario, skipping failed
 // entries in both numerator and denominator so failures do not
-// distort the average toward ratingMidpoint.
+// distort the average toward ratingMidpoint. The second return value
+// is false when every (member, opponent) cell in the scenario was a
+// simulate failure — callers must distinguish "legitimate score of
+// 0" (full defender blowout) from "no valid sample" since both shape
+// as numeric 0 and the callers' aggregation rules differ.
 func scoreTripleFromMatrix(
 	matrix [][][scenarioCount]ratingMatrixEntry, iIdx, jIdx, kIdx, scenarioIdx int,
-) float64 {
+) (float64, bool) {
 	if len(matrix) == 0 || len(matrix[iIdx]) == 0 {
-		return 0
+		return 0, false
 	}
 
 	var (
@@ -764,10 +801,10 @@ func scoreTripleFromMatrix(
 	}
 
 	if counted == 0 {
-		return 0
+		return 0, false
 	}
 
-	return sum / float64(counted)
+	return sum / float64(counted), true
 }
 
 // containsAllSpecies reports whether every id in required is present

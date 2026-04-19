@@ -2,12 +2,17 @@ package gamemaster_test
 
 import (
 	"bytes"
+	"slices"
 	"strings"
 	"testing"
 
 	pogopvp "github.com/lexfrei/pogo-pvp-engine"
 	"github.com/lexfrei/pogo-pvp-mcp/internal/gamemaster"
 )
+
+// testSpeciesMedicham keeps the id literal out of repeated test
+// assertions — matches the convention used in rankings_test.
+const testSpeciesMedicham = "medicham"
 
 // smallFixture is the shared base gamemaster for differ tests. Every
 // scenario mutates a copy of this value and diffs it against the
@@ -124,6 +129,43 @@ func TestDiffGamemasters_AddsRemovesChanges(t *testing.T) {
 	if diff.ChangedMoves[0].Before.Power != 8 || diff.ChangedMoves[0].After.Power != 10 {
 		t.Errorf("COUNTER power diff = %d -> %d, want 8 -> 10",
 			diff.ChangedMoves[0].Before.Power, diff.ChangedMoves[0].After.Power)
+	}
+}
+
+// TestDiffGamemasters_TypesChangeDetected pins the Phase-review
+// fix: a species whose only difference is its Types list must be
+// surfaced as changed. Before the fix, a secondary-type flip would
+// slip past the differ entirely and silently shift STAB / type
+// effectiveness resolution downstream.
+func TestDiffGamemasters_TypesChangeDetected(t *testing.T) {
+	t.Parallel()
+
+	before := smallFixture()
+	after := smallFixture()
+
+	// Clone medicham and flip its secondary type fighting -> dark.
+	medicham := after.Pokemon[testSpeciesMedicham]
+	medicham.Types = []string{"dark", "psychic"}
+	after.Pokemon[testSpeciesMedicham] = medicham
+
+	diff := gamemaster.DiffGamemasters(before, after)
+
+	if diff.Empty() {
+		t.Fatal("Empty = true, want false when Types differ")
+	}
+
+	if len(diff.ChangedSpecies) != 1 || diff.ChangedSpecies[0].ID != testSpeciesMedicham {
+		t.Fatalf("ChangedSpecies = %+v, want exactly %s",
+			diff.ChangedSpecies, testSpeciesMedicham)
+	}
+
+	entry := diff.ChangedSpecies[0]
+
+	if !slices.Contains(entry.TypesBefore, "fighting") {
+		t.Errorf("TypesBefore = %v, want to contain fighting", entry.TypesBefore)
+	}
+	if !slices.Contains(entry.TypesAfter, "dark") {
+		t.Errorf("TypesAfter = %v, want to contain dark", entry.TypesAfter)
 	}
 }
 

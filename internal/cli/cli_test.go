@@ -2,6 +2,7 @@ package cli_test
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -9,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/lexfrei/pogo-pvp-mcp/internal/cli"
 )
@@ -230,6 +232,68 @@ func TestNewRootCommand_DiffGMDetectsDrift(t *testing.T) {
 	}
 	if !strings.Contains(string(cached), `"atk": 118`) {
 		t.Error("diff-gm mutated the cache; Phase F.4 invariant broken")
+	}
+}
+
+// TestNewRootCommand_DiffGMRespectsContextDeadline proves diff-gm
+// does not hang on a slow / unresponsive upstream: the HTTP request
+// is built with NewRequestWithContext, so a context deadline from
+// the caller (cron wrapper, cobra) aborts the fetch promptly. A
+// regression that drops ctx threading — or that swallows the cancel
+// error into a silent retry — fails this test by exceeding the
+// 5-second hard cap. The client's own Timeout field (30s production
+// default) is a separate defense-in-depth guard not exercised here
+// because it would require a 30-second test.
+func TestNewRootCommand_DiffGMRespectsContextDeadline(t *testing.T) {
+	release := make(chan struct{})
+
+	server := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {
+		<-release
+	}))
+	defer func() {
+		close(release)
+		server.Close()
+	}()
+
+	cachePath := filepath.Join(t.TempDir(), "gamemaster.json")
+
+	err := os.WriteFile(cachePath, []byte(cliFixtureGamemaster), 0o600)
+	if err != nil {
+		t.Fatalf("seed cache: %v", err)
+	}
+
+	t.Setenv("POGO_PVP_GAMEMASTER_SOURCE", server.URL)
+	t.Setenv("POGO_PVP_GAMEMASTER_LOCAL_PATH", cachePath)
+
+	var stdout, stderr bytes.Buffer
+
+	root := cli.NewRootCommand(&stdout, &stderr)
+	root.SetArgs([]string{"diff-gm"})
+
+	ctx, cancel := context.WithTimeout(t.Context(), 500*time.Millisecond)
+	defer cancel()
+
+	done := make(chan error, 1)
+
+	go func() {
+		done <- root.ExecuteContext(ctx)
+	}()
+
+	select {
+	case runErr := <-done:
+		if runErr == nil {
+			t.Fatal("Execute returned nil, want a timeout/cancel error")
+		}
+
+		lowered := strings.ToLower(runErr.Error())
+		if !strings.Contains(lowered, "deadline") &&
+			!strings.Contains(lowered, "canceled") &&
+			!strings.Contains(lowered, "cancelled") &&
+			!strings.Contains(lowered, "timeout") {
+			t.Errorf("Execute = %v, want a deadline/canceled/timeout error", runErr)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("diff-gm ignored its ctx deadline — regression: request is not context-aware")
 	}
 }
 
