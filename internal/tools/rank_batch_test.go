@@ -89,9 +89,9 @@ func TestRankBatch_HappyPath(t *testing.T) {
 	}
 
 	_, result, err := handler(t.Context(), nil, tools.RankBatchParams{
-		Species: "medicham",
+		Species: speciesMedicham,
 		IVs:     ivs,
-		League:  "great",
+		League:  leagueGreat,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -132,9 +132,9 @@ func TestRankBatch_EmptyIVs(t *testing.T) {
 	handler := tool.Handler()
 
 	_, _, err := handler(t.Context(), nil, tools.RankBatchParams{
-		Species: "medicham",
+		Species: speciesMedicham,
 		IVs:     [][3]int{},
-		League:  "great",
+		League:  leagueGreat,
 	})
 	if !errors.Is(err, tools.ErrEmptyIVList) {
 		t.Errorf("error = %v, want wrapping ErrEmptyIVList", err)
@@ -157,9 +157,9 @@ func TestRankBatch_TooManyIVs(t *testing.T) {
 	}
 
 	_, _, err := handler(t.Context(), nil, tools.RankBatchParams{
-		Species: "medicham",
+		Species: speciesMedicham,
 		IVs:     ivs,
-		League:  "great",
+		League:  leagueGreat,
 	})
 	if !errors.Is(err, tools.ErrTooManyIVs) {
 		t.Errorf("error = %v, want wrapping ErrTooManyIVs", err)
@@ -182,9 +182,9 @@ func TestRankBatch_PartialFailure(t *testing.T) {
 	}
 
 	_, result, err := handler(t.Context(), nil, tools.RankBatchParams{
-		Species: "medicham",
+		Species: speciesMedicham,
 		IVs:     ivs,
-		League:  "great",
+		League:  leagueGreat,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v (partial failure must not bubble up)", err)
@@ -215,10 +215,12 @@ func TestRankBatch_PartialFailure(t *testing.T) {
 	}
 }
 
-// TestRankBatch_UnknownSpecies the error path propagates per entry:
-// an unknown species id produces N OK=false entries, all with the
-// same error, and SuccessCount=0.
-func TestRankBatch_UnknownSpecies(t *testing.T) {
+// TestRankBatch_UnknownSpeciesFailsFast pins the fail-fast
+// contract: an unknown species id is a batch-wide failure, not a
+// per-IV one — surfaces once as a top-level ErrUnknownSpecies and
+// the Entries slice is not populated (no 64 copies of the same
+// error in the response).
+func TestRankBatch_UnknownSpeciesFailsFast(t *testing.T) {
 	t.Parallel()
 
 	tool := newRankBatchTool(t)
@@ -229,19 +231,106 @@ func TestRankBatch_UnknownSpecies(t *testing.T) {
 	_, result, err := handler(t.Context(), nil, tools.RankBatchParams{
 		Species: "missingno",
 		IVs:     ivs,
-		League:  "great",
+		League:  leagueGreat,
+	})
+	if !errors.Is(err, tools.ErrUnknownSpecies) {
+		t.Errorf("error = %v, want wrapping ErrUnknownSpecies", err)
+	}
+
+	if len(result.Entries) != 0 {
+		t.Errorf("Entries len = %d, want 0 on batch-wide failure (no per-entry copies)",
+			len(result.Entries))
+	}
+}
+
+// TestRankBatch_UnknownLeagueFailsFast mirrors the species guard:
+// an invalid league name is a batch-wide failure.
+func TestRankBatch_UnknownLeagueFailsFast(t *testing.T) {
+	t.Parallel()
+
+	tool := newRankBatchTool(t)
+	handler := tool.Handler()
+
+	_, _, err := handler(t.Context(), nil, tools.RankBatchParams{
+		Species: speciesMedicham,
+		IVs:     [][3]int{{15, 15, 15}},
+		League:  "gret",
+	})
+	if !errors.Is(err, tools.ErrUnknownLeague) {
+		t.Errorf("error = %v, want wrapping ErrUnknownLeague", err)
+	}
+}
+
+// TestRankBatch_TopLevelMetadataEcho pins the top-level contract
+// fields: Species / League / Cup / CPCap must all carry resolved
+// values symmetric with the per-entry values. Before the round-1
+// fix the top-level CPCap echoed the raw input (0 when unset)
+// while entries carried the resolved cap (1500 for great) — this
+// test locks the normalised echo.
+func TestRankBatch_TopLevelMetadataEcho(t *testing.T) {
+	t.Parallel()
+
+	tool := newRankBatchTool(t)
+	handler := tool.Handler()
+
+	_, result, err := handler(t.Context(), nil, tools.RankBatchParams{
+		Species: speciesMedicham,
+		IVs:     [][3]int{{15, 15, 15}},
+		League:  leagueGreat,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
 	}
 
-	if result.SuccessCount != 0 {
-		t.Errorf("SuccessCount = %d, want 0 (unknown species)", result.SuccessCount)
+	if result.Species != speciesMedicham {
+		t.Errorf("Species = %q, want \"medicham\"", result.Species)
+	}
+
+	if result.League != leagueGreat {
+		t.Errorf("League = %q, want \"great\"", result.League)
+	}
+
+	if result.Cup != "all" {
+		t.Errorf("Cup = %q, want \"all\" (empty input normalised)", result.Cup)
+	}
+
+	if result.CPCap != 1500 {
+		t.Errorf("CPCap = %d, want 1500 (resolved from great league, not raw input 0)",
+			result.CPCap)
+	}
+}
+
+// TestRankBatch_DuplicateIVsPreserveOrder pins the invariant that
+// the Entries slice mirrors the input IVs slice verbatim, including
+// duplicates.
+func TestRankBatch_DuplicateIVsPreserveOrder(t *testing.T) {
+	t.Parallel()
+
+	tool := newRankBatchTool(t)
+	handler := tool.Handler()
+
+	ivs := [][3]int{
+		{15, 15, 15},
+		{15, 15, 15},
+		{0, 0, 0},
+	}
+
+	_, result, err := handler(t.Context(), nil, tools.RankBatchParams{
+		Species: speciesMedicham,
+		IVs:     ivs,
+		League:  leagueGreat,
+	})
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+
+	if len(result.Entries) != 3 {
+		t.Fatalf("Entries len = %d, want 3", len(result.Entries))
 	}
 
 	for i, entry := range result.Entries {
-		if entry.OK {
-			t.Errorf("Entries[%d] OK=true despite unknown species", i)
+		if entry.IV != ivs[i] {
+			t.Errorf("Entries[%d].IV = %v, want %v", i, entry.IV, ivs[i])
 		}
 	}
 }

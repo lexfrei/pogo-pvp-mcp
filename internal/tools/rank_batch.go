@@ -70,13 +70,17 @@ type RankBatchResult struct {
 // entry is bit-for-bit identical to what pvp_rank would return
 // standalone.
 type RankBatchTool struct {
-	rank *RankTool
+	manager *gamemaster.Manager
+	rank    *RankTool
 }
 
 // NewRankBatchTool constructs the tool bound to the same managers
 // the single-IV RankTool uses.
 func NewRankBatchTool(manager *gamemaster.Manager, ranks *rankings.Manager) *RankBatchTool {
-	return &RankBatchTool{rank: NewRankTool(manager, ranks)}
+	return &RankBatchTool{
+		manager: manager,
+		rank:    NewRankTool(manager, ranks),
+	}
 }
 
 const rankBatchToolDescription = "Rank the same species + league under many IV triples in one call. Equivalent " +
@@ -95,28 +99,22 @@ func (tool *RankBatchTool) Handler() mcp.ToolHandlerFor[RankBatchParams, RankBat
 	return tool.handle
 }
 
-// handle validates the batch preconditions, then loops over IVs
-// invoking the single-IV RankTool handler for each. Per-entry errors
-// are captured into the entry rather than bubbled up so a bad IV in
-// position 5 does not kill the other 20 successful results. Checks
-// ctx.Err() between entries so a client disconnect stops the sweep.
+// handle validates the batch-wide preconditions up front (gamemaster
+// loaded, species known, league / cp_cap resolvable, IVs count in
+// range) before the loop — batch-wide failures should fail the whole
+// request with one error rather than producing N copies of the same
+// error in the per-entry slice. The loop then invokes the single-IV
+// RankTool handler for each IV; only per-IV errors (e.g. out-of-range
+// IV components) surface as OK=false entries. Ctx.Err() is polled
+// between entries so a client disconnect stops the sweep.
 func (tool *RankBatchTool) handle(
 	ctx context.Context,
 	req *mcp.CallToolRequest,
 	params RankBatchParams,
 ) (*mcp.CallToolResult, RankBatchResult, error) {
-	err := ctx.Err()
+	resolvedCPCap, err := tool.validateBatch(ctx, &params)
 	if err != nil {
-		return nil, RankBatchResult{}, fmt.Errorf("rank_batch cancelled: %w", err)
-	}
-
-	if len(params.IVs) == 0 {
-		return nil, RankBatchResult{}, ErrEmptyIVList
-	}
-
-	if len(params.IVs) > maxRankBatchSize {
-		return nil, RankBatchResult{}, fmt.Errorf("%w: %d IVs exceeds %d",
-			ErrTooManyIVs, len(params.IVs), maxRankBatchSize)
+		return nil, RankBatchResult{}, err
 	}
 
 	rankHandler := tool.rank.Handler()
@@ -129,7 +127,8 @@ func (tool *RankBatchTool) handle(
 			return nil, RankBatchResult{}, fmt.Errorf("rank_batch cancelled: %w", ctx.Err())
 		}
 
-		entries = append(entries, runRankBatchEntry(ctx, req, rankHandler, ivTriple, &params))
+		entries = append(entries, runRankBatchEntry(
+			ctx, req, rankHandler, ivTriple, &params, resolvedCPCap))
 
 		if entries[len(entries)-1].OK {
 			successCount++
@@ -140,10 +139,51 @@ func (tool *RankBatchTool) handle(
 		Species:      params.Species,
 		League:       params.League,
 		Cup:          resolveCupLabel(params.Cup),
-		CPCap:        params.CPCap,
+		CPCap:        resolvedCPCap,
 		Entries:      entries,
 		SuccessCount: successCount,
 	}, nil
+}
+
+// validateBatch runs every precondition that applies to the whole
+// batch: context live, batch size in range, gamemaster loaded,
+// species exists, league/cp_cap resolvable. Returns the resolved CP
+// cap so the caller can echo it at the top level and pass it to each
+// per-entry RankParams (bypassing the per-call resolveCPCap lookup
+// inside RankTool.handle).
+func (tool *RankBatchTool) validateBatch(
+	ctx context.Context, params *RankBatchParams,
+) (int, error) {
+	err := ctx.Err()
+	if err != nil {
+		return 0, fmt.Errorf("rank_batch cancelled: %w", err)
+	}
+
+	if len(params.IVs) == 0 {
+		return 0, ErrEmptyIVList
+	}
+
+	if len(params.IVs) > maxRankBatchSize {
+		return 0, fmt.Errorf("%w: %d IVs exceeds %d",
+			ErrTooManyIVs, len(params.IVs), maxRankBatchSize)
+	}
+
+	snapshot := tool.manager.Current()
+	if snapshot == nil {
+		return 0, ErrGamemasterNotLoaded
+	}
+
+	_, ok := snapshot.Pokemon[params.Species]
+	if !ok {
+		return 0, fmt.Errorf("%w: %q", ErrUnknownSpecies, params.Species)
+	}
+
+	resolvedCPCap, err := resolveCPCap(params.League, params.CPCap)
+	if err != nil {
+		return 0, err
+	}
+
+	return resolvedCPCap, nil
 }
 
 // runRankBatchEntry delegates to the single-IV RankTool handler with
@@ -156,13 +196,14 @@ func runRankBatchEntry(
 	handler mcp.ToolHandlerFor[RankParams, RankResult],
 	ivTriple [3]int,
 	params *RankBatchParams,
+	resolvedCPCap int,
 ) RankBatchEntry {
 	single := RankParams{
 		Species: params.Species,
 		IV:      ivTriple,
 		League:  params.League,
 		Cup:     params.Cup,
-		CPCap:   params.CPCap,
+		CPCap:   resolvedCPCap,
 		XL:      params.XL,
 	}
 
