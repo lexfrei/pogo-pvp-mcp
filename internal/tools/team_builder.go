@@ -55,6 +55,33 @@ type TeamBuilderParams struct {
 	DisallowLegacy bool        `json:"disallow_legacy,omitempty" jsonschema:"reject legacy moves; default false (legacy allowed)"`
 	TargetLevel    float64     `json:"target_level,omitempty" jsonschema:"target level for cost estimation; 0 = max level under league CP cap"`
 	AutoEvolve     bool        `json:"auto_evolve,omitempty" jsonschema:"walk each pool member to its terminal form under the cap"`
+	Budget         *BudgetSpec `json:"budget,omitempty" jsonschema:"optional stardust budget; over-budget teams dropped"`
+}
+
+// BudgetSpec is the optional inventory cap applied to a team_builder
+// enumeration. Today only StardustLimit is enforced — it compares
+// the team's summed PowerupStardustCost + SecondMoveStardustCost
+// against the limit and drops teams whose cost exceeds it.
+//
+// StardustTolerance is the fraction of over-budget still shown
+// with a BudgetExceeded flag rather than dropped outright (default
+// 0 = hard filter, no tolerance). Set e.g. 0.1 to keep teams up to
+// 10% over budget in the result with BudgetExceeded=true; 0 or
+// omitted drops them.
+//
+// EliteChargedTM / EliteFastTM / XLCandy / RareCandyXL are
+// accepted but NOT YET enforced. They're parsed so the JSON
+// contract is stable for the follow-up phase that adds ETM
+// tracking on the cost breakdown. For now they pass through
+// unused — callers can populate them today and the values will
+// start mattering in a later branch without a shape change.
+type BudgetSpec struct {
+	StardustLimit     int     `json:"stardust,omitempty" jsonschema:"maximum total powerup + second-move stardust across the team"`
+	StardustTolerance float64 `json:"stardust_tolerance,omitempty" jsonschema:"fraction over budget still kept with budget_exceeded flag"`
+	EliteChargedTM    int     `json:"elite_charged_tm,omitempty" jsonschema:"ETM count available (not yet enforced)"`
+	EliteFastTM       int     `json:"elite_fast_tm,omitempty" jsonschema:"ETM count available (not yet enforced)"`
+	XLCandy           int     `json:"xl_candy,omitempty" jsonschema:"XL candy count available (not yet enforced)"`
+	RareCandyXL       bool    `json:"rare_candy_xl,omitempty" jsonschema:"rare XL candy flag (not yet enforced)"`
 }
 
 // MemberCostBreakdown is the per-member cost estimate attached to
@@ -119,6 +146,9 @@ type TeamBuilderTeam struct {
 	PoolIndices    []int                 `json:"pool_indices"`
 	TeamScore      float64               `json:"team_score"`
 	ParetoLabel    string                `json:"pareto_label"`
+	AggregateCost  int                   `json:"aggregate_stardust_cost"`
+	BudgetExceeded bool                  `json:"budget_exceeded,omitempty"`
+	BudgetExcess   int                   `json:"budget_excess,omitempty"`
 }
 
 // TeamBuilderResult is the JSON output for pvp_team_builder.
@@ -219,9 +249,13 @@ func (tool *TeamBuilderTool) handle(
 		return result.Teams[i].TeamScore > result.Teams[j].TeamScore
 	})
 
+	poolBreakdowns := computePoolBreakdowns(snapshot, inputs.pool, inputs.cpCap, params.TargetLevel)
+
+	result.Teams = applyBudgetFilter(&params, result.Teams, poolBreakdowns)
+
 	result.Teams = result.Teams[:min(inputs.maxResults, len(result.Teams))]
 
-	attachCostBreakdowns(result.Teams, snapshot, inputs.pool, inputs.cpCap, params.TargetLevel)
+	attachCostBreakdownsFromPool(result.Teams, poolBreakdowns)
 
 	return nil, TeamBuilderResult{
 		League:             inputs.league,

@@ -1,11 +1,13 @@
 package tools_test
 
 import (
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/lexfrei/pogo-pvp-mcp/internal/config"
@@ -1377,6 +1379,538 @@ func TestTeamBuilderTool_AutoEvolveShadowCarriesOver(t *testing.T) {
 
 	if evolved.ShadowVariantMissing {
 		t.Errorf("ShadowVariantMissing = true; fixture publishes blastoise_shadow — must not signal missing")
+	}
+}
+
+// TestTeamBuilderTool_BudgetDropsOverBudgetTeam pins the hard-drop
+// path: a StardustLimit below the team's aggregate cost with no
+// tolerance filters the team out entirely. Uses a high target
+// level so the L1-member climb produces meaningful stardust.
+func TestTeamBuilderTool_BudgetDropsOverBudgetTeam(t *testing.T) {
+	t.Parallel()
+
+	tool := newTeamBuilderTool(t)
+	handler := tool.Handler()
+
+	member := tools.Combatant{
+		IV: [3]int{15, 15, 15}, Level: 1.0,
+		FastMove: "FAST1", ChargedMoves: []string{"CH1"},
+	}
+	memberA := member
+	memberA.Species = "a"
+	memberB := member
+	memberB.Species = "b"
+	memberC := member
+	memberC.Species = "c"
+
+	_, result, err := handler(t.Context(), nil, tools.TeamBuilderParams{
+		Pool:        []tools.Combatant{memberA, memberB, memberC},
+		League:      leagueGreat,
+		TargetLevel: 40.0,
+		Budget:      &tools.BudgetSpec{StardustLimit: 1000},
+	})
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+
+	if len(result.Teams) != 0 {
+		t.Errorf("Teams len = %d, want 0 (budget 1000 stardust << 3 × L1→L40 climbs)",
+			len(result.Teams))
+	}
+}
+
+// TestTeamBuilderTool_BudgetInToleranceKeptAndFlagged pins the
+// tolerance branch: a team whose AggregateCost sits between
+// StardustLimit and StardustLimit × (1+Tolerance) is kept in the
+// response with BudgetExceeded=true + BudgetExcess > 0.
+// Synthesises the exact budget from the actual aggregate cost so
+// the fixture stays deterministic across powerup table edits.
+func TestTeamBuilderTool_BudgetInToleranceKeptAndFlagged(t *testing.T) {
+	t.Parallel()
+
+	tool := newTeamBuilderTool(t)
+	handler := tool.Handler()
+
+	member := tools.Combatant{
+		IV: [3]int{15, 15, 15}, Level: 1.0,
+		FastMove: "FAST1", ChargedMoves: []string{"CH1"},
+	}
+	memberA := member
+	memberA.Species = "a"
+	memberB := member
+	memberB.Species = "b"
+	memberC := member
+	memberC.Species = "c"
+
+	// Warm-up run to discover the actual aggregate cost for this
+	// team at target level 40.
+	_, warm, err := handler(t.Context(), nil, tools.TeamBuilderParams{
+		Pool:        []tools.Combatant{memberA, memberB, memberC},
+		League:      leagueGreat,
+		TargetLevel: 40.0,
+	})
+	if err != nil {
+		t.Fatalf("warm: %v", err)
+	}
+
+	if len(warm.Teams) == 0 {
+		t.Fatal("warm: no teams to measure aggregate")
+	}
+
+	var actualCost int
+
+	for _, breakdown := range warm.Teams[0].CostBreakdowns {
+		actualCost += breakdown.PowerupStardustCost + breakdown.SecondMoveStardustCost
+	}
+
+	// Set the budget below actualCost but within 50% tolerance.
+	limit := actualCost * 9 / 10 // 10% below actual
+	tolerance := 0.5             // 50% tolerance → hardCap = limit × 1.5 >> actualCost
+
+	_, result, err := handler(t.Context(), nil, tools.TeamBuilderParams{
+		Pool:        []tools.Combatant{memberA, memberB, memberC},
+		League:      leagueGreat,
+		TargetLevel: 40.0,
+		Budget: &tools.BudgetSpec{
+			StardustLimit:     limit,
+			StardustTolerance: tolerance,
+		},
+	})
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+
+	if len(result.Teams) == 0 {
+		t.Fatal("Teams empty; team within tolerance must be kept")
+	}
+
+	team := result.Teams[0]
+
+	if !team.BudgetExceeded {
+		t.Errorf("BudgetExceeded = false; team over limit but within tolerance must flag")
+	}
+
+	if team.BudgetExcess <= 0 {
+		t.Errorf("BudgetExcess = %d, want > 0", team.BudgetExcess)
+	}
+
+	if team.AggregateCost != actualCost {
+		t.Errorf("AggregateCost = %d, want %d (matches warm-run sum)",
+			team.AggregateCost, actualCost)
+	}
+}
+
+// TestTeamBuilderTool_BudgetKeepsFittingTeam pins the negative
+// path of the budget filter: a limit comfortably above the team's
+// actual cost keeps the team in the response with
+// BudgetExceeded=false and BudgetExcess=0. AggregateCost is still
+// populated so callers can see the total even when they're under
+// budget.
+func TestTeamBuilderTool_BudgetKeepsFittingTeam(t *testing.T) {
+	t.Parallel()
+
+	tool := newTeamBuilderTool(t)
+	handler := tool.Handler()
+
+	member := tools.Combatant{
+		IV: [3]int{15, 15, 15}, Level: 1.0,
+		FastMove: "FAST1", ChargedMoves: []string{"CH1"},
+	}
+	memberA := member
+	memberA.Species = "a"
+	memberB := member
+	memberB.Species = "b"
+	memberC := member
+	memberC.Species = "c"
+
+	_, result, err := handler(t.Context(), nil, tools.TeamBuilderParams{
+		Pool:        []tools.Combatant{memberA, memberB, memberC},
+		League:      leagueGreat,
+		TargetLevel: 40.0,
+		Budget:      &tools.BudgetSpec{StardustLimit: 100_000_000},
+	})
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+
+	if len(result.Teams) == 0 {
+		t.Fatal("Teams empty; team well under 100M budget must be kept")
+	}
+
+	team := result.Teams[0]
+
+	if team.BudgetExceeded {
+		t.Errorf("BudgetExceeded = true; 100M budget comfortably covers the climb")
+	}
+
+	if team.BudgetExcess != 0 {
+		t.Errorf("BudgetExcess = %d, want 0", team.BudgetExcess)
+	}
+
+	if team.AggregateCost == 0 {
+		t.Errorf("AggregateCost = 0; must be populated even when under budget")
+	}
+}
+
+// budgetFilterOrderFixture stacks c with the highest base-ATK
+// AND a massive thirdMoveCost (500k stardust) so c-containing
+// triples are BOTH top-scored in simulation AND over any sane
+// budget. The rankings list c first (rating 750, above a/b) to
+// match the pool-side scoring bias; this gives the order-sensitive
+// assertion in TestTeamBuilderTool_BudgetFilterRunsBeforeTrim a
+// deterministic top-team expectation.
+const budgetFilterOrderFixture = `{
+  "id": "gamemaster",
+  "timestamp": "2026-04-19 00:00:00",
+  "pokemon": [
+    {"dex": 1, "speciesId": "a", "speciesName": "A",
+     "baseStats": {"atk": 121, "def": 152, "hp": 155},
+     "types": ["fighting", "psychic"],
+     "fastMoves": ["FAST1"], "chargedMoves": ["CH1"], "released": true,
+     "thirdMoveCost": 0, "buddyDistance": 1},
+    {"dex": 2, "speciesId": "b", "speciesName": "B",
+     "baseStats": {"atk": 152, "def": 143, "hp": 216},
+     "types": ["water", "ground"],
+     "fastMoves": ["FAST1"], "chargedMoves": ["CH1"], "released": true,
+     "thirdMoveCost": 0, "buddyDistance": 1},
+    {"dex": 3, "speciesId": "c", "speciesName": "C",
+     "baseStats": {"atk": 300, "def": 200, "hp": 250},
+     "types": ["fighting", "none"],
+     "fastMoves": ["FAST1"], "chargedMoves": ["CH1"], "released": true,
+     "thirdMoveCost": 500000, "buddyDistance": 1}
+  ],
+  "moves": [
+    {"moveId": "FAST1", "name": "Fast 1", "type": "normal",
+     "power": 3, "energy": 0, "energyGain": 5, "cooldown": 1000, "turns": 2},
+    {"moveId": "CH1", "name": "Charged 1", "type": "normal",
+     "power": 50, "energy": 35, "energyGain": 0, "cooldown": 500}
+  ]
+}`
+
+const budgetFilterOrderRankings = `[
+  {"speciesId": "c", "speciesName": "C", "rating": 750, "score": 100,
+   "moveset": ["FAST1", "CH1"],
+   "stats": {"product": 2400, "atk": 160, "def": 160, "hp": 180}},
+  {"speciesId": "a", "speciesName": "A", "rating": 700, "score": 95,
+   "moveset": ["FAST1", "CH1"],
+   "stats": {"product": 2100, "atk": 107, "def": 139, "hp": 141}},
+  {"speciesId": "b", "speciesName": "B", "rating": 680, "score": 93,
+   "moveset": ["FAST1", "CH1"],
+   "stats": {"product": 2000, "atk": 111, "def": 113, "hp": 161}}
+]`
+
+// TestTeamBuilderTool_BudgetFilterRunsBeforeTrim pins the CLAUDE.md
+// invariant that applyBudgetFilter executes BEFORE the MaxResults
+// trim. Setup: c is simultaneously the strongest scorer (base ATK
+// 300 + rating 750) AND over budget (thirdMoveCost=500,000). A
+// four-member pool {a, b15, b14, c} yields four triples; three
+// contain c. With MaxResults=1:
+//
+//   - Filter-first (correct): drop the three c-triples on budget,
+//     then trim picks the single survivor {a, b15, b14} → len=1.
+//   - Trim-first (regression): sort by score → top-1 is a c-triple
+//     → trim keeps it → filter drops it → len=0.
+//
+// The len assertion alone discriminates because the c-triples are
+// the top-scored — without the budget, MaxResults=1 would return
+// a c-triple. The explicit "no c in member list" check is a
+// belt-and-braces guard against a future regression that leaves
+// a c-triple in by some other mechanism.
+func TestTeamBuilderTool_BudgetFilterRunsBeforeTrim(t *testing.T) {
+	t.Parallel()
+
+	tool := newTeamBuilderToolFromFixture(t, budgetFilterOrderFixture, budgetFilterOrderRankings)
+	handler := tool.Handler()
+
+	pool := []tools.Combatant{
+		{Species: "a", IV: [3]int{15, 15, 15}, Level: 40, FastMove: "FAST1", ChargedMoves: []string{"CH1"}},
+		{Species: "b", IV: [3]int{15, 15, 15}, Level: 40, FastMove: "FAST1", ChargedMoves: []string{"CH1"}},
+		{Species: "b", IV: [3]int{14, 15, 15}, Level: 40, FastMove: "FAST1", ChargedMoves: []string{"CH1"}},
+		{Species: "c", IV: [3]int{15, 15, 15}, Level: 40, FastMove: "FAST1", ChargedMoves: []string{"CH1"}},
+	}
+
+	// Warm-up with no budget confirms a c-triple tops the
+	// unconstrained ranking. If this invariant ever breaks, the
+	// order-sensitive assertion below loses meaning — catch it
+	// here before the ambiguous case.
+	_, warm, err := handler(t.Context(), nil, tools.TeamBuilderParams{
+		Pool: pool, League: leagueGreat, TargetLevel: 40.0, MaxResults: 1,
+	})
+	if err != nil {
+		t.Fatalf("warm-up handler: %v", err)
+	}
+
+	if len(warm.Teams) == 0 {
+		t.Fatal("warm-up returned no teams; fixture broken")
+	}
+
+	topHasC := false
+	for _, member := range warm.Teams[0].Members {
+		if member.Species == "c" {
+			topHasC = true
+
+			break
+		}
+	}
+
+	if !topHasC {
+		t.Fatalf("warm-up top team %v does not contain c; order-sensitive test loses meaning",
+			warm.Teams[0].Members)
+	}
+
+	// Real run: budget 1000 stardust << 500,000 thirdMoveCost for
+	// c; tolerance zero. c-triples drop; the non-c triple (cost 0)
+	// survives. If trim ran first, only the top-scored c-triple
+	// would survive to the filter and then get dropped → len=0.
+	_, result, err := handler(t.Context(), nil, tools.TeamBuilderParams{
+		Pool:        pool,
+		League:      leagueGreat,
+		TargetLevel: 40.0,
+		MaxResults:  1,
+		Budget:      &tools.BudgetSpec{StardustLimit: 1000},
+	})
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+
+	if len(result.Teams) != 1 {
+		t.Fatalf("Teams len = %d, want 1 (filter must drop c-teams BEFORE trim keeps survivors); "+
+			"len=0 would indicate trim ran first and filter dropped the top-scored c-team",
+			len(result.Teams))
+	}
+
+	for _, member := range result.Teams[0].Members {
+		if member.Species == "c" {
+			t.Errorf("c leaked into the returned team despite budget < c thirdMoveCost")
+		}
+	}
+}
+
+// TestTeamBuilderTool_BudgetAggregateCostAlwaysPresent pins the
+// JSON contract: `aggregate_stardust_cost` appears on every team
+// regardless of value. An `omitempty` tag would drop the field on
+// zero-cost teams (all members at target, no second-move cost),
+// breaking the README promise that under-budget teams still carry
+// the total so callers can compare to their inventory.
+func TestTeamBuilderTool_BudgetAggregateCostAlwaysPresent(t *testing.T) {
+	t.Parallel()
+
+	tool := newTeamBuilderTool(t)
+	handler := tool.Handler()
+
+	pool := []tools.Combatant{
+		baseCombatant("a"),
+		baseCombatant("b"),
+		baseCombatant("c"),
+	}
+
+	_, result, err := handler(t.Context(), nil, tools.TeamBuilderParams{
+		Pool:        pool,
+		League:      leagueGreat,
+		TargetLevel: 40.0,
+		Budget:      &tools.BudgetSpec{StardustLimit: 1_000_000},
+	})
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+
+	if len(result.Teams) == 0 {
+		t.Fatal("no teams returned")
+	}
+
+	encoded, err := json.Marshal(result.Teams[0])
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+
+	if !strings.Contains(string(encoded), `"aggregate_stardust_cost"`) {
+		t.Errorf("aggregate_stardust_cost missing from JSON when value is zero (omitempty regressed): %s",
+			encoded)
+	}
+}
+
+// TestTeamBuilderTool_BudgetStubFieldsIgnored pins the JSON-
+// contract stability claim: EliteChargedTM / EliteFastTM /
+// XLCandy / RareCandyXL are accepted on the input but have no
+// enforcement yet. A request with all four populated returns
+// identically to the same request with them zero — if a later
+// branch adds partial enforcement, this test breaks first and
+// flags the silent contract change.
+func TestTeamBuilderTool_BudgetStubFieldsIgnored(t *testing.T) {
+	t.Parallel()
+
+	tool := newTeamBuilderTool(t)
+	handler := tool.Handler()
+
+	member := tools.Combatant{
+		IV: [3]int{15, 15, 15}, Level: 40,
+		FastMove: "FAST1", ChargedMoves: []string{"CH1"},
+	}
+	memberA := member
+	memberA.Species = "a"
+	memberB := member
+	memberB.Species = "b"
+	memberC := member
+	memberC.Species = "c"
+
+	baseParams := tools.TeamBuilderParams{
+		Pool:        []tools.Combatant{memberA, memberB, memberC},
+		League:      leagueGreat,
+		TargetLevel: 40.0,
+	}
+
+	// First run: plain, no budget at all.
+	_, plain, err := handler(t.Context(), nil, baseParams)
+	if err != nil {
+		t.Fatalf("plain: %v", err)
+	}
+
+	// Second run: Budget with only the stub fields populated —
+	// StardustLimit zero so the filter short-circuits to "no
+	// budget enforced". Result should match the plain run.
+	stubParams := baseParams
+	stubParams.Budget = &tools.BudgetSpec{
+		EliteChargedTM: 5,
+		EliteFastTM:    3,
+		XLCandy:        296,
+		RareCandyXL:    true,
+	}
+
+	_, stub, err := handler(t.Context(), nil, stubParams)
+	if err != nil {
+		t.Fatalf("stub: %v", err)
+	}
+
+	if len(plain.Teams) != len(stub.Teams) {
+		t.Errorf("Teams len differs: plain=%d stub=%d — stub fields must be ignored",
+			len(plain.Teams), len(stub.Teams))
+	}
+
+	for i := range plain.Teams {
+		if plain.Teams[i].TeamScore != stub.Teams[i].TeamScore {
+			t.Errorf("TeamScore differs at i=%d: plain=%v stub=%v",
+				i, plain.Teams[i].TeamScore, stub.Teams[i].TeamScore)
+		}
+	}
+}
+
+// TestTeamBuilderTool_BudgetGuardsBypass pins the no-op branches
+// of applyBudgetFilter: nil Budget and StardustLimit <= 0 both
+// skip the filter entirely. Without these guards a regression
+// could make an empty budget spec silently reject every team.
+func TestTeamBuilderTool_BudgetGuardsBypass(t *testing.T) {
+	t.Parallel()
+
+	tool := newTeamBuilderTool(t)
+	handler := tool.Handler()
+
+	member := tools.Combatant{
+		IV: [3]int{15, 15, 15}, Level: 1.0,
+		FastMove: "FAST1", ChargedMoves: []string{"CH1"},
+	}
+	memberA := member
+	memberA.Species = "a"
+	memberB := member
+	memberB.Species = "b"
+	memberC := member
+	memberC.Species = "c"
+
+	baseParams := tools.TeamBuilderParams{
+		Pool:        []tools.Combatant{memberA, memberB, memberC},
+		League:      leagueGreat,
+		TargetLevel: 40.0,
+	}
+
+	cases := []struct {
+		name   string
+		budget *tools.BudgetSpec
+	}{
+		{"nil budget", nil},
+		{"zero StardustLimit", &tools.BudgetSpec{StardustLimit: 0}},
+		{"negative StardustLimit", &tools.BudgetSpec{StardustLimit: -1}},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			params := baseParams
+			params.Pool = append([]tools.Combatant(nil), baseParams.Pool...)
+			params.Budget = tc.budget
+
+			_, result, err := handler(t.Context(), nil, params)
+			if err != nil {
+				t.Fatalf("handler: %v", err)
+			}
+
+			if len(result.Teams) == 0 {
+				t.Errorf("Teams empty; guard must skip filter entirely, not reject everything")
+			}
+		})
+	}
+}
+
+// TestTeamBuilderTool_BudgetNegativeToleranceClamped pins the
+// clamp at applyBudgetFilter: a negative StardustTolerance is
+// treated as zero (hard filter). Without the clamp, a negative
+// value would produce hardCap < limit and reject more teams than
+// intended.
+func TestTeamBuilderTool_BudgetNegativeToleranceClamped(t *testing.T) {
+	t.Parallel()
+
+	tool := newTeamBuilderTool(t)
+	handler := tool.Handler()
+
+	member := tools.Combatant{
+		IV: [3]int{15, 15, 15}, Level: 1.0,
+		FastMove: "FAST1", ChargedMoves: []string{"CH1"},
+	}
+	memberA := member
+	memberA.Species = "a"
+	memberB := member
+	memberB.Species = "b"
+	memberC := member
+	memberC.Species = "c"
+
+	// Warm-up: discover actual aggregate cost so we can set the
+	// limit exactly AT the cost. With tolerance=0 the team should
+	// just barely fit. With negative-tolerance (clamped to 0), it
+	// should behave the same — not stricter.
+	_, warm, err := handler(t.Context(), nil, tools.TeamBuilderParams{
+		Pool:        []tools.Combatant{memberA, memberB, memberC},
+		League:      leagueGreat,
+		TargetLevel: 40.0,
+	})
+	if err != nil {
+		t.Fatalf("warm: %v", err)
+	}
+
+	if len(warm.Teams) == 0 {
+		t.Fatal("warm: no teams")
+	}
+
+	var actualCost int
+	for _, breakdown := range warm.Teams[0].CostBreakdowns {
+		actualCost += breakdown.PowerupStardustCost + breakdown.SecondMoveStardustCost
+	}
+
+	// Limit exactly equal to cost; negative tolerance must clamp
+	// to zero so the team fits (cost <= limit, not dropped).
+	_, result, err := handler(t.Context(), nil, tools.TeamBuilderParams{
+		Pool:        []tools.Combatant{memberA, memberB, memberC},
+		League:      leagueGreat,
+		TargetLevel: 40.0,
+		Budget: &tools.BudgetSpec{
+			StardustLimit:     actualCost,
+			StardustTolerance: -0.5,
+		},
+	})
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+
+	if len(result.Teams) == 0 {
+		t.Errorf("Teams empty; negative tolerance must clamp to 0, not to a stricter filter")
 	}
 }
 
