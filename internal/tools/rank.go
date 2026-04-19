@@ -55,6 +55,26 @@ var LeagueCP = map[string]int{
 	"master": masterLeagueCap,
 }
 
+// leagueSpec pairs a league's display name with its CP cap. Shared
+// across species_info / cplimits / evolution_preview so the league
+// ordering is declared once.
+type leagueSpec struct {
+	Name string
+	Cap  int
+}
+
+// standardLeagues is the canonical ordered list of the four standard
+// PvP leagues in ascending CP-cap order. Consumers that omit the
+// master league (pvp_cp_limits) slice off the tail.
+//
+//nolint:gochecknoglobals // ordered domain table, no reassignment
+var standardLeagues = []leagueSpec{
+	{"little", littleLeagueCap},
+	{"great", greatLeagueCap},
+	{"ultra", ultraLeagueCap},
+	{"master", masterLeagueCap},
+}
+
 // RankParams is the JSON input contract for the pvp_rank tool. Shadow
 // and purified forms are not exposed yet — the engine carries a Form
 // enum but the tool pipeline treats every Pokémon as regular until the

@@ -106,19 +106,6 @@ func nonNilStrings(in []string) []string {
 	return in
 }
 
-// leagueRankLookup lists the leagues pvp_species_info queries.
-//
-//nolint:gochecknoglobals // fixed domain table
-var leagueRankLookup = []struct {
-	Name string
-	Cap  int
-}{
-	{"little", littleLeagueCap},
-	{"great", greatLeagueCap},
-	{"ultra", ultraLeagueCap},
-	{"master", masterLeagueCap},
-}
-
 // handle orchestrates the lookup. Any rankings fetch failures are
 // tolerated silently — league_ranks is a best-effort summary.
 func (tool *SpeciesInfoTool) handle(
@@ -203,7 +190,7 @@ func lookupLeagueRanks(
 
 	var out []SpeciesLeagueRank
 
-	for _, league := range leagueRankLookup {
+	for _, league := range standardLeagues {
 		entries, err := ranks.Get(ctx, league.Cap, "")
 		if err != nil {
 			continue
