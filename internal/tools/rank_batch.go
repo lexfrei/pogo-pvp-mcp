@@ -29,12 +29,14 @@ var ErrTooManyIVs = errors.New("iv list exceeds maxRankBatchSize")
 const maxRankBatchSize = 64
 
 // RankBatchParams is the JSON input for pvp_rank_batch: the same
-// species + league + cup + CP cap + XL flag + Options as pvp_rank,
+// species + league + CP cap + XL flag + Options as pvp_rank,
 // applied to each IV triple in IVs. Batching saves N-1 round-trips
 // when a client is sweeping IV space (typical use: "score my entire
 // box of this species in one call"). Options applies batch-wide —
 // every IV triple is evaluated against the same resolved species,
-// so Options.Shadow=true sweeps the shadow variant's ranking.
+// so Options.Shadow=true sweeps the shadow variant's ranking. No
+// cup parameter: pvp_rank returns rankings_by_cup on every result,
+// so the batch reproduces that array per entry.
 type RankBatchParams struct {
 	Species string           `json:"species" jsonschema:"species id in the pvpoke gamemaster"`
 	IVs     [][3]int         `json:"ivs" jsonschema:"list of [atk, def, sta] triples; each component 0..15"`

@@ -148,7 +148,7 @@ type NonLegacyMoveset struct {
 // optimal build is the reference baseline. RankingsByCup carries
 // the species' position inside every additional pvpoke per-cup
 // ranking for the requested league (spring / retro / jungle /
-// etc.); each entry is a CupRanking with rank, rating, role, and
+// etc.); each entry is a CupRanking with rank, rating, and
 // cup-specific moveset. Cups where the species does not appear in
 // pvpoke's per-cup list (filtered out by cup rules, or below the
 // cutoff) are dropped from the array.
@@ -303,7 +303,7 @@ func (tool *RankTool) lookupMoveset(
 
 // buildRankingsByCup fetches every pvpoke per-cup ranking for the
 // requested league cap and returns the species' entry per cup
-// (rank / rating / role / moveset). The "all" (open-league) cup is
+// (rank / rating / moveset). The "all" (open-league) cup is
 // always attempted first; then every named cup published in the
 // gamemaster whose LevelCap is 0 (inherits the league cap) or equal
 // to inputs.cpCap is tried. Cups where the species is not present
@@ -327,7 +327,7 @@ func (tool *RankTool) buildRankingsByCup(
 		return nil
 	}
 
-	cupIDs := cupIDsForCap(snapshot, inputs.cpCap)
+	cupIDs := cupIDsForLookup(snapshot)
 
 	out := make([]CupRanking, 0, len(cupIDs))
 
@@ -346,25 +346,26 @@ func (tool *RankTool) buildRankingsByCup(
 // openLeagueCupID is pvpoke's conventional id for the open-league
 // ranking slice — keyed both as empty string (Manager.Get's default)
 // and as the literal "all" in the gamemaster's Cups map, depending
-// on the version. cupIDsForCap skips both spellings to avoid
+// on the version. cupIDsForCup skips both spellings to avoid
 // emitting a duplicate open-league entry alongside the implicit
 // leading "" we already prepend.
 const openLeagueCupID = "all"
 
-// cupIDsForCap returns the list of pvpoke cup ids eligible for the
-// requested league cap: "" (open league) first, then every named
-// cup whose LevelCap == 0 (inherits the league cap) or equals the
-// requested cap. Ordering is stable: open-league first, then named
-// cups sorted by id for deterministic output.
-func cupIDsForCap(snapshot *pogopvp.Gamemaster, cpCap int) []string {
+// cupIDsForLookup returns the list of pvpoke cup ids to try: "" for
+// the open-league slice first, then every named cup from the
+// gamemaster sorted alphabetically. No filtering on the cup's
+// LevelCap — that field is the Pokémon level cap (40 for Classic,
+// 50 for Equinox/Little, 0 for "inherit"), not the CP cap, so
+// comparing it against the league CP cap is never meaningful and
+// silently dropped real cups like `little` at cpCap=500. Unsupported
+// (cup, cap) pairs silently fall out later: rankings.Manager.Get
+// returns ErrUnknownCup on upstream 404, and lookupCupRanking
+// discards a nil result without adding to the output array.
+func cupIDsForLookup(snapshot *pogopvp.Gamemaster) []string {
 	names := make([]string, 0, len(snapshot.Cups))
 
-	for cupID, cup := range snapshot.Cups {
+	for cupID := range snapshot.Cups {
 		if cupID == "" || cupID == openLeagueCupID {
-			continue
-		}
-
-		if cup.LevelCap != 0 && cup.LevelCap != cpCap {
 			continue
 		}
 
