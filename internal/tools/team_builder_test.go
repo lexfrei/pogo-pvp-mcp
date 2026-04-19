@@ -681,3 +681,265 @@ func TestTeamBuilderTool_ShadowAutoResolvesShadowRankings(t *testing.T) {
 			shadowMember.ChargedMoves)
 	}
 }
+
+// TestTeamBuilderTool_CostBreakdownPresent pins Phase 3A: every
+// team in the response carries a CostBreakdowns slice aligned with
+// Members. Stardust-only (candy is only present on
+// SecondMoveCandy, which requires a BuddyDistance-ful species —
+// the shared fixture does not set one, so availability=false for
+// those fields).
+func TestTeamBuilderTool_CostBreakdownPresent(t *testing.T) {
+	t.Parallel()
+
+	tool := newTeamBuilderTool(t)
+	handler := tool.Handler()
+
+	pool := []tools.Combatant{
+		baseCombatant("a"),
+		baseCombatant("b"),
+		baseCombatant("c"),
+	}
+
+	_, result, err := handler(t.Context(), nil, tools.TeamBuilderParams{
+		Pool:   pool,
+		League: leagueGreat,
+	})
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+
+	if len(result.Teams) == 0 {
+		t.Fatal("no teams returned; cannot check cost breakdowns")
+	}
+
+	team := result.Teams[0]
+
+	if len(team.CostBreakdowns) != len(team.Members) {
+		t.Fatalf("CostBreakdowns len = %d, want %d (aligned with Members)",
+			len(team.CostBreakdowns), len(team.Members))
+	}
+
+	for i, breakdown := range team.CostBreakdowns {
+		if breakdown.TargetLevel <= 0 {
+			t.Errorf("team[%d] TargetLevel = %v, want > 0 (per-species default)",
+				i, breakdown.TargetLevel)
+		}
+	}
+}
+
+// TestTeamBuilderTool_AlreadyAtTargetClamp pins the zero-cost
+// clamp: a pool member at the league's target level already
+// should see PowerupStardustCost=0 and the
+// already_at_or_above_target flag.
+func TestTeamBuilderTool_AlreadyAtTargetClamp(t *testing.T) {
+	t.Parallel()
+
+	tool := newTeamBuilderTool(t)
+	handler := tool.Handler()
+
+	// Level 1 members with a tiny explicit target at level 1
+	// (so every member is already at target).
+	member := tools.Combatant{
+		IV: [3]int{15, 15, 15}, Level: 1.0,
+		FastMove: "FAST1", ChargedMoves: []string{"CH1"},
+	}
+
+	ma, mb, mc := member, member, member
+	ma.Species = "a"
+	mb.Species = "b"
+	mc.Species = "c"
+
+	_, result, err := handler(t.Context(), nil, tools.TeamBuilderParams{
+		Pool:        []tools.Combatant{ma, mb, mc},
+		League:      leagueGreat,
+		TargetLevel: 1.0,
+	})
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+
+	if len(result.Teams) == 0 {
+		t.Fatal("no teams returned")
+	}
+
+	for i, breakdown := range result.Teams[0].CostBreakdowns {
+		if breakdown.PowerupStardustCost != 0 {
+			t.Errorf("team[%d] PowerupStardustCost = %d, want 0 (already at target)",
+				i, breakdown.PowerupStardustCost)
+		}
+
+		if !breakdown.AlreadyAtOrAboveTarget {
+			t.Errorf("team[%d] AlreadyAtOrAboveTarget = false, want true", i)
+		}
+	}
+}
+
+// TestTeamBuilderTool_PowerupStardustClimb pins the actual stardust
+// number on a non-trivial climb: L1.0 → L2.0 is 4 half-steps of
+// the L1-L2.5 bucket at 200 each = 800 stardust baseline. The
+// breakdown must carry this value unscaled (no Options flags in
+// this test).
+func TestTeamBuilderTool_PowerupStardustClimb(t *testing.T) {
+	t.Parallel()
+
+	tool := newTeamBuilderTool(t)
+	handler := tool.Handler()
+
+	member := tools.Combatant{
+		IV: [3]int{15, 15, 15}, Level: 1.0,
+		FastMove: "FAST1", ChargedMoves: []string{"CH1"},
+	}
+
+	ma, mb, mc := member, member, member
+	ma.Species = "a"
+	mb.Species = "b"
+	mc.Species = "c"
+
+	_, result, err := handler(t.Context(), nil, tools.TeamBuilderParams{
+		Pool:        []tools.Combatant{ma, mb, mc},
+		League:      leagueGreat,
+		TargetLevel: 2.0,
+	})
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+
+	if len(result.Teams) == 0 {
+		t.Fatal("no teams returned")
+	}
+
+	// L1.0→L1.5 (200) + L1.5→L2.0 (200) = 400 stardust baseline.
+	const wantStardust = 400
+
+	for i, breakdown := range result.Teams[0].CostBreakdowns {
+		if breakdown.PowerupStardustCost != wantStardust {
+			t.Errorf("team[%d] PowerupStardustCost = %d, want %d (L1→L2 = 2 steps × 200)",
+				i, breakdown.PowerupStardustCost, wantStardust)
+		}
+
+		if breakdown.TargetLevel != 2.0 {
+			t.Errorf("team[%d] TargetLevel = %v, want 2.0 (explicit target)",
+				i, breakdown.TargetLevel)
+		}
+
+		if breakdown.AlreadyAtOrAboveTarget {
+			t.Errorf("team[%d] AlreadyAtOrAboveTarget = true, want false", i)
+		}
+	}
+}
+
+// TestTeamBuilderTool_PowerupShadowPremium pins the ×1.2 shadow
+// multiplier on the climb stardust: Options.Shadow=true must
+// scale the baseline climb 200→240 for a single-step test.
+func TestTeamBuilderTool_PowerupShadowPremium(t *testing.T) {
+	t.Parallel()
+
+	tool := newTeamBuilderToolShadowFixture(t)
+	handler := tool.Handler()
+
+	shadowA := tools.Combatant{
+		Species: "a",
+		IV:      [3]int{15, 15, 15},
+		Level:   1.0,
+		Options: tools.CombatantOptions{Shadow: true},
+	}
+
+	pool := []tools.Combatant{
+		shadowA,
+		baseCombatant("b"),
+		baseCombatant("c"),
+	}
+
+	_, result, err := handler(t.Context(), nil, tools.TeamBuilderParams{
+		Pool:        pool,
+		League:      leagueGreat,
+		TargetLevel: 1.5,
+	})
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+
+	if len(result.Teams) == 0 {
+		t.Fatal("no teams returned")
+	}
+
+	var shadowBreakdown *tools.MemberCostBreakdown
+
+	for i, m := range result.Teams[0].Members {
+		if m.Species == "a" {
+			shadowBreakdown = &result.Teams[0].CostBreakdowns[i]
+
+			break
+		}
+	}
+
+	if shadowBreakdown == nil {
+		t.Fatal("shadow member not present in team")
+	}
+
+	if shadowBreakdown.PowerupStardustBaseline != 200 {
+		t.Errorf("PowerupStardustBaseline = %d, want 200 (L1.0→L1.5 baseline)",
+			shadowBreakdown.PowerupStardustBaseline)
+	}
+
+	if shadowBreakdown.PowerupStardustCost != 240 {
+		t.Errorf("PowerupStardustCost = %d, want 240 (200 × 1.2 shadow)",
+			shadowBreakdown.PowerupStardustCost)
+	}
+
+	if shadowBreakdown.StardustMultiplier != 1.2 {
+		t.Errorf("StardustMultiplier = %v, want 1.2",
+			shadowBreakdown.StardustMultiplier)
+	}
+}
+
+// TestTeamBuilderTool_InvalidMemberForLeague pins the hard-error
+// path: a pool member whose level-1 CP already exceeds the league
+// cap surfaces ErrMemberInvalidForLeague before any simulation.
+// Uses a custom fixture with an inflated base species so level-1
+// CP already blows past the Great League 1500 cap.
+func TestTeamBuilderTool_InvalidMemberForLeague(t *testing.T) {
+	t.Parallel()
+
+	const oversizedFixture = `{
+  "id": "gamemaster",
+  "timestamp": "2026-04-19 00:00:00",
+  "pokemon": [
+    {"dex": 1, "speciesId": "colossus", "speciesName": "Colossus",
+     "baseStats": {"atk": 9000, "def": 9000, "hp": 9000},
+     "types": ["normal"],
+     "fastMoves": ["FAST1"], "chargedMoves": ["CH1"], "released": true},
+    {"dex": 2, "speciesId": "b", "speciesName": "B",
+     "baseStats": {"atk": 152, "def": 143, "hp": 216},
+     "types": ["water"],
+     "fastMoves": ["FAST1"], "chargedMoves": ["CH1"], "released": true},
+    {"dex": 3, "speciesId": "c", "speciesName": "C",
+     "baseStats": {"atk": 234, "def": 159, "hp": 207},
+     "types": ["fighting"],
+     "fastMoves": ["FAST1"], "chargedMoves": ["CH1"], "released": true}
+  ],
+  "moves": [
+    {"moveId": "FAST1", "name": "Fast 1", "type": "normal",
+     "power": 3, "energy": 0, "energyGain": 5, "cooldown": 1000, "turns": 2},
+    {"moveId": "CH1", "name": "Charged 1", "type": "normal",
+     "power": 50, "energy": 35, "cooldown": 500}
+  ]
+}`
+
+	tool := newTeamBuilderToolFromFixture(t, oversizedFixture, `[]`)
+	handler := tool.Handler()
+
+	pool := []tools.Combatant{
+		{Species: "colossus", IV: [3]int{15, 15, 15}, Level: 1.0, FastMove: "FAST1", ChargedMoves: []string{"CH1"}},
+		baseCombatant("b"),
+		baseCombatant("c"),
+	}
+
+	_, _, err := handler(t.Context(), nil, tools.TeamBuilderParams{
+		Pool:   pool,
+		League: leagueGreat,
+	})
+	if !errors.Is(err, tools.ErrMemberInvalidForLeague) {
+		t.Errorf("error = %v, want wrapping ErrMemberInvalidForLeague", err)
+	}
+}
