@@ -207,8 +207,129 @@ func TestSecondMoveCost_MissingBuddyDistance(t *testing.T) {
 		t.Errorf("StardustCostAvailable = true; ditto has no thirdMoveCost in fixture")
 	}
 
+	if result.BuddyDistanceKM != 0 {
+		t.Errorf("BuddyDistanceKM = %d, want 0 (omitempty on wire; no upstream data)",
+			result.BuddyDistanceKM)
+	}
+
 	if result.Note == "" {
 		t.Errorf("Note empty on missing-data response; caller needs the explanation")
+	}
+}
+
+// TestSecondMoveCost_ToolDescriptionSanity pins the multiplier
+// phrasing in the MCP tool description the LLM client reads. An
+// earlier iteration let the description say "3× both currencies"
+// after the code had already been corrected to 1.2× — locking this
+// substring prevents a regression where code and description drift.
+func TestSecondMoveCost_ToolDescriptionSanity(t *testing.T) {
+	t.Parallel()
+
+	tool := tools.NewSecondMoveCostTool(nil)
+	desc := tool.Tool().Description
+
+	if strings.Contains(desc, "3×") || strings.Contains(desc, "3x") {
+		t.Errorf("description still contains a 3× shadow claim: %q", desc)
+	}
+
+	if !strings.Contains(desc, "1.2") {
+		t.Errorf("description missing the 1.2× shadow multiplier: %q", desc)
+	}
+}
+
+// TestSecondMoveCost_AllBuddyBrackets sweeps every canonical
+// buddy-km bracket through the tool and asserts the candy cost
+// matches the Niantic table. The round-2 review caught that only
+// 1km and 3km had coverage; this test closes 5km and 20km.
+func TestSecondMoveCost_AllBuddyBrackets(t *testing.T) {
+	t.Parallel()
+
+	const fixture = `{
+  "id": "gamemaster",
+  "timestamp": "2026-04-19 00:00:00",
+  "pokemon": [
+    {"dex": 1, "speciesId": "buddy1", "speciesName": "Buddy1",
+     "baseStats": {"atk": 100, "def": 100, "hp": 100}, "types": ["normal"],
+     "fastMoves": ["TACKLE"], "chargedMoves": ["BODY_SLAM"],
+     "thirdMoveCost": 10000, "buddyDistance": 1, "released": true},
+    {"dex": 2, "speciesId": "buddy3", "speciesName": "Buddy3",
+     "baseStats": {"atk": 100, "def": 100, "hp": 100}, "types": ["normal"],
+     "fastMoves": ["TACKLE"], "chargedMoves": ["BODY_SLAM"],
+     "thirdMoveCost": 50000, "buddyDistance": 3, "released": true},
+    {"dex": 3, "speciesId": "buddy5", "speciesName": "Buddy5",
+     "baseStats": {"atk": 100, "def": 100, "hp": 100}, "types": ["normal"],
+     "fastMoves": ["TACKLE"], "chargedMoves": ["BODY_SLAM"],
+     "thirdMoveCost": 75000, "buddyDistance": 5, "released": true},
+    {"dex": 4, "speciesId": "buddy20", "speciesName": "Buddy20",
+     "baseStats": {"atk": 100, "def": 100, "hp": 100}, "types": ["normal"],
+     "fastMoves": ["TACKLE"], "chargedMoves": ["BODY_SLAM"],
+     "thirdMoveCost": 100000, "buddyDistance": 20, "released": true}
+  ],
+  "moves": [
+    {"moveId": "TACKLE", "name": "Tackle", "type": "normal",
+     "power": 3, "energy": 0, "energyGain": 3, "cooldown": 500, "turns": 1},
+    {"moveId": "BODY_SLAM", "name": "Body Slam", "type": "normal",
+     "power": 60, "energy": 35, "cooldown": 500}
+  ]
+}`
+
+	gmServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(fixture))
+	}))
+	t.Cleanup(gmServer.Close)
+
+	gmMgr, err := gamemaster.NewManager(config.GamemasterConfig{
+		Source:    gmServer.URL,
+		LocalPath: filepath.Join(t.TempDir(), "gm.json"),
+	})
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+
+	err = gmMgr.Refresh(t.Context())
+	if err != nil {
+		t.Fatalf("Refresh: %v", err)
+	}
+
+	tool := tools.NewSecondMoveCostTool(gmMgr)
+	handler := tool.Handler()
+
+	cases := []struct {
+		species      string
+		wantStardust int
+		wantCandy    int
+		wantBuddyKM  int
+	}{
+		{"buddy1", 10000, 25, 1},
+		{"buddy3", 50000, 50, 3},
+		{"buddy5", 75000, 75, 5},
+		{"buddy20", 100000, 100, 20},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.species, func(t *testing.T) {
+			t.Parallel()
+
+			_, result, err := handler(t.Context(), nil, tools.SecondMoveCostParams{
+				Species: tc.species,
+			})
+			if err != nil {
+				t.Fatalf("handler: %v", err)
+			}
+
+			if result.StardustCost != tc.wantStardust {
+				t.Errorf("StardustCost = %d, want %d", result.StardustCost, tc.wantStardust)
+			}
+
+			if result.CandyCost != tc.wantCandy {
+				t.Errorf("CandyCost = %d, want %d", result.CandyCost, tc.wantCandy)
+			}
+
+			if result.BuddyDistanceKM != tc.wantBuddyKM {
+				t.Errorf("BuddyDistanceKM = %d, want %d",
+					result.BuddyDistanceKM, tc.wantBuddyKM)
+			}
+		})
 	}
 }
 

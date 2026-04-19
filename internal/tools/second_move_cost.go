@@ -23,9 +23,13 @@ type SecondMoveCostParams struct {
 // canonical table (1km → 25 candy, 3km → 50, 5km → 75, 20km → 100).
 //
 // StardustCost / CandyCost are the already-multiplied values (shadow
-// species pay 1.2× both currencies — symmetric with the purified
-// 0.8× discount). CostMultiplier carries the applied factor so
-// callers can back it out if they need the non-shadow baseline.
+// species pay 1.2× both currencies). CostMultiplier carries the
+// applied factor so callers can back it out if they need the
+// non-shadow baseline. Purification has its own Niantic-published
+// discount on both currencies, but pvpoke does not expose a
+// purified species id and this tool does not model it — callers
+// handling purified forms must consult Niantic's current rate
+// table directly rather than inferring from the shadow multiplier.
 //
 // CandyCostAvailable reports whether the candy derivation
 // succeeded: false means the gamemaster does not publish a
@@ -57,7 +61,8 @@ func NewSecondMoveCostTool(gm *gamemaster.Manager) *SecondMoveCostTool {
 const secondMoveCostToolDescription = "Given a species id, return the Pokémon GO cost (stardust + candy) to " +
 	"unlock a second charged move slot. Stardust is read from the gamemaster's thirdMoveCost field; candy is " +
 	"derived from the species' buddy distance (1km=25, 3km=50, 5km=75, 20km=100). Shadow species (id suffix " +
-	"\"_shadow\") pay 3× both currencies. Zero fields with availability=false signal the upstream data is missing."
+	"\"_shadow\") pay 1.2× (+20%) both currencies. Zero fields with availability=false signal the upstream data " +
+	"is missing."
 
 // Tool returns the MCP tool registration.
 func (*SecondMoveCostTool) Tool() *mcp.Tool {
@@ -78,12 +83,10 @@ const shadowSpeciesSuffix = "_shadow"
 
 // shadowCostMultiplier is Niantic's documented 1.2× (+20%) penalty
 // on stardust and candy when powering up or unlocking a second
-// charged move on a shadow-form Pokémon. Symmetric with the
-// published purified 0.8× discount (not applied by this tool
-// because pvpoke does not carry a purified species id; callers can
-// apply 0.8× themselves to the non-shadow lookup). 1.2 is exact
-// against every buddy-bracket product in the canonical table
-// (25×1.2=30, 50×1.2=60, 75×1.2=90, 100×1.2=120).
+// charged move on a shadow-form Pokémon. 1.2 is exact against
+// every value in the canonical tables (stardust 10k/50k/75k/100k
+// and candy 25/50/75/100 are all multiples of 10), so ×12/÷10
+// integer arithmetic produces no rounding drift.
 const shadowCostMultiplier = 1.2
 
 // handle looks up the species, derives the candy cost from its
@@ -198,9 +201,11 @@ func buildSecondMoveCostNote(stardust int, candyOK, isShadow bool) string {
 	parts := make([]string, 0, 2)
 
 	if isShadow {
-		parts = append(parts, "Shadow form: +20% (1.2×) on both stardust and candy. "+
-			"Purified forms use the inverse 0.8× discount; apply that factor client-side "+
-			"to the non-shadow species lookup since pvpoke does not expose a purified id.")
+		parts = append(parts,
+			"Shadow form: +20% (1.2×) on both stardust and candy. "+
+				"Purified forms have a Niantic-published discount that is NOT modelled here "+
+				"(pvpoke does not expose a purified species id); consult the current Niantic "+
+				"rate table if you need the purified number.")
 	}
 
 	switch {
