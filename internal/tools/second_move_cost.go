@@ -28,14 +28,25 @@ type SecondMoveCostParams struct {
 // derived from the species' buddy distance using Niantic's
 // canonical table (1km → 25 candy, 3km → 50, 5km → 75, 20km → 100).
 //
-// StardustCost / CandyCost are the already-multiplied values (shadow
-// species pay 1.2× both currencies). CostMultiplier carries the
-// applied factor so callers can back it out if they need the
-// non-shadow baseline. Purification has its own Niantic-published
-// discount on both currencies, but pvpoke does not expose a
-// purified species id and this tool does not model it — callers
-// handling purified forms must consult Niantic's current rate
-// table directly rather than inferring from the shadow multiplier.
+// StardustCost / CandyCost are the already-multiplied values. The
+// multiplier is driven by params.Options (Phase X):
+//
+//   - Options.Shadow=true  — ×1.2 on both stardust and candy; the
+//     lookup resolves the pvpoke "_shadow" gamemaster entry where
+//     available (ShadowVariantMissing=true when the shadow row is
+//     not yet published — the base species' thirdMoveCost is then
+//     used with the ×1.2 factor still applied).
+//   - Options.Purified=true — ×0.9 on both stardust and candy
+//     (Bulbapedia authoritative).
+//   - Options.Lucky=true   — no effect here; Niantic's 50% stardust
+//     discount is powerup-only. Kept accepted for symmetry with the
+//     other tools so callers can pass the same Options struct.
+//
+// Flags stack (Shadow+Purified = ×1.08, Lucky+Shadow = ×1.2). The
+// scaling uses integer arithmetic (×12/÷10 for shadow, ×9/÷10 for
+// purified) so every canonical tier lands on an exact integer.
+// CostMultiplier echoes the applied factor so callers can back it
+// out to the baseline.
 //
 // CandyCostAvailable reports whether the candy derivation
 // succeeded: false means the gamemaster does not publish a

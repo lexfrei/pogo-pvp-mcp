@@ -27,6 +27,8 @@ MCP server that will expose a Pokémon GO PvP battle simulator and ranker to LLM
 
 Every MCP tool accepts an optional `cup` parameter naming a pvpoke cup (`spring`, `retro`, `jungle`, ...); empty resolves to the open-league `all` rankings. 404s on unsupported (cup, cap) pairs surface as `ErrUnknownCup` rather than silently falling back.
 
+Every Combatant-accepting tool (`pvp_matchup`, `pvp_team_analysis`, `pvp_team_builder`, `pvp_counter_finder`, `pvp_threat_coverage`) accepts an optional per-Pokémon `options` block with `shadow` / `lucky` / `purified` booleans (Phase X refactor). `options.shadow=true` is the new way to address shadow variants — the old `species: "medicham_shadow"` suffix convention still works, and mixing the two (`species: "medicham_shadow"` + `options.shadow=true`) is tolerated. When pvpoke has not yet published the shadow row for a species, the response carries `shadow_variant_missing=true` and falls back to the base species. The battle simulator does NOT yet apply in-game shadow ATK×1.2 / DEF÷1.2 multipliers to damage math; `options.shadow` currently drives legacy-move resolution, moveset auto-fill, and cost estimation. The info-path tools (`pvp_rank`, `pvp_species_info`, `pvp_level_from_cp`, `pvp_cp_limits`, `pvp_evolution_preview`, `pvp_rank_batch`) still take the `_shadow` suffix directly — migrating them to `options` is Phase X-II follow-up work.
+
 No tagged release exists yet. The GitHub repository rename from `pvpoke-mcp` to `pogo-pvp-mcp` is pending, so `go install github.com/lexfrei/pogo-pvp-mcp/cmd/pogo-pvp-mcp@latest` does not yet resolve.
 
 ## Running locally

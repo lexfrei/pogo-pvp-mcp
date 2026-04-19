@@ -145,8 +145,8 @@ func TestSecondMoveCost_1kmBuddy(t *testing.T) {
 // on both currencies. medicham_shadow is the same base (3km buddy,
 // 50,000 stardust) so the response must multiply by 1.2 →
 // 60,000 stardust + 60 candy. (Niantic-documented; symmetric with
-// the purified 0.8× discount. Round 2 review caught an earlier
-// 3× misread.)
+// the purified 0.9× discount — Bulbapedia authoritative, earlier
+// review drafts cited 0.8× in error.)
 func TestSecondMoveCost_ShadowMultiplier(t *testing.T) {
 	t.Parallel()
 
@@ -331,6 +331,12 @@ func TestSecondMoveCost_MissingBuddyDistance(t *testing.T) {
 // earlier iteration let the description say "3× both currencies"
 // after the code had already been corrected to 1.2× — locking this
 // substring prevents a regression where code and description drift.
+//
+// Phase X-I round-3 review also locks the purified phrasing: the
+// pre-refactor description claimed "pvpoke does not expose a purified
+// species id and this tool does not model it", which contradicts the
+// post-refactor Options.Purified=true × 0.9× support. The "does not
+// model" substring must be gone; the 0.9× phrasing must be present.
 func TestSecondMoveCost_ToolDescriptionSanity(t *testing.T) {
 	t.Parallel()
 
@@ -343,6 +349,18 @@ func TestSecondMoveCost_ToolDescriptionSanity(t *testing.T) {
 
 	if !strings.Contains(desc, "1.2") {
 		t.Errorf("description missing the 1.2× shadow multiplier: %q", desc)
+	}
+
+	if strings.Contains(desc, "does not model") {
+		t.Errorf("description still claims purified is not modelled (pre-Phase-X drift): %q", desc)
+	}
+
+	if !strings.Contains(desc, "0.9") {
+		t.Errorf("description missing the 0.9× purified multiplier (Phase X support): %q", desc)
+	}
+
+	if !strings.Contains(desc, "purified") {
+		t.Errorf("description does not mention purified at all: %q", desc)
 	}
 }
 

@@ -518,3 +518,69 @@ func TestMatchupTool_ShadowOptionToleratesShadowSuffixedSpecies(t *testing.T) {
 		t.Errorf("ShadowVariantMissing = true; pvpoke DOES publish medicham_shadow — must not signal missing")
 	}
 }
+
+// TestMatchupTool_PurifiedIsNoOpOnBattle pins an intentional design
+// choice: Options.Purified affects cost estimation (×0.9 stardust
+// and candy in pvp_second_move_cost) but must NOT alter combat
+// resolution. Purification in Pokémon GO converts a Shadow Pokémon
+// back to a normal form; the engine's simulator does not apply any
+// purified-specific multipliers. A client-facing test locks the
+// no-op invariant so an accidental wiring of Options.Purified into
+// the battle path would be caught.
+func TestMatchupTool_PurifiedIsNoOpOnBattle(t *testing.T) {
+	t.Parallel()
+
+	mgr := newManagerWithFixture(t, matchupFixtureGamemaster)
+	handler := tools.NewMatchupTool(mgr, nil).Handler()
+
+	attackerBase := tools.Combatant{
+		Species:      speciesMedicham,
+		IV:           [3]int{15, 15, 15},
+		Level:        40,
+		FastMove:     "COUNTER",
+		ChargedMoves: []string{"ICE_PUNCH"},
+	}
+	defender := tools.Combatant{
+		Species:      "machamp",
+		IV:           [3]int{10, 10, 10},
+		Level:        30,
+		FastMove:     "COUNTER",
+		ChargedMoves: []string{"CROSS_CHOP"},
+	}
+
+	_, withoutPurified, err := handler(t.Context(), nil, tools.MatchupParams{
+		Attacker: attackerBase,
+		Defender: defender,
+		Shields:  [2]int{1, 1},
+	})
+	if err != nil {
+		t.Fatalf("baseline handler: %v", err)
+	}
+
+	attackerPurified := attackerBase
+	attackerPurified.Options = tools.CombatantOptions{Purified: true}
+
+	_, withPurified, err := handler(t.Context(), nil, tools.MatchupParams{
+		Attacker: attackerPurified,
+		Defender: defender,
+		Shields:  [2]int{1, 1},
+	})
+	if err != nil {
+		t.Fatalf("purified handler: %v", err)
+	}
+
+	if withoutPurified.Turns != withPurified.Turns {
+		t.Errorf("Turns differ: baseline=%d purified=%d — Purified must be a no-op on combat",
+			withoutPurified.Turns, withPurified.Turns)
+	}
+
+	if withoutPurified.Winner != withPurified.Winner {
+		t.Errorf("Winner differs: baseline=%q purified=%q — Purified must be a no-op on combat",
+			withoutPurified.Winner, withPurified.Winner)
+	}
+
+	if withoutPurified.HPRemaining != withPurified.HPRemaining {
+		t.Errorf("HPRemaining differs: baseline=%v purified=%v — Purified must be a no-op on combat",
+			withoutPurified.HPRemaining, withPurified.HPRemaining)
+	}
+}
