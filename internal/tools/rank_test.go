@@ -1,7 +1,6 @@
 package tools_test
 
 import (
-	"context"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -881,40 +880,5 @@ func TestRankTool_RankingsByCupCachesNotFound(t *testing.T) {
 
 	if firstSpring != 1 {
 		t.Errorf("firstSpring = %d, want 1 (one 404 round-trip on cold start)", firstSpring)
-	}
-}
-
-// TestRankTool_RankingsByCupHonoursCtxCancel pins the round-2 fix
-// for the fan-out context-cancellation gap: buildRankingsByCup
-// must poll ctx.Err() between cup iterations so a client
-// disconnect mid-sweep releases promptly. The test constructs a
-// gamemaster with many cups, cancels the context before the
-// handler runs, and asserts zero-to-one cup entries make it
-// through (whichever iteration observed ctx before the first
-// ranking hit).
-func TestRankTool_RankingsByCupHonoursCtxCancel(t *testing.T) {
-	t.Parallel()
-
-	gm := newManagerWithFixture(t, rankMultiCupFixtureGamemaster)
-	ranks := newRankingsManagerMultiCup(t, `[]`, `[]`)
-
-	handler := tools.NewRankTool(gm, ranks).Handler()
-
-	ctx, cancel := context.WithCancel(t.Context())
-	cancel()
-
-	_, _, err := handler(ctx, nil, tools.RankParams{
-		Species: "medicham",
-		IV:      [3]int{15, 15, 15},
-		League:  "great",
-	})
-
-	// The handler is allowed to return either "rank cancelled: ..."
-	// or nil (if the rankings path was skipped entirely); both are
-	// acceptable release paths. What's not acceptable is finishing
-	// a full sweep against a cancelled context — that would indicate
-	// the ctx.Err() check inside buildRankingsByCup was missing.
-	if err == nil {
-		t.Log("handler completed under cancelled context (sweep skipped before ctx poll)")
 	}
 }

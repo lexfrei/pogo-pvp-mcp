@@ -1,6 +1,7 @@
 package rankings_test
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -17,6 +18,11 @@ import (
 // testSpeciesMedicham keeps the id literal out of repeated assertions
 // without hoisting a package-wide domain constant into the test binary.
 const testSpeciesMedicham = "medicham"
+
+// springOverall1500URL is the pvpoke URL path for the Spring Cup
+// overall rankings at cpCap=1500 — hoisted so the multiple test
+// servers that need to dispatch this path share one literal.
+const springOverall1500URL = "/spring/overall/rankings-1500.json"
 
 // allOverall1500Path is the upstream URL tail the manager hits when no
 // cup is supplied (cup resolves to "all"). Factored so both the server
@@ -342,7 +348,7 @@ func TestManager_GetWithCup(t *testing.T) {
 
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(minimalRankings))
-		case "/spring/overall/rankings-1500.json":
+		case springOverall1500URL:
 			springHits.Add(1)
 
 			w.Header().Set("Content-Type", "application/json")
@@ -458,5 +464,84 @@ func TestManager_UpstreamError(t *testing.T) {
 	_, err = mgr.Get(t.Context(), 1500, "")
 	if err == nil {
 		t.Fatal("expected error for upstream 500")
+	}
+}
+
+// TestManager_GetCachesNotFound pins that Manager memoises
+// ErrUnknownCup (404) responses: a second Get on the same
+// unsupported (cup, cap) pair must return the error immediately
+// without a second upstream round-trip. Without the negative
+// cache, pvp_rank's rankings_by_cup fan-out would repeat 404s
+// against every non-publishing cup on every handler call.
+func TestManager_GetCachesNotFound(t *testing.T) {
+	t.Parallel()
+
+	var springCalls atomic.Int64
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == springOverall1500URL {
+			springCalls.Add(1)
+		}
+
+		http.NotFound(w, r)
+	}))
+	defer server.Close()
+
+	mgr, err := rankings.NewManager(rankings.Config{
+		BaseURL:  server.URL,
+		LocalDir: t.TempDir(),
+	})
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+
+	_, firstErr := mgr.Get(t.Context(), 1500, "spring")
+	if !errors.Is(firstErr, rankings.ErrUnknownCup) {
+		t.Fatalf("first call error = %v, want wrapping ErrUnknownCup", firstErr)
+	}
+
+	cold := springCalls.Load()
+	if cold != 1 {
+		t.Errorf("springCalls after cold start = %d, want 1", cold)
+	}
+
+	_, secondErr := mgr.Get(t.Context(), 1500, "spring")
+	if !errors.Is(secondErr, rankings.ErrUnknownCup) {
+		t.Fatalf("second call error = %v, want wrapping ErrUnknownCup", secondErr)
+	}
+
+	if got := springCalls.Load(); got != cold {
+		t.Errorf("springCalls after second call = %d, want %d (negative cache must absorb)",
+			got, cold)
+	}
+}
+
+// TestManager_GetRespectsCancelledCtx pins the ctx.Err() check at
+// GetRole's entry. Without this, a cancelled context on a warm
+// cache would still return entries (cache hit, no network),
+// leaving downstream fan-out loops to discover the cancellation
+// only at their own loop-boundary checks. The I/O-boundary check
+// gives every caller the same release semantics.
+func TestManager_GetRespectsCancelledCtx(t *testing.T) {
+	t.Parallel()
+
+	mgr, err := rankings.NewManager(rankings.Config{
+		BaseURL:  "http://example.invalid",
+		LocalDir: t.TempDir(),
+	})
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+
+	_, err = mgr.Get(ctx, 1500, "")
+	if err == nil {
+		t.Fatal("Get under cancelled ctx returned nil error")
+	}
+
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("Get err = %v, want wrapping context.Canceled", err)
 	}
 }

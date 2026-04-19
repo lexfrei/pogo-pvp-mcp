@@ -147,10 +147,12 @@ type Manager struct {
 	// cups in the gamemaster and the cups actually published per CP
 	// cap is a small subset (typically 4-6 of ~20), so most lookups
 	// per call would repeat 404s against the remaining cups forever.
-	// The set is never evicted during the process' lifetime; the
-	// gamemaster refresh cycle already bounces the process, so
-	// stale-404 drift across pvpoke publishes is bounded by the
-	// same refresh interval as positive entries.
+	// Entries are never evicted during the process' lifetime; a new
+	// pvpoke cup roll-out only becomes visible after a process
+	// restart. Acceptable because operators already restart the
+	// MCP server on gamemaster-refresh or cache-clear cadences, and
+	// a stale 404 surfaces as a missing rankings_by_cup entry, not
+	// a wrong number.
 	notFound map[cacheKey]struct{}
 	fetchMu  map[cacheKey]*sync.Mutex
 	fetchMuG sync.Mutex
@@ -196,6 +198,18 @@ func (m *Manager) Get(ctx context.Context, cpCap int, cup string) ([]RankingEntr
 func (m *Manager) GetRole(
 	ctx context.Context, cpCap int, cup string, role Role,
 ) ([]RankingEntry, error) {
+	// Honour ctx cancellation even on the cache-hit path. Without
+	// this, a fan-out caller (pvp_rank's rankings_by_cup loop) that
+	// sees every cup cached after warm-up would iterate the full
+	// list regardless of a client disconnect — the loop's own
+	// ctx.Err() check catches it downstream, but the cheaper fix is
+	// at the I/O boundary so every consumer of Manager.Get gets the
+	// same release guarantee.
+	ctxErr := ctx.Err()
+	if ctxErr != nil {
+		return nil, fmt.Errorf("rankings cancelled: %w", ctxErr)
+	}
+
 	key, err := validateAndKey(cpCap, cup, role)
 	if err != nil {
 		return nil, err
