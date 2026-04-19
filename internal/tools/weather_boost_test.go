@@ -25,8 +25,17 @@ func TestWeatherBoost_FullTable(t *testing.T) {
 		t.Fatalf("Entries len = %d, want 7 (canonical weather count)", len(result.Entries))
 	}
 
-	if result.BoostMultiplier != 1.1 {
-		t.Errorf("BoostMultiplier = %f, want 1.1", result.BoostMultiplier)
+	if result.PvEBoostMultiplier != 1.2 {
+		t.Errorf("PvEBoostMultiplier = %f, want 1.2 (Niantic canonical 20%% bonus)",
+			result.PvEBoostMultiplier)
+	}
+
+	if result.AppliesToPvP {
+		t.Errorf("AppliesToPvP = true; weather boost is never applied in Trainer Battles")
+	}
+
+	if result.PvPNote == "" {
+		t.Errorf("PvPNote empty; a prominent PvP-exclusion disclaimer is required on every response")
 	}
 
 	// Every entry must have a non-empty BoostedTypes slice.
@@ -126,6 +135,58 @@ func TestWeatherBoost_AllTypesCovered(t *testing.T) {
 	if len(counts) != len(canonicalTypes) {
 		t.Errorf("distinct boosted types = %d, want %d (canonical pvpoke type count)",
 			len(counts), len(canonicalTypes))
+	}
+}
+
+// TestWeatherBoost_CaseInsensitive pins that "Sunny" (mixed-case
+// LLM output) resolves identically to "sunny", matching
+// pvp_type_matchup's case-folding behaviour.
+func TestWeatherBoost_CaseInsensitive(t *testing.T) {
+	t.Parallel()
+
+	tool := tools.NewWeatherBoostTool()
+	handler := tool.Handler()
+
+	_, mixedCase, err := handler(t.Context(), nil, tools.WeatherBoostParams{Weather: "Sunny"})
+	if err != nil {
+		t.Fatalf("mixed-case handler: %v", err)
+	}
+
+	_, lowerCase, err := handler(t.Context(), nil, tools.WeatherBoostParams{Weather: "sunny"})
+	if err != nil {
+		t.Fatalf("lower-case handler: %v", err)
+	}
+
+	if mixedCase.Entries[0].Weather != lowerCase.Entries[0].Weather {
+		t.Errorf("case-folded lookups diverged: mixed=%q lower=%q",
+			mixedCase.Entries[0].Weather, lowerCase.Entries[0].Weather)
+	}
+}
+
+// TestWeatherBoost_SingleWeatherCarriesDisclaimer pins that the
+// single-query response also carries the PvP exclusion disclaimer
+// and AppliesToPvP=false.
+func TestWeatherBoost_SingleWeatherCarriesDisclaimer(t *testing.T) {
+	t.Parallel()
+
+	tool := tools.NewWeatherBoostTool()
+	handler := tool.Handler()
+
+	_, result, err := handler(t.Context(), nil, tools.WeatherBoostParams{Weather: "sunny"})
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+
+	if result.AppliesToPvP {
+		t.Errorf("AppliesToPvP = true on single-query response; weather boost never applies in PvP")
+	}
+
+	if result.PvPNote == "" {
+		t.Errorf("PvPNote empty on single-query response; disclaimer must be carried")
+	}
+
+	if result.PvEBoostMultiplier != 1.2 {
+		t.Errorf("PvEBoostMultiplier = %f, want 1.2", result.PvEBoostMultiplier)
 	}
 }
 
