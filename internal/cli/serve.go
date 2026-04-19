@@ -284,7 +284,7 @@ func buildMCPServer(gamemasterMgr *gamemaster.Manager, ranks *rankings.Manager) 
 		Version: serverVersion,
 	}, nil)
 
-	rankTool := tools.NewRankTool(gamemasterMgr)
+	rankTool := tools.NewRankTool(gamemasterMgr, ranks)
 	mcp.AddTool(server, rankTool.Tool(), rankTool.Handler())
 
 	matchupTool := tools.NewMatchupTool(gamemasterMgr)
