@@ -112,3 +112,35 @@ func TestReadmeToolCountConsistent(t *testing.T) {
 		t.Errorf("README.md still contains stale tool count \"nineteen\" (current count is 20)")
 	}
 }
+
+// TestReportDataIssueURLMatchesLiveRepo pins the round-2 fix for
+// pvp_report_data_issue: the tool's outbound URLs must target the
+// live GitHub repository name, not the Go module path. CLAUDE.md
+// records the `gh repo rename` from `pvpoke-mcp` to `pogo-pvp-mcp`
+// as pending; using the pending path in the URL produces a 404.
+// When the rename lands, flip both the hardcoded URL in
+// report_data_issue.go AND the "rename is pending" note in
+// CLAUDE.md in one commit — this test asserts they stay in sync:
+// if CLAUDE.md stops saying rename-is-pending, the URL must have
+// flipped to pogo-pvp-mcp; while the note is still present, the
+// URL must still point at pvpoke-mcp.
+func TestReportDataIssueURLMatchesLiveRepo(t *testing.T) {
+	t.Parallel()
+
+	claudeMD := readRepoFile(t, "CLAUDE.md")
+
+	reportTool := readRepoFile(t, "internal/tools/report_data_issue.go")
+
+	renamePending := strings.Contains(claudeMD, "`gh repo rename` to `pogo-pvp-mcp` is pending")
+
+	urlUsesPVPoke := strings.Contains(reportTool, `"https://github.com/lexfrei/pvpoke-mcp"`)
+	urlUsesPogo := strings.Contains(reportTool, `"https://github.com/lexfrei/pogo-pvp-mcp"`)
+
+	if renamePending && !urlUsesPVPoke {
+		t.Errorf("CLAUDE.md says the rename is pending but report_data_issue.go does not use the pvpoke-mcp URL")
+	}
+
+	if !renamePending && !urlUsesPogo {
+		t.Errorf("CLAUDE.md no longer flags the rename as pending but report_data_issue.go does not use the pogo-pvp-mcp URL")
+	}
+}

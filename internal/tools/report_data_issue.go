@@ -67,12 +67,18 @@ func (tool *ReportDataIssueTool) Handler() mcp.ToolHandlerFor[ReportDataIssuePar
 }
 
 // reportDataIssueRepositoryURL and reportDataIssueIssuesURL pin
-// the canonical outbound links. Kept as package-private consts so
-// they can be updated from one spot and asserted by the test
-// suite; outside of a repo rename these are stable.
+// the outbound links. The Go module path is
+// `github.com/lexfrei/pogo-pvp-mcp` but the GitHub repository
+// itself still lives at `lexfrei/pvpoke-mcp` (CLAUDE.md: "a
+// `gh repo rename` to `pogo-pvp-mcp` is pending") — using the
+// module path in user-facing URLs returns 404. The URLs track
+// the live repository name and flip to `pogo-pvp-mcp` at rename
+// time (GitHub keeps an HTTP redirect so an update-lag window
+// is still safe, but the test suite pins the literal string so
+// the rename is an explicit commit, not a silent drift).
 const (
-	reportDataIssueRepositoryURL = "https://github.com/lexfrei/pogo-pvp-mcp"
-	reportDataIssueIssuesURL     = "https://github.com/lexfrei/pogo-pvp-mcp/issues/new"
+	reportDataIssueRepositoryURL = "https://github.com/lexfrei/pvpoke-mcp"
+	reportDataIssueIssuesURL     = "https://github.com/lexfrei/pvpoke-mcp/issues/new"
 )
 
 // reportDataIssueMessage explains the rationale to the caller
