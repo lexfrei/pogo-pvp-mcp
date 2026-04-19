@@ -71,7 +71,7 @@ The MCP server is a thin wrapper around the engine. The hot shape: an MCP tool h
 - **`MaxPoolSize = 50` is a DoS guard** against LLM-supplied huge pools. Reject with `ErrPoolTooLarge` before any enumeration.
 - **`Combatant.Valid()` is the source of truth for simulation preconditions.** `Simulate` calls it on both sides and wraps the first failure with `ErrInvalidCombatant`. Don't add parallel validation in `internal/tools/` — defer to the engine.
 - **Tool handlers honour `ctx.Err()` at loop boundaries, not just on entry.** `runTeamAnalysis` and `evaluateTeams` check between each outer iteration and the handler re-checks after the sweep returns. A client disconnect during a multi-million simulation budget must release the worker goroutine.
-- **`rankings.Manager.Get` is singleflight per CP cap.** Don't bypass it with direct `loadLocal` / `fetchUpstream` calls; you'll reintroduce the cold-start thundering-herd.
+- **`rankings.Manager.Get` is singleflight per (cup, cap) pair.** The Get signature is `Get(ctx, cap int, cup string)` — cup="" normalises to "all". Don't bypass it with direct `loadLocal` / `fetchUpstream` calls; you'll reintroduce the cold-start thundering-herd. Upstream 404 for unsupported (cup, cap) pairs wraps `ErrUnknownCup`, not `ErrUpstreamStatus`.
 - **Neither README nor package docs should claim a tool behaviour that isn't wired.** Past review rounds flagged doc drift as blocking (e.g. describing the LRU cache as "memoising tool responses" when the handlers don't touch it). If you change behaviour, update `README.md` + relevant package doc in the same commit.
 
 ### Testing conventions

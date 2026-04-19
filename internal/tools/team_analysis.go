@@ -85,6 +85,7 @@ const rankingsMaxLevelCap = 50
 type TeamAnalysisParams struct {
 	Team    []Combatant `json:"team" jsonschema:"exactly 3 team members"`
 	League  string      `json:"league" jsonschema:"little|great|ultra|master"`
+	Cup     string      `json:"cup,omitempty" jsonschema:"cup id from pvpoke (e.g. spring, retro); empty = open-league all"`
 	TopN    int         `json:"top_n,omitempty" jsonschema:"how many meta species to sweep (default 30)"`
 	Shields []int       `json:"shields,omitempty" jsonschema:"[team, meta] shield counts; omit for [1, 1]; each 0..2"`
 }
@@ -111,6 +112,7 @@ type TeamMemberAnalysis struct {
 // cache race between gamemaster and rankings).
 type TeamAnalysisResult struct {
 	League             string               `json:"league"`
+	Cup                string               `json:"cup"`
 	CPCap              int                  `json:"cp_cap"`
 	MetaSize           int                  `json:"meta_size"`
 	TeamScore          float64              `json:"team_score"`
@@ -175,7 +177,7 @@ func (tool *TeamAnalysisTool) handle(
 
 	defaults := resolveTeamDefaults(params.Shields, params.TopN)
 
-	entries, err := tool.rankings.Get(ctx, cpCap)
+	entries, err := tool.rankings.Get(ctx, cpCap, params.Cup)
 	if err != nil {
 		return nil, TeamAnalysisResult{}, fmt.Errorf("rankings fetch: %w", err)
 	}
@@ -196,6 +198,7 @@ func (tool *TeamAnalysisTool) handle(
 
 	result := runTeamAnalysis(ctx, teamCombatants, metaCombatants, keptEntries,
 		params.League, cpCap, len(keptEntries))
+	result.Cup = resolveCupLabel(params.Cup)
 	result.SkippedMetaSpecies = skipped
 
 	if ctx.Err() != nil {

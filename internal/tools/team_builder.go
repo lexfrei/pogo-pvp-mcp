@@ -42,6 +42,7 @@ const MaxPoolSize = 50
 type TeamBuilderParams struct {
 	Pool       []Combatant `json:"pool" jsonschema:"candidate combatants to draw the team from"`
 	League     string      `json:"league" jsonschema:"little|great|ultra|master"`
+	Cup        string      `json:"cup,omitempty" jsonschema:"cup id from pvpoke (e.g. spring, retro); empty = open-league all"`
 	TopN       int         `json:"top_n,omitempty" jsonschema:"meta size for scoring (default 30)"`
 	Shields    []int       `json:"shields,omitempty" jsonschema:"[team, meta] shield counts; omit for [1, 1]; each 0..2"`
 	MaxResults int         `json:"max_results,omitempty" jsonschema:"how many top teams to return (default 5)"`
@@ -67,6 +68,7 @@ type TeamBuilderTeam struct {
 // fallbacks and the ranking is less reliable.
 type TeamBuilderResult struct {
 	League             string            `json:"league"`
+	Cup                string            `json:"cup"`
 	CPCap              int               `json:"cp_cap"`
 	PoolSize           int               `json:"pool_size"`
 	Evaluated          int               `json:"evaluated_combinations"`
@@ -113,6 +115,7 @@ type teamBuilderInputs struct {
 	required       map[string]struct{}
 	cpCap          int
 	league         string
+	cup            string
 	maxResults     int
 }
 
@@ -156,6 +159,7 @@ func (tool *TeamBuilderTool) handle(
 
 	return nil, TeamBuilderResult{
 		League:             inputs.league,
+		Cup:                inputs.cup,
 		CPCap:              inputs.cpCap,
 		PoolSize:           len(inputs.pool),
 		Evaluated:          result.Evaluated,
@@ -196,7 +200,7 @@ func (tool *TeamBuilderTool) resolveTeamBuilderInputs(
 		return nil, err
 	}
 
-	metaCombatants, err := tool.prepareMeta(ctx, snapshot, cpCap, defaults)
+	metaCombatants, err := tool.prepareMeta(ctx, snapshot, cpCap, params.Cup, defaults)
 	if err != nil {
 		return nil, err
 	}
@@ -213,6 +217,7 @@ func (tool *TeamBuilderTool) resolveTeamBuilderInputs(
 		required:       required,
 		cpCap:          cpCap,
 		league:         params.League,
+		cup:            resolveCupLabel(params.Cup),
 		maxResults:     maxResults,
 	}, nil
 }
@@ -284,9 +289,9 @@ func (tool *TeamBuilderTool) preparePool(
 // list is not surfaced separately here.
 func (tool *TeamBuilderTool) prepareMeta(
 	ctx context.Context, snapshot *pogopvp.Gamemaster,
-	cpCap int, defaults teamAnalysisDefaults,
+	cpCap int, cup string, defaults teamAnalysisDefaults,
 ) ([]pogopvp.Combatant, error) {
-	entries, err := tool.rankings.Get(ctx, cpCap)
+	entries, err := tool.rankings.Get(ctx, cpCap, cup)
 	if err != nil {
 		return nil, fmt.Errorf("rankings fetch: %w", err)
 	}

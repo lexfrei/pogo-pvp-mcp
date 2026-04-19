@@ -20,6 +20,7 @@ const defaultMetaTopN = 30
 // MetaParams is the JSON input contract for pvp_meta.
 type MetaParams struct {
 	League string `json:"league" jsonschema:"little|great|ultra|master"`
+	Cup    string `json:"cup,omitempty" jsonschema:"cup id from pvpoke (e.g. spring, retro, jungle); empty = open-league all"`
 	TopN   int    `json:"top_n,omitempty" jsonschema:"how many entries to return (default 30)"`
 }
 
@@ -38,9 +39,12 @@ type MetaEntry struct {
 	HP          int      `json:"hp"`
 }
 
-// MetaResult is the JSON output contract for pvp_meta.
+// MetaResult is the JSON output contract for pvp_meta. Cup echoes
+// the resolved cup so clients see whether a missing/empty input
+// defaulted to the open-league `all` bucket.
 type MetaResult struct {
 	League  string      `json:"league"`
+	Cup     string      `json:"cup"`
 	CPCap   int         `json:"cp_cap"`
 	Entries []MetaEntry `json:"entries"`
 }
@@ -95,7 +99,7 @@ func (tool *MetaTool) handle(
 		return nil, MetaResult{}, err
 	}
 
-	entries, err := tool.manager.Get(ctx, cpCap)
+	entries, err := tool.manager.Get(ctx, cpCap, params.Cup)
 	if err != nil {
 		return nil, MetaResult{}, fmt.Errorf("rankings fetch: %w", err)
 	}
@@ -109,9 +113,22 @@ func (tool *MetaTool) handle(
 
 	return nil, MetaResult{
 		League:  params.League,
+		Cup:     resolveCupLabel(params.Cup),
 		CPCap:   cpCap,
 		Entries: buildMetaEntries(entries[:topN]),
 	}, nil
+}
+
+// resolveCupLabel mirrors rankings.resolveCup at the tool boundary:
+// an empty input echoes as "all" in results so clients see what was
+// actually applied. Kept here (not re-exported from the rankings
+// package) to avoid widening that API surface for one string.
+func resolveCupLabel(cup string) string {
+	if cup == "" {
+		return "all"
+	}
+
+	return cup
 }
 
 // buildMetaEntries projects rankings slice rows into MetaEntry with

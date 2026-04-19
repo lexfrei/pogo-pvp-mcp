@@ -14,6 +14,15 @@ import (
 	"github.com/lexfrei/pogo-pvp-mcp/internal/rankings"
 )
 
+// testSpeciesMedicham keeps the id literal out of repeated assertions
+// without hoisting a package-wide domain constant into the test binary.
+const testSpeciesMedicham = "medicham"
+
+// allOverall1500Path is the upstream URL tail the manager hits when no
+// cup is supplied (cup resolves to "all"). Factored so both the server
+// mux and the assertion read from one source of truth.
+const allOverall1500Path = "/all/overall/rankings-1500.json"
+
 // minimalRankings is a trimmed rankings payload carrying one entry with
 // every field the parser cares about.
 const minimalRankings = `[
@@ -33,7 +42,7 @@ func newTestRankingsServer(t *testing.T, payload string) *httptest.Server {
 	t.Helper()
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/all/overall/rankings-1500.json" {
+		if r.URL.Path != allOverall1500Path {
 			http.NotFound(w, r)
 			return
 		}
@@ -59,7 +68,7 @@ func TestManager_GetFetchesAndCaches(t *testing.T) {
 		t.Fatalf("NewManager: %v", err)
 	}
 
-	entries, err := mgr.Get(t.Context(), 1500)
+	entries, err := mgr.Get(t.Context(), 1500, "")
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
@@ -69,8 +78,8 @@ func TestManager_GetFetchesAndCaches(t *testing.T) {
 	}
 
 	entry := entries[0]
-	if entry.SpeciesID != "medicham" {
-		t.Errorf("SpeciesID = %q, want medicham", entry.SpeciesID)
+	if entry.SpeciesID != testSpeciesMedicham {
+		t.Errorf("SpeciesID = %q, want %s", entry.SpeciesID, testSpeciesMedicham)
 	}
 	if entry.Rating != 700 {
 		t.Errorf("Rating = %d, want 700", entry.Rating)
@@ -106,12 +115,12 @@ func TestManager_GetReturnsCachedOnSecondCall(t *testing.T) {
 		t.Fatalf("NewManager: %v", err)
 	}
 
-	_, err = mgr.Get(t.Context(), 1500)
+	_, err = mgr.Get(t.Context(), 1500, "")
 	if err != nil {
 		t.Fatalf("first Get: %v", err)
 	}
 
-	_, err = mgr.Get(t.Context(), 1500)
+	_, err = mgr.Get(t.Context(), 1500, "")
 	if err != nil {
 		t.Fatalf("second Get: %v", err)
 	}
@@ -134,7 +143,7 @@ func TestManager_GetUnknownCap(t *testing.T) {
 		t.Fatalf("NewManager: %v", err)
 	}
 
-	_, err = mgr.Get(t.Context(), 99999)
+	_, err = mgr.Get(t.Context(), 99999, "")
 	if !errors.Is(err, rankings.ErrUnsupportedCap) {
 		t.Errorf("error = %v, want wrapping ErrUnsupportedCap", err)
 	}
@@ -154,7 +163,7 @@ func TestManager_PersistsAndReloads(t *testing.T) {
 		t.Fatalf("NewManager: %v", err)
 	}
 
-	_, err = mgr.Get(t.Context(), 1500)
+	_, err = mgr.Get(t.Context(), 1500, "")
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
@@ -168,7 +177,7 @@ func TestManager_PersistsAndReloads(t *testing.T) {
 		t.Fatalf("NewManager (second): %v", err)
 	}
 
-	entries, err := mgr2.Get(t.Context(), 1500)
+	entries, err := mgr2.Get(t.Context(), 1500, "")
 	if err != nil {
 		t.Fatalf("Get from disk: %v", err)
 	}
@@ -237,7 +246,7 @@ func TestManager_GetSingleflight(t *testing.T) {
 		go func() {
 			defer wg.Done()
 
-			_, _ = mgr.Get(t.Context(), 1500)
+			_, _ = mgr.Get(t.Context(), 1500, "")
 		}()
 	}
 
@@ -276,14 +285,15 @@ func TestManager_StaleCacheTriggersRefetch(t *testing.T) {
 		t.Fatalf("NewManager: %v", err)
 	}
 
-	_, err = mgr.Get(t.Context(), 1500)
+	_, err = mgr.Get(t.Context(), 1500, "")
 	if err != nil {
 		t.Fatalf("first Get: %v", err)
 	}
 
 	// Back-date the cache file past the 24h TTL and use a fresh
-	// manager so the in-memory cache does not short-circuit.
-	path := filepath.Join(dir, "rankings-1500.json")
+	// manager so the in-memory cache does not short-circuit. The
+	// per-cup subdirectory is created by the manager on first persist.
+	path := filepath.Join(dir, "all", "rankings-1500.json")
 	old := time.Now().Add(-72 * time.Hour)
 
 	err = os.Chtimes(path, old, old)
@@ -299,13 +309,105 @@ func TestManager_StaleCacheTriggersRefetch(t *testing.T) {
 		t.Fatalf("NewManager #2: %v", err)
 	}
 
-	_, err = mgr2.Get(t.Context(), 1500)
+	_, err = mgr2.Get(t.Context(), 1500, "")
 	if err != nil {
 		t.Fatalf("second Get: %v", err)
 	}
 
 	if hits != 2 {
 		t.Errorf("server hits = %d, want 2 (stale cache must re-fetch)", hits)
+	}
+}
+
+// TestManager_GetWithCup verifies that a non-empty cup routes the
+// upstream fetch to `/{cup}/overall/rankings-{cap}.json` and caches
+// per (cup, cap) — two fetches with different cups do not collide.
+func TestManager_GetWithCup(t *testing.T) {
+	t.Parallel()
+
+	const springPayload = `[{"speciesId":"venusaur","speciesName":"Venusaur","rating":900,` +
+		`"score":98.0,"moveset":["VINE_WHIP","FRENZY_PLANT","SLUDGE_BOMB"],` +
+		`"matchups":[],"counters":[],"stats":{"product":2800,"atk":120,"def":140,"hp":160}}]`
+
+	var (
+		allHits    atomic.Int64
+		springHits atomic.Int64
+	)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case allOverall1500Path:
+			allHits.Add(1)
+
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(minimalRankings))
+		case "/spring/overall/rankings-1500.json":
+			springHits.Add(1)
+
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(springPayload))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	mgr, err := rankings.NewManager(rankings.Config{
+		BaseURL:  server.URL,
+		LocalDir: t.TempDir(),
+	})
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+
+	allEntries, err := mgr.Get(t.Context(), 1500, "")
+	if err != nil {
+		t.Fatalf("Get all: %v", err)
+	}
+
+	springEntries, err := mgr.Get(t.Context(), 1500, "spring")
+	if err != nil {
+		t.Fatalf("Get spring: %v", err)
+	}
+
+	if allEntries[0].SpeciesID != testSpeciesMedicham {
+		t.Errorf("all[0] = %q, want %s", allEntries[0].SpeciesID, testSpeciesMedicham)
+	}
+	if springEntries[0].SpeciesID != "venusaur" {
+		t.Errorf("spring[0] = %q, want venusaur", springEntries[0].SpeciesID)
+	}
+
+	if got := allHits.Load(); got != 1 {
+		t.Errorf("all hits = %d, want 1", got)
+	}
+	if got := springHits.Load(); got != 1 {
+		t.Errorf("spring hits = %d, want 1", got)
+	}
+}
+
+// TestManager_GetCupCapNotFound verifies that an unsupported (cup, cap)
+// pair surfaces as ErrUnknownCup. pvpoke publishes Spring rankings only
+// at 1500 — asking for Spring at 500 must fail cleanly, not fall back
+// to `all`.
+func TestManager_GetCupCapNotFound(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "not found", http.StatusNotFound)
+	}))
+	t.Cleanup(server.Close)
+
+	mgr, err := rankings.NewManager(rankings.Config{
+		BaseURL:  server.URL,
+		LocalDir: t.TempDir(),
+	})
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+
+	_, err = mgr.Get(t.Context(), 500, "spring")
+	if !errors.Is(err, rankings.ErrUnknownCup) {
+		t.Errorf("error = %v, want wrapping ErrUnknownCup", err)
 	}
 }
 
@@ -325,7 +427,7 @@ func TestManager_UpstreamError(t *testing.T) {
 		t.Fatalf("NewManager: %v", err)
 	}
 
-	_, err = mgr.Get(t.Context(), 1500)
+	_, err = mgr.Get(t.Context(), 1500, "")
 	if err == nil {
 		t.Fatal("expected error for upstream 500")
 	}
