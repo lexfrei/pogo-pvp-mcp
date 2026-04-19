@@ -118,3 +118,96 @@ func TestScoreTripleFromMatrix_ZeroRatingIsValid(t *testing.T) {
 		t.Errorf("score = %f, want 0 (every cell contributed a 0 rating)", score)
 	}
 }
+
+// TestSimulateTeamMatrix_SinglePassPerCell pins the Phase-2B
+// performance invariant: runTeamAnalysis must compute every
+// (member, opp, scenario) cell exactly once. simulateTeamMatrix is
+// the single call site for ratingFor, so proving the matrix has
+// exactly team × meta × |scenarios| cells — each OK on a valid
+// fixture — proves the total Simulate count has no 2× regression.
+//
+// Build combatants from scratch rather than going through the full
+// handler: the test is about the count, not about the end-to-end
+// plumbing.
+func TestSimulateTeamMatrix_SinglePassPerCell(t *testing.T) {
+	t.Parallel()
+
+	ivs, err := pogopvp.NewIV(15, 15, 15)
+	if err != nil {
+		t.Fatalf("NewIV: %v", err)
+	}
+
+	species := pogopvp.Species{
+		ID:        "alpha",
+		BaseStats: pogopvp.BaseStats{Atk: 121, Def: 152, HP: 155},
+	}
+	fast := pogopvp.Move{
+		ID: "FAST1", Category: pogopvp.MoveCategoryFast, Power: 3,
+		EnergyGain: 5, Cooldown: 1000, Turns: 2,
+	}
+	charged := pogopvp.Move{
+		ID: "CH1", Category: pogopvp.MoveCategoryCharged, Power: 50, Energy: 35,
+	}
+
+	build := func() pogopvp.Combatant {
+		return pogopvp.Combatant{
+			Species:      species,
+			IV:           ivs,
+			Level:        40,
+			FastMove:     fast,
+			ChargedMoves: []pogopvp.Move{charged},
+			Shields:      1,
+		}
+	}
+
+	team := []pogopvp.Combatant{build(), build(), build()}
+	meta := []pogopvp.Combatant{build(), build()}
+	scenarios := []int{0, 1, 2}
+
+	matrix := simulateTeamMatrix(t.Context(), team, meta, scenarios)
+
+	if len(matrix) != len(team) {
+		t.Fatalf("matrix outer len = %d, want %d (team size)", len(matrix), len(team))
+	}
+
+	var (
+		total int
+		okCnt int
+	)
+
+	for i := range matrix {
+		if len(matrix[i]) != len(meta) {
+			t.Errorf("matrix[%d] len = %d, want %d (meta size)", i, len(matrix[i]), len(meta))
+
+			continue
+		}
+
+		for j := range matrix[i] {
+			if len(matrix[i][j]) != len(scenarios) {
+				t.Errorf("matrix[%d][%d] len = %d, want %d (scenarios len)",
+					i, j, len(matrix[i][j]), len(scenarios))
+
+				continue
+			}
+
+			for _, cell := range matrix[i][j] {
+				total++
+
+				if cell.OK {
+					okCnt++
+				}
+			}
+		}
+	}
+
+	expected := len(team) * len(meta) * len(scenarios)
+
+	if total != expected {
+		t.Errorf("total cells = %d, want %d (team × meta × scenarios)", total, expected)
+	}
+
+	if okCnt != expected {
+		t.Errorf("OK cells = %d, want %d — a valid fixture must produce every rating",
+			okCnt, expected)
+	}
+}
