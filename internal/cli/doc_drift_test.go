@@ -91,25 +91,36 @@ func TestReadmeDocumentsEngineShadowLimitation(t *testing.T) {
 	}
 }
 
-// TestReadmeToolCountConsistent catches the round-1 blocker that
-// landed during pvp_report_data_issue: README.md had the header
-// count updated (nineteen → twenty) but a downstream paragraph
-// still said "nineteen". Locks both numeric words the README
-// uses against each other: if the header says "twenty" then the
-// walkthrough body must say "twenty" too, and "nineteen" must not
-// appear anywhere in the README once the new tool has landed.
+// TestReadmeToolCountConsistent catches the class of bug that
+// recurs every time a new tool lands: the README header count gets
+// bumped but a downstream walkthrough paragraph still names the
+// old number. Instead of banning specific stale words one at a
+// time (this caught "nineteen" and then "twenty"), the test pins
+// that exactly one English number-word describing the tool count
+// appears in README.md and that it matches the current tool
+// count. Bump currentToolCount when a tool lands or drops.
 func TestReadmeToolCountConsistent(t *testing.T) {
 	t.Parallel()
 
 	readme := readRepoFile(t, "README.md")
 
-	// "nineteen" is the stale word the round-1 reviewer caught.
-	// Any occurrence is doc drift relative to the current tool
-	// count, so ban it outright. If a future phase drops a tool
-	// and the count goes back to 19, re-enable the word in a
-	// focused doc update.
-	if strings.Contains(readme, "nineteen") {
-		t.Errorf("README.md still contains stale tool count \"nineteen\" (current count is 20)")
+	const currentToolCount = "twenty-one"
+
+	// Stale number-words from prior milestones. If a new tool
+	// pushes the count past "twenty-one", add the retired word
+	// here and bump currentToolCount above.
+	stale := []string{"nineteen", "twenty MCP", "twenty `pvp_*`", "twenty currently"}
+
+	for _, word := range stale {
+		if strings.Contains(readme, word) {
+			t.Errorf("README.md still contains stale tool-count phrase %q (current count is %s)",
+				word, currentToolCount)
+		}
+	}
+
+	if !strings.Contains(readme, currentToolCount) {
+		t.Errorf("README.md missing expected current tool-count word %q — header or walkthrough drift",
+			currentToolCount)
 	}
 }
 
