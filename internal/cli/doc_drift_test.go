@@ -127,6 +127,32 @@ func TestReadmeToolCountConsistent(t *testing.T) {
 	}
 }
 
+// TestReadmeDocumentsTargetLevelAndCPCapNuance pins the Phase R4.8
+// doc-gap fix: the README must explicitly document the semantics of
+// the `target_level` parameter (omit / 0 vs positive) on team tools
+// and the `cp_cap` override on pvp_rank. Past sessions repeatedly hit
+// ambiguity — callers defaulted `target_level: 0` expecting "no
+// powerup" rather than "deepest fit under cap", and `cp_cap`
+// overrides were undocumented. The test locks distinctive phrases so
+// future rewrites can't silently drop them.
+func TestReadmeDocumentsTargetLevelAndCPCapNuance(t *testing.T) {
+	t.Parallel()
+
+	readme := readRepoFile(t, "README.md")
+
+	requiredPhrases := []string{
+		"deepest level fitting the league CP cap",
+		"already_at_or_above_target",
+		"re-searches the optimal level under that cap",
+	}
+
+	for _, phrase := range requiredPhrases {
+		if !strings.Contains(readme, phrase) {
+			t.Errorf("README.md missing required phrase %q (target_level / cp_cap nuance doc drift)", phrase)
+		}
+	}
+}
+
 // TestReportDataIssueURLMatchesLiveRepo pins the round-2 fix for
 // pvp_report_data_issue: the tool's outbound URLs must target the
 // live GitHub repository name, not the Go module path. CLAUDE.md

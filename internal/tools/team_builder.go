@@ -42,6 +42,21 @@ const MaxPoolSize = 50
 // then scores each triple under every shield context regardless.
 // OptimizeFor (overall|0s|1s|2s|all_pareto) selects which scenario
 // axis drives the ranking; see TeamBuilderTeam.ParetoLabel.
+//
+// TargetLevel nuance (tracked bug from r3 backlog):
+//
+//   - Omitted / zero — the cost helper computes the deepest 0.5-
+//     grid level at which a 15/15/15 hundo of the same species
+//     would still fit the league CP cap, and uses that as the
+//     target. This is the "max powerup without busting cap" target
+//     a competitive player would aim for.
+//   - Positive — the exact 0.5-grid level is used verbatim as the
+//     target (off-grid / out-of-range values rejected with
+//     ErrInvalidTargetLevel).
+//   - Members whose current level already reaches or exceeds the
+//     resolved target get the already_at_or_above_target flag and
+//     their powerup cost clamps to zero (no "negative cost" from
+//     an inverted climb).
 type TeamBuilderParams struct {
 	Pool           []Combatant `json:"pool" jsonschema:"candidate combatants to draw the team from"`
 	League         string      `json:"league" jsonschema:"little|great|ultra|master"`
@@ -53,7 +68,7 @@ type TeamBuilderParams struct {
 	Banned         []string    `json:"banned,omitempty" jsonschema:"species ids to exclude from the pool"`
 	OptimizeFor    string      `json:"optimize_for,omitempty" jsonschema:"overall|0s|1s|2s|all_pareto (default overall)"`
 	DisallowLegacy bool        `json:"disallow_legacy,omitempty" jsonschema:"reject legacy moves; default false (legacy allowed)"`
-	TargetLevel    float64     `json:"target_level,omitempty" jsonschema:"target level for cost estimation; 0 = max level under league CP cap"`
+	TargetLevel    float64     `json:"target_level,omitempty" jsonschema:"cost target; 0 = deepest fit under cap; positive = 0.5-grid level"`
 	AutoEvolve     bool        `json:"auto_evolve,omitempty" jsonschema:"walk each pool member to its terminal form under the cap"`
 	Budget         *BudgetSpec `json:"budget,omitempty" jsonschema:"optional stardust budget; over-budget teams dropped"`
 }
