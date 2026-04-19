@@ -139,6 +139,8 @@ func computeMemberCost(
 		breakdown.Flags = append(breakdown.Flags, "shadow_variant_missing")
 	}
 
+	breakdown.Flags = append(breakdown.Flags, autoEvolveFlagsFor(spec)...)
+
 	return breakdown
 }
 

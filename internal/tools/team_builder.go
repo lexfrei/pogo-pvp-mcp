@@ -54,6 +54,7 @@ type TeamBuilderParams struct {
 	OptimizeFor    string      `json:"optimize_for,omitempty" jsonschema:"overall|0s|1s|2s|all_pareto (default overall)"`
 	DisallowLegacy bool        `json:"disallow_legacy,omitempty" jsonschema:"reject legacy moves; default false (legacy allowed)"`
 	TargetLevel    float64     `json:"target_level,omitempty" jsonschema:"target level for cost estimation; 0 = max level under league CP cap"`
+	AutoEvolve     bool        `json:"auto_evolve,omitempty" jsonschema:"walk each pool member to its terminal form under the cap"`
 }
 
 // MemberCostBreakdown is the per-member cost estimate attached to
@@ -292,6 +293,10 @@ func (tool *TeamBuilderTool) resolveTeamBuilderInputs(
 		return nil, err
 	}
 
+	if params.AutoEvolve {
+		autoEvolvePool(snapshot, params.Pool, cpCap)
+	}
+
 	err = tool.defaultPoolMovesets(ctx, params, cpCap)
 	if err != nil {
 		return nil, err
@@ -455,6 +460,15 @@ func filterPool(pool []Combatant, banned []string) []Combatant {
 
 	for i := range pool {
 		if bannedSet[pool[i].Species] {
+			continue
+		}
+
+		// When AutoEvolve promoted this pool entry the user's ban
+		// may have been against the pre-evolution id; match both
+		// the current Species and the original autoEvolvedFrom so
+		// the ban honours the caller's intent without forcing them
+		// to know the post-evolve species id in advance.
+		if pool[i].autoEvolvedFrom != "" && bannedSet[pool[i].autoEvolvedFrom] {
 			continue
 		}
 
