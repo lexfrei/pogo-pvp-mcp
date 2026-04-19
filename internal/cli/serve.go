@@ -302,6 +302,15 @@ func buildMCPServer(gamemasterMgr *gamemaster.Manager, ranks *rankings.Manager) 
 	teamBuilderTool := tools.NewTeamBuilderTool(gamemasterMgr, ranks)
 	mcp.AddTool(server, teamBuilderTool.Tool(), teamBuilderTool.Handler())
 
+	speciesInfoTool := tools.NewSpeciesInfoTool(gamemasterMgr, ranks)
+	mcp.AddTool(server, speciesInfoTool.Tool(), speciesInfoTool.Handler())
+
+	moveInfoTool := tools.NewMoveInfoTool(gamemasterMgr)
+	mcp.AddTool(server, moveInfoTool.Tool(), moveInfoTool.Handler())
+
+	typeMatchupTool := tools.NewTypeMatchupTool()
+	mcp.AddTool(server, typeMatchupTool.Tool(), typeMatchupTool.Handler())
+
 	return server
 }
 
