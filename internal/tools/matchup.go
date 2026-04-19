@@ -38,16 +38,30 @@ var ErrMoveCategoryMismatch = errors.New("move category mismatch")
 // flag so the caller knows shadow-specific legacy moves / rankings
 // were not applied.
 //
-// Known engine limitation: the battle simulator does NOT yet apply
-// the in-game shadow ATK×1.2 / DEF÷1.2 multipliers to damage math
-// (see CLAUDE.md "shadow atk/def multipliers" in the engine limits
-// list). Options.Shadow therefore affects legacy-move resolution,
-// cost estimation, and recommended-moveset lookup today — combat
-// damage numbers still use base stats. Clients relying on strict
-// combat accuracy for shadow forms should treat the result as
-// approximate until the engine closes this gap.
+// Shadow ATK / DEF multipliers: the battle simulator applies the
+// in-game ATK × 1.2 / DEF ÷ 1.2 adjustment (HP unchanged) when
+// Options.Shadow=true via pogopvp.Combatant.IsShadow. This lands
+// verbatim on damage-dealt and damage-received calculations, so
+// a shadow matchup produces different HP / turn counts from the
+// non-shadow mirror as Niantic intends. Dual-convention tolerance:
+// the old species-id "_shadow" suffix also flips IsShadow on
+// buildEngineCombatant (see that helper's IsShadow assignment),
+// so a caller passing {Species: "medicham_shadow"} without
+// Options.Shadow gets the same simulator behaviour as
+// {Species: "medicham", Options: {Shadow: true}}.
+//
+// ShadowVariantMissing + Options.Shadow=true: when pvpoke has not
+// yet published a dedicated "_shadow" gamemaster entry for the
+// species, resolveSpeciesLookup falls back to the base row and
+// sets shadow_variant_missing=true. The simulator STILL applies
+// the ATK×1.2 / DEF÷1.2 multipliers to the base stats — the
+// caller explicitly asked for shadow behaviour, so the user-intent
+// signal outranks pvpoke's data-completeness signal. The missing-
+// variant flag is the caller's cue that shadow-specific legacy
+// moves / rankings were not consulted; combat damage is still
+// simulated as shadow.
 type CombatantOptions struct {
-	Shadow   bool `json:"shadow,omitempty" jsonschema:"shadow form (×1.2 cost; simulator does NOT yet apply shadow atk/def multipliers)"`
+	Shadow   bool `json:"shadow,omitempty" jsonschema:"shadow form (×1.2 cost; simulator applies ATK×1.2/DEF÷1.2 in-game multipliers)"`
 	Lucky    bool `json:"lucky,omitempty" jsonschema:"lucky Pokémon (×0.5 powerup stardust only)"`
 	Purified bool `json:"purified,omitempty" jsonschema:"purified form (×0.9 stardust and candy costs)"`
 }
@@ -416,6 +430,7 @@ func buildEngineCombatant(
 		FastMove:     fast,
 		ChargedMoves: charged,
 		Shields:      shields,
+		IsShadow:     spec.Options.Shadow || strings.HasSuffix(spec.resolvedSpeciesID, shadowSuffix),
 	}, nil
 }
 

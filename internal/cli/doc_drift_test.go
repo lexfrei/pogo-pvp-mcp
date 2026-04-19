@@ -74,20 +74,37 @@ func TestReadmeDocumentsCombatantOptions(t *testing.T) {
 	}
 }
 
-// TestReadmeDocumentsEngineShadowLimitation pins the engine-limitation
-// disclosure: the battle simulator does not currently apply the
-// in-game shadow ATK×1.2 / DEF÷1.2 multipliers. Clients relying on
-// strict combat accuracy for shadow forms must know this — hiding it
-// was flagged in round-2 review as misleading.
-func TestReadmeDocumentsEngineShadowLimitation(t *testing.T) {
+// TestReadmeDocumentsShadowMultipliers pins the Phase R4.7 status:
+// the README must document that the battle simulator APPLIES the
+// in-game shadow ATK × 1.2 / DEF ÷ 1.2 multipliers. Earlier rounds
+// pinned the opposite ("does NOT yet apply"); this lock catches a
+// regression in either direction — if the multipliers are ever
+// silently removed, the README claim becomes misleading and this
+// test fires.
+func TestReadmeDocumentsShadowMultipliers(t *testing.T) {
 	t.Parallel()
 
 	readme := readRepoFile(t, "README.md")
 
-	// Checking for the distinctive phrase rather than the exact
-	// wording lets the prose evolve without breaking the lock.
+	if !strings.Contains(readme, "ATK×1.2") && !strings.Contains(readme, "ATK x 1.2") {
+		t.Errorf("README.md must document that the simulator applies shadow ATK × 1.2 multipliers")
+	}
+
 	if !strings.Contains(readme, "DEF÷1.2") && !strings.Contains(readme, "DEF/1.2") {
-		t.Errorf("README.md must call out that the simulator does NOT apply shadow ATK/DEF multipliers")
+		t.Errorf("README.md must document that the simulator applies shadow DEF ÷ 1.2 multipliers")
+	}
+
+	// Stale phrasing from pre-R4.7 wording — catches a regression
+	// that re-disclaims the multipliers as unimplemented.
+	stale := []string{
+		"does NOT yet apply in-game shadow",
+		"does not currently apply the in-game shadow",
+	}
+	for _, phrase := range stale {
+		if strings.Contains(readme, phrase) {
+			t.Errorf("README.md still carries stale pre-R4.7 disclaimer %q; simulator now applies the multipliers",
+				phrase)
+		}
 	}
 }
 

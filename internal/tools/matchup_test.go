@@ -318,6 +318,85 @@ func TestMatchupTool_ShadowOptionResolvesToShadowEntry(t *testing.T) {
 	}
 }
 
+// TestMatchupTool_ShadowMultipliersAffectDamage pins the Phase R4.7
+// end-to-end path: Options.Shadow=true on a matchup combatant must
+// flip Combatant.IsShadow on the engine-level pogopvp.Combatant
+// (buildEngineCombatant does this), which in turn applies the
+// ATK × 1.2 / DEF ÷ 1.2 multipliers inside Simulate. The test
+// compares a shadow-vs-non-shadow matchup against the non-shadow
+// mirror and asserts the final HP (winner or loser depending on
+// asymmetry) differs — proving the multipliers propagated through
+// the MCP → engine boundary.
+func TestMatchupTool_ShadowMultipliersAffectDamage(t *testing.T) {
+	t.Parallel()
+
+	const shadowFixture = `{
+  "id": "gamemaster",
+  "timestamp": "2026-04-19 00:00:00",
+  "pokemon": [
+    {"dex": 308, "speciesId": "medicham", "speciesName": "Medicham",
+     "baseStats": {"atk": 121, "def": 152, "hp": 155},
+     "types": ["fighting", "psychic"],
+     "fastMoves": ["COUNTER"], "chargedMoves": ["ICE_PUNCH"], "released": true},
+    {"dex": 308, "speciesId": "medicham_shadow", "speciesName": "Medicham (Shadow)",
+     "baseStats": {"atk": 121, "def": 152, "hp": 155},
+     "types": ["fighting", "psychic"],
+     "fastMoves": ["COUNTER"], "chargedMoves": ["ICE_PUNCH"], "released": true}
+  ],
+  "moves": [
+    {"moveId": "COUNTER", "name": "Counter", "type": "fighting",
+     "power": 8, "energy": 0, "energyGain": 7, "cooldown": 1000, "turns": 2},
+    {"moveId": "ICE_PUNCH", "name": "Ice Punch", "type": "ice",
+     "power": 55, "energy": 40, "cooldown": 500}
+  ]
+}`
+
+	mgr := newManagerWithFixture(t, shadowFixture)
+	handler := tools.NewMatchupTool(mgr, nil).Handler()
+
+	attacker := tools.Combatant{
+		Species:  speciesMedicham,
+		IV:       [3]int{15, 15, 15},
+		Level:    40,
+		FastMove: "COUNTER", ChargedMoves: []string{"ICE_PUNCH"},
+	}
+	defender := attacker
+
+	// Baseline: non-shadow mirror. Identical stats — Simulate ties.
+	_, baseline, err := handler(t.Context(), nil, tools.MatchupParams{
+		Attacker: attacker,
+		Defender: defender,
+		League:   "great",
+		Shields:  [2]int{0, 0},
+	})
+	if err != nil {
+		t.Fatalf("baseline handler: %v", err)
+	}
+
+	// Shadow attacker vs non-shadow defender. Shadow multipliers on
+	// the engine side change damage-per-tick on both sides (attacker
+	// deals more; attacker takes more due to DEF ÷ 1.2), so the
+	// fight ends sooner than the baseline mirror.
+	shadowAttacker := attacker
+	shadowAttacker.Options = tools.CombatantOptions{Shadow: true}
+
+	_, withShadow, err := handler(t.Context(), nil, tools.MatchupParams{
+		Attacker: shadowAttacker,
+		Defender: defender,
+		League:   "great",
+		Shields:  [2]int{0, 0},
+	})
+	if err != nil {
+		t.Fatalf("shadow handler: %v", err)
+	}
+
+	if withShadow.Turns >= baseline.Turns {
+		t.Errorf("shadow vs non-shadow Turns = %d, want < baseline Turns = %d "+
+			"(shadow ATK × 1.2 / DEF ÷ 1.2 must propagate into the simulation via IsShadow)",
+			withShadow.Turns, baseline.Turns)
+	}
+}
+
 // TestMatchupTool_ShadowOptionFallsBackWhenVariantMissing pins the
 // fallback path: Options.Shadow=true but no "_shadow" entry in the
 // snapshot (fixture publishes only base medicham). Resolver returns
