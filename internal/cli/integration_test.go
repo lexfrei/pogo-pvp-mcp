@@ -35,7 +35,7 @@ const integrationFixtureGamemaster = `{
   ]
 }`
 
-// buildWiredServer stands up a fully-wired MCP server with all eleven
+// buildWiredServer stands up a fully-wired MCP server with all twelve
 // currently implemented tools registered and pre-populated managers.
 func buildWiredServer(t *testing.T) *mcp.Server {
 	t.Helper()
