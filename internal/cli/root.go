@@ -66,6 +66,7 @@ func NewRootCommand(stdout, stderr io.Writer) *cobra.Command {
 
 	root.AddCommand(newServeCommand())
 	root.AddCommand(newFetchGMCommand())
+	root.AddCommand(newDiffGMCommand())
 
 	return root
 }
