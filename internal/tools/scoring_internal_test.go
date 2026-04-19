@@ -1,9 +1,11 @@
 package tools
 
 import (
+	"strings"
 	"testing"
 
 	pogopvp "github.com/lexfrei/pogo-pvp-engine"
+	"github.com/lexfrei/pogo-pvp-mcp/internal/rankings"
 )
 
 // TestAverageRatingAcrossScenarios_EmptyReturnsFailure pins the
@@ -209,5 +211,78 @@ func TestSimulateTeamMatrix_SinglePassPerCell(t *testing.T) {
 	if okCnt != expected {
 		t.Errorf("OK cells = %d, want %d — a valid fixture must produce every rating",
 			okCnt, expected)
+	}
+}
+
+// TestBuildOneMetaCombatant_IsShadowFromSuffix pins the Phase R4.7
+// meta-path wiring: buildOneMetaCombatant sets Combatant.IsShadow
+// true IFF entry.SpeciesID ends with the "_shadow" suffix. The
+// pvpoke-published meta list encodes shadow forms this way, so the
+// simulator must see IsShadow=true on those rows for the ATK × 1.2
+// / DEF ÷ 1.2 adjustments to apply consistently across pvp_team_
+// analysis, pvp_team_builder, pvp_counter_finder, pvp_threat_
+// coverage, and the pvp_rank non-legacy scorer.
+//
+// White-box: reaches into the unexported helper directly. The
+// end-to-end coverage in matchup_test.go exercises the attacker
+// path; this test covers the meta path the public handler tests
+// can't easily inspect per-entry.
+func TestBuildOneMetaCombatant_IsShadowFromSuffix(t *testing.T) {
+	t.Parallel()
+
+	const fixtureGM = `{
+  "id": "gamemaster",
+  "timestamp": "2026-04-19 00:00:00",
+  "pokemon": [
+    {"dex": 308, "speciesId": "medicham", "speciesName": "Medicham",
+     "baseStats": {"atk": 121, "def": 152, "hp": 155},
+     "types": ["fighting", "psychic"],
+     "fastMoves": ["COUNTER"], "chargedMoves": ["ICE_PUNCH"], "released": true},
+    {"dex": 308, "speciesId": "medicham_shadow", "speciesName": "Medicham (Shadow)",
+     "baseStats": {"atk": 121, "def": 152, "hp": 155},
+     "types": ["fighting", "psychic"],
+     "fastMoves": ["COUNTER"], "chargedMoves": ["ICE_PUNCH"], "released": true}
+  ],
+  "moves": [
+    {"moveId": "COUNTER", "name": "Counter", "type": "fighting",
+     "power": 8, "energy": 0, "energyGain": 7, "cooldown": 1000, "turns": 2},
+    {"moveId": "ICE_PUNCH", "name": "Ice Punch", "type": "ice",
+     "power": 55, "energy": 40, "cooldown": 500}
+  ]
+}`
+
+	snapshot, err := pogopvp.ParseGamemaster(strings.NewReader(fixtureGM))
+	if err != nil {
+		t.Fatalf("ParseGamemaster: %v", err)
+	}
+
+	cases := []struct {
+		name       string
+		speciesID  string
+		wantShadow bool
+	}{
+		{"non_shadow", "medicham", false},
+		{"shadow_suffix", "medicham_shadow", true},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			entry := rankings.RankingEntry{
+				SpeciesID: tc.speciesID,
+				Moveset:   []string{"COUNTER", "ICE_PUNCH"},
+			}
+
+			combatant, buildErr := buildOneMetaCombatant(snapshot, &entry, 1500, 1)
+			if buildErr != nil {
+				t.Fatalf("buildOneMetaCombatant: %v", buildErr)
+			}
+
+			if combatant.IsShadow != tc.wantShadow {
+				t.Errorf("IsShadow = %v, want %v for species_id %q",
+					combatant.IsShadow, tc.wantShadow, tc.speciesID)
+			}
+		})
 	}
 }

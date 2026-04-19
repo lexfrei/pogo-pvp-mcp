@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"math"
 	"sort"
+	"strings"
 
 	pogopvp "github.com/lexfrei/pogo-pvp-engine"
 	"github.com/lexfrei/pogo-pvp-mcp/internal/gamemaster"
@@ -469,6 +470,7 @@ type rankInputs struct {
 	speciesID            string
 	resolvedID           string
 	shadowVariantMissing bool
+	isShadow             bool
 }
 
 // resolveRankInputs performs all upfront validation and IV / league
@@ -503,6 +505,7 @@ func resolveRankInputs(manager *gamemaster.Manager, params *RankParams) (rankInp
 		speciesID:            params.Species,
 		resolvedID:           resolvedID,
 		shadowVariantMissing: shadowMissing,
+		isShadow:             params.Options.Shadow || strings.HasSuffix(resolvedID, shadowSuffix),
 	}, nil
 }
 
@@ -758,6 +761,7 @@ func averageMovesetRating(
 		FastMove:     fast,
 		ChargedMoves: charged,
 		Shields:      nonLegacyScoreScenarios[0],
+		IsShadow:     inputs.isShadow,
 	}
 
 	var (
