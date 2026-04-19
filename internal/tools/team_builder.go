@@ -54,6 +54,7 @@ type TeamBuilderParams struct {
 	OptimizeFor    string      `json:"optimize_for,omitempty" jsonschema:"overall|0s|1s|2s|all_pareto (default overall)"`
 	DisallowLegacy bool        `json:"disallow_legacy,omitempty" jsonschema:"reject legacy moves; default false (legacy allowed)"`
 	TargetLevel    float64     `json:"target_level,omitempty" jsonschema:"target level for cost estimation; 0 = max level under league CP cap"`
+	AutoEvolve     bool        `json:"auto_evolve,omitempty" jsonschema:"walk each pool member to its terminal form under the cap"`
 }
 
 // MemberCostBreakdown is the per-member cost estimate attached to
@@ -290,6 +291,10 @@ func (tool *TeamBuilderTool) resolveTeamBuilderInputs(
 	err = rejectTeamLegacy(snapshot, params.Pool, params.DisallowLegacy)
 	if err != nil {
 		return nil, err
+	}
+
+	if params.AutoEvolve {
+		autoEvolvePool(snapshot, params.Pool, cpCap)
 	}
 
 	err = tool.defaultPoolMovesets(ctx, params, cpCap)

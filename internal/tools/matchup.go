@@ -76,6 +76,8 @@ type Combatant struct {
 
 	resolvedSpeciesID    string
 	shadowVariantMissing bool
+	autoEvolvedFrom      string
+	autoEvolveSkip       string
 }
 
 // ResolvedCombatant echoes back the species + moveset actually used

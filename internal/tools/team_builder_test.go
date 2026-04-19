@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"slices"
 	"testing"
 
 	"github.com/lexfrei/pogo-pvp-mcp/internal/config"
@@ -1045,5 +1046,226 @@ func TestTeamBuilderTool_InvalidTargetLevel(t *testing.T) {
 					tc.target, err)
 			}
 		})
+	}
+}
+
+// autoEvolveLinearFixture publishes a three-stage linear chain
+// (squirtle → wartortle → blastoise), plus the team-analysis a/b/c
+// stand-ins so the test has a valid 3-member pool. Used to pin the
+// auto_evolve=true happy path: squirtle gets promoted to blastoise
+// (terminal, fits Great League at L1 CP 10).
+const autoEvolveLinearFixture = `{
+  "id": "gamemaster",
+  "timestamp": "2026-04-19 00:00:00",
+  "pokemon": [
+    {"dex": 7, "speciesId": "squirtle", "speciesName": "Squirtle",
+     "baseStats": {"atk": 94, "def": 121, "hp": 127},
+     "types": ["water"],
+     "fastMoves": ["FAST1"], "chargedMoves": ["CH1"],
+     "family": {"id": "FAMILY_SQUIRTLE", "evolutions": ["wartortle"]},
+     "released": true},
+    {"dex": 8, "speciesId": "wartortle", "speciesName": "Wartortle",
+     "baseStats": {"atk": 126, "def": 155, "hp": 153},
+     "types": ["water"],
+     "fastMoves": ["FAST1"], "chargedMoves": ["CH1"],
+     "family": {"id": "FAMILY_SQUIRTLE", "parent": "squirtle", "evolutions": ["blastoise"]},
+     "released": true},
+    {"dex": 9, "speciesId": "blastoise", "speciesName": "Blastoise",
+     "baseStats": {"atk": 171, "def": 207, "hp": 188},
+     "types": ["water"],
+     "fastMoves": ["FAST1"], "chargedMoves": ["CH1"],
+     "family": {"id": "FAMILY_SQUIRTLE", "parent": "wartortle"},
+     "released": true},
+    {"dex": 2, "speciesId": "b", "speciesName": "B",
+     "baseStats": {"atk": 152, "def": 143, "hp": 216}, "types": ["water"],
+     "fastMoves": ["FAST1"], "chargedMoves": ["CH1"], "released": true},
+    {"dex": 3, "speciesId": "c", "speciesName": "C",
+     "baseStats": {"atk": 234, "def": 159, "hp": 207}, "types": ["fighting"],
+     "fastMoves": ["FAST1"], "chargedMoves": ["CH1"], "released": true}
+  ],
+  "moves": [
+    {"moveId": "FAST1", "name": "Fast 1", "type": "normal",
+     "power": 3, "energy": 0, "energyGain": 5, "cooldown": 1000, "turns": 2},
+    {"moveId": "CH1", "name": "Charged 1", "type": "normal",
+     "power": 50, "energy": 35, "cooldown": 500}
+  ]
+}`
+
+// TestTeamBuilderTool_AutoEvolveLinearChain pins the happy path:
+// AutoEvolve=true walks a linear chain (squirtle → wartortle →
+// blastoise) to the terminal form. The returned team's squirtle
+// member becomes blastoise in the resolved Species field, and the
+// cost_breakdown flag surfaces the original species via
+// auto_evolved_from:squirtle.
+func TestTeamBuilderTool_AutoEvolveLinearChain(t *testing.T) {
+	t.Parallel()
+
+	const rankingsPayload = `[
+  {"speciesId": "blastoise", "speciesName": "Blastoise", "rating": 700,
+   "moveset": ["FAST1", "CH1"],
+   "stats": {"product": 2100, "atk": 106, "def": 139, "hp": 141}},
+  {"speciesId": "b", "speciesName": "B", "rating": 600,
+   "moveset": ["FAST1", "CH1"],
+   "stats": {"product": 2000, "atk": 100, "def": 120, "hp": 150}},
+  {"speciesId": "c", "speciesName": "C", "rating": 650,
+   "moveset": ["FAST1", "CH1"],
+   "stats": {"product": 2050, "atk": 105, "def": 125, "hp": 145}}
+]`
+
+	tool := newTeamBuilderToolFromFixture(t, autoEvolveLinearFixture, rankingsPayload)
+	handler := tool.Handler()
+
+	pool := []tools.Combatant{
+		{Species: "squirtle", IV: [3]int{15, 15, 15}, Level: 1, FastMove: "FAST1", ChargedMoves: []string{"CH1"}},
+		baseCombatant("b"),
+		baseCombatant("c"),
+	}
+
+	_, result, err := handler(t.Context(), nil, tools.TeamBuilderParams{
+		Pool:       pool,
+		League:     leagueGreat,
+		AutoEvolve: true,
+	})
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+
+	if len(result.Teams) == 0 {
+		t.Fatal("no teams returned")
+	}
+
+	var evolvedMember *tools.ResolvedCombatant
+
+	var evolvedBreakdown *tools.MemberCostBreakdown
+
+	for i := range result.Teams[0].Members {
+		if result.Teams[0].Members[i].Species == "blastoise" {
+			evolvedMember = &result.Teams[0].Members[i]
+			evolvedBreakdown = &result.Teams[0].CostBreakdowns[i]
+
+			break
+		}
+	}
+
+	if evolvedMember == nil {
+		t.Fatalf("no blastoise in team; members=%+v", result.Teams[0].Members)
+	}
+
+	if evolvedBreakdown == nil {
+		t.Fatal("cost breakdown missing for evolved member")
+	}
+
+	if !slices.Contains(evolvedBreakdown.Flags, "auto_evolved_from:squirtle") {
+		t.Errorf("auto_evolved_from:squirtle flag missing in Flags=%v", evolvedBreakdown.Flags)
+	}
+}
+
+// autoEvolveBranchingFixture publishes eevee with three evolutions;
+// autoEvolve must refuse to pick one and flag the skip.
+const autoEvolveBranchingFixture = `{
+  "id": "gamemaster",
+  "timestamp": "2026-04-19 00:00:00",
+  "pokemon": [
+    {"dex": 133, "speciesId": "eevee", "speciesName": "Eevee",
+     "baseStats": {"atk": 104, "def": 114, "hp": 146},
+     "types": ["normal"],
+     "fastMoves": ["FAST1"], "chargedMoves": ["CH1"],
+     "family": {"id": "FAMILY_EEVEE", "evolutions": ["vaporeon", "jolteon", "flareon"]},
+     "released": true},
+    {"dex": 134, "speciesId": "vaporeon", "speciesName": "Vaporeon",
+     "baseStats": {"atk": 186, "def": 168, "hp": 277},
+     "types": ["water"],
+     "fastMoves": ["FAST1"], "chargedMoves": ["CH1"],
+     "family": {"id": "FAMILY_EEVEE", "parent": "eevee"},
+     "released": true},
+    {"dex": 135, "speciesId": "jolteon", "speciesName": "Jolteon",
+     "baseStats": {"atk": 232, "def": 182, "hp": 163},
+     "types": ["electric"],
+     "fastMoves": ["FAST1"], "chargedMoves": ["CH1"],
+     "family": {"id": "FAMILY_EEVEE", "parent": "eevee"},
+     "released": true},
+    {"dex": 136, "speciesId": "flareon", "speciesName": "Flareon",
+     "baseStats": {"atk": 246, "def": 179, "hp": 163},
+     "types": ["fire"],
+     "fastMoves": ["FAST1"], "chargedMoves": ["CH1"],
+     "family": {"id": "FAMILY_EEVEE", "parent": "eevee"},
+     "released": true},
+    {"dex": 2, "speciesId": "b", "speciesName": "B",
+     "baseStats": {"atk": 152, "def": 143, "hp": 216}, "types": ["water"],
+     "fastMoves": ["FAST1"], "chargedMoves": ["CH1"], "released": true},
+    {"dex": 3, "speciesId": "c", "speciesName": "C",
+     "baseStats": {"atk": 234, "def": 159, "hp": 207}, "types": ["fighting"],
+     "fastMoves": ["FAST1"], "chargedMoves": ["CH1"], "released": true}
+  ],
+  "moves": [
+    {"moveId": "FAST1", "name": "Fast 1", "type": "normal",
+     "power": 3, "energy": 0, "energyGain": 5, "cooldown": 1000, "turns": 2},
+    {"moveId": "CH1", "name": "Charged 1", "type": "normal",
+     "power": 50, "energy": 35, "cooldown": 500}
+  ]
+}`
+
+// TestTeamBuilderTool_AutoEvolveBranchingSkipped pins the branching
+// path: len(Evolutions) > 1 with no caller guidance → leave the
+// base form intact and flag the skip reason. Eevee stays eevee;
+// the cost breakdown carries auto_evolve_skipped_branching:eevee.
+func TestTeamBuilderTool_AutoEvolveBranchingSkipped(t *testing.T) {
+	t.Parallel()
+
+	const rankingsPayload = `[
+  {"speciesId": "eevee", "speciesName": "Eevee", "rating": 500,
+   "moveset": ["FAST1", "CH1"],
+   "stats": {"product": 2100, "atk": 100, "def": 100, "hp": 150}},
+  {"speciesId": "b", "speciesName": "B", "rating": 600,
+   "moveset": ["FAST1", "CH1"],
+   "stats": {"product": 2000, "atk": 100, "def": 120, "hp": 150}},
+  {"speciesId": "c", "speciesName": "C", "rating": 650,
+   "moveset": ["FAST1", "CH1"],
+   "stats": {"product": 2050, "atk": 105, "def": 125, "hp": 145}}
+]`
+
+	tool := newTeamBuilderToolFromFixture(t, autoEvolveBranchingFixture, rankingsPayload)
+	handler := tool.Handler()
+
+	pool := []tools.Combatant{
+		{Species: "eevee", IV: [3]int{15, 15, 15}, Level: 20, FastMove: "FAST1", ChargedMoves: []string{"CH1"}},
+		baseCombatant("b"),
+		baseCombatant("c"),
+	}
+
+	_, result, err := handler(t.Context(), nil, tools.TeamBuilderParams{
+		Pool:       pool,
+		League:     leagueGreat,
+		AutoEvolve: true,
+	})
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+
+	if len(result.Teams) == 0 {
+		t.Fatal("no teams returned")
+	}
+
+	var eeveeBreakdown *tools.MemberCostBreakdown
+
+	var eeveePresent bool
+
+	for i := range result.Teams[0].Members {
+		if result.Teams[0].Members[i].Species == "eevee" {
+			eeveePresent = true
+			eeveeBreakdown = &result.Teams[0].CostBreakdowns[i]
+
+			break
+		}
+	}
+
+	if !eeveePresent {
+		t.Fatalf("eevee not in team (branching chain should leave it unchanged); members=%+v",
+			result.Teams[0].Members)
+	}
+
+	if !slices.Contains(eeveeBreakdown.Flags, "auto_evolve_skipped_branching:eevee") {
+		t.Errorf("auto_evolve_skipped_branching:eevee flag missing in Flags=%v",
+			eeveeBreakdown.Flags)
 	}
 }
