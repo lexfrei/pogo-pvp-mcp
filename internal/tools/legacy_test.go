@@ -675,3 +675,154 @@ func TestTeamBuilder_DisallowLegacyAllowsNonLegacy(t *testing.T) {
 		t.Errorf("handler: %v (non-legacy movesets should pass the gate)", err)
 	}
 }
+
+// shadowLegacyFixtureGamemaster publishes base "medicham" with
+// ICE_PUNCH flagged legacy AND shadow "medicham_shadow" with PSYCHIC
+// flagged legacy — but NOT vice versa. The disjoint legacy lists
+// are the load-bearing signal: a shadow-aware legacy check must key
+// on the resolved shadow species id, so PSYCHIC must be rejected
+// under Options.Shadow=true while ICE_PUNCH must be accepted
+// (legacy on base, regular on shadow). Before Phase X-I's switch to
+// resolveSpeciesLookup in assertNoLegacyInCombatant, the check used
+// the base species id directly and this fixture would flip both
+// assertions.
+const shadowLegacyFixtureGamemaster = `{
+  "id": "gamemaster",
+  "timestamp": "2026-04-19 00:00:00",
+  "pokemon": [
+    {
+      "dex": 308,
+      "speciesId": "medicham",
+      "speciesName": "Medicham",
+      "baseStats": {"atk": 121, "def": 152, "hp": 155},
+      "types": ["fighting", "psychic"],
+      "fastMoves": ["COUNTER"],
+      "chargedMoves": ["ICE_PUNCH", "PSYCHIC"],
+      "legacyMoves": ["ICE_PUNCH"],
+      "released": true
+    },
+    {
+      "dex": 308,
+      "speciesId": "medicham_shadow",
+      "speciesName": "Medicham (Shadow)",
+      "baseStats": {"atk": 121, "def": 152, "hp": 155},
+      "types": ["fighting", "psychic"],
+      "fastMoves": ["COUNTER"],
+      "chargedMoves": ["ICE_PUNCH", "PSYCHIC"],
+      "legacyMoves": ["PSYCHIC"],
+      "released": true
+    },
+    {
+      "dex": 184,
+      "speciesId": "azumarill",
+      "speciesName": "Azumarill",
+      "baseStats": {"atk": 112, "def": 152, "hp": 225},
+      "types": ["water", "fairy"],
+      "fastMoves": ["BUBBLE"],
+      "chargedMoves": ["ICE_BEAM"],
+      "released": true
+    },
+    {
+      "dex": 68,
+      "speciesId": "machamp",
+      "speciesName": "Machamp",
+      "baseStats": {"atk": 234, "def": 159, "hp": 207},
+      "types": ["fighting"],
+      "fastMoves": ["COUNTER"],
+      "chargedMoves": ["CROSS_CHOP"],
+      "released": true
+    }
+  ],
+  "moves": [
+    {"moveId": "COUNTER", "name": "Counter", "type": "fighting",
+     "power": 8, "energy": 0, "energyGain": 7, "cooldown": 1000, "turns": 2},
+    {"moveId": "ICE_PUNCH", "name": "Ice Punch", "type": "ice",
+     "power": 55, "energy": 40, "cooldown": 500},
+    {"moveId": "PSYCHIC", "name": "Psychic", "type": "psychic",
+     "power": 90, "energy": 55, "cooldown": 500},
+    {"moveId": "BUBBLE", "name": "Bubble", "type": "water",
+     "power": 12, "energy": 0, "energyGain": 14, "cooldown": 1500, "turns": 3},
+    {"moveId": "ICE_BEAM", "name": "Ice Beam", "type": "ice",
+     "power": 90, "energy": 55, "cooldown": 500},
+    {"moveId": "CROSS_CHOP", "name": "Cross Chop", "type": "fighting",
+     "power": 50, "energy": 35, "cooldown": 500}
+  ]
+}`
+
+// TestTeamBuilder_DisallowLegacyShadowRejectsShadowSpecificLegacy
+// pins Phase X-I round-2 review blocker: when Options.Shadow=true
+// and DisallowLegacy=true, the legacy check must key on the SHADOW
+// species' LegacyMoves list. The fixture flags PSYCHIC legacy on
+// medicham_shadow (but not on base medicham); sending medicham +
+// Options.Shadow=true + PSYCHIC must trip ErrLegacyConflict because
+// the check is against the shadow row.
+func TestTeamBuilder_DisallowLegacyShadowRejectsShadowSpecificLegacy(t *testing.T) {
+	t.Parallel()
+
+	tool := newTeamBuilderToolFromFixture(t, shadowLegacyFixtureGamemaster, `[]`)
+	handler := tool.Handler()
+
+	pool := []tools.Combatant{
+		{
+			Species: speciesMedicham, IV: [3]int{15, 15, 15}, Level: 40,
+			FastMove: "COUNTER", ChargedMoves: []string{"PSYCHIC"},
+			Options: tools.CombatantOptions{Shadow: true},
+		},
+		{
+			Species: "azumarill", IV: [3]int{15, 15, 15}, Level: 40,
+			FastMove: "BUBBLE", ChargedMoves: []string{"ICE_BEAM"},
+		},
+		{
+			Species: "machamp", IV: [3]int{15, 15, 15}, Level: 30,
+			FastMove: "COUNTER", ChargedMoves: []string{"CROSS_CHOP"},
+		},
+	}
+
+	_, _, err := handler(t.Context(), nil, tools.TeamBuilderParams{
+		Pool:           pool,
+		League:         leagueGreat,
+		DisallowLegacy: true,
+	})
+	if !errors.Is(err, tools.ErrLegacyConflict) {
+		t.Errorf("error = %v, want wrapping ErrLegacyConflict (PSYCHIC is legacy on medicham_shadow)", err)
+	}
+}
+
+// TestTeamBuilder_DisallowLegacyShadowAcceptsBaseOnlyLegacy pins
+// the converse half of the same invariant: a move that is legacy
+// on the BASE species but regular on the shadow species must NOT
+// be rejected under Options.Shadow=true. If the check still used
+// the base species id (pre-Phase-X-I behaviour), ICE_PUNCH would
+// trip the guard even though the shadow row treats it as a regular
+// move.
+func TestTeamBuilder_DisallowLegacyShadowAcceptsBaseOnlyLegacy(t *testing.T) {
+	t.Parallel()
+
+	tool := newTeamBuilderToolFromFixture(t, shadowLegacyFixtureGamemaster, `[]`)
+	handler := tool.Handler()
+
+	pool := []tools.Combatant{
+		{
+			Species: speciesMedicham, IV: [3]int{15, 15, 15}, Level: 40,
+			FastMove: "COUNTER", ChargedMoves: []string{"ICE_PUNCH"},
+			Options: tools.CombatantOptions{Shadow: true},
+		},
+		{
+			Species: "azumarill", IV: [3]int{15, 15, 15}, Level: 40,
+			FastMove: "BUBBLE", ChargedMoves: []string{"ICE_BEAM"},
+		},
+		{
+			Species: "machamp", IV: [3]int{15, 15, 15}, Level: 30,
+			FastMove: "COUNTER", ChargedMoves: []string{"CROSS_CHOP"},
+		},
+	}
+
+	_, _, err := handler(t.Context(), nil, tools.TeamBuilderParams{
+		Pool:           pool,
+		League:         leagueGreat,
+		DisallowLegacy: true,
+	})
+	if err != nil {
+		t.Errorf("handler: %v (ICE_PUNCH is legacy on base but regular on shadow — must pass)", err)
+	}
+}

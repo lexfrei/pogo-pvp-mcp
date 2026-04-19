@@ -446,3 +446,75 @@ func TestMatchupTool_ShadowAutoResolvesShadowRankings(t *testing.T) {
 			result.Attacker.ResolvedSpeciesID, speciesMedichamShadow)
 	}
 }
+
+// TestMatchupTool_ShadowOptionToleratesShadowSuffixedSpecies pins
+// the dual-convention foot-gun fix: a client mixing the old suffix
+// convention (Species: "medicham_shadow") with the new flag
+// (Options.Shadow=true) must resolve to "medicham_shadow" without
+// reporting shadow_variant_missing=true. Before the fix, the
+// lookup chased "medicham_shadow_shadow", failed, fell back to
+// "medicham_shadow", and misleadingly flagged the variant as
+// missing even though it IS published.
+func TestMatchupTool_ShadowOptionToleratesShadowSuffixedSpecies(t *testing.T) {
+	t.Parallel()
+
+	const shadowFixture = `{
+  "id": "gamemaster",
+  "timestamp": "2026-04-19 00:00:00",
+  "pokemon": [
+    {"dex": 308, "speciesId": "medicham", "speciesName": "Medicham",
+     "baseStats": {"atk": 121, "def": 152, "hp": 155},
+     "types": ["fighting", "psychic"],
+     "fastMoves": ["COUNTER"], "chargedMoves": ["ICE_PUNCH"], "released": true},
+    {"dex": 308, "speciesId": "medicham_shadow", "speciesName": "Medicham (Shadow)",
+     "baseStats": {"atk": 121, "def": 152, "hp": 155},
+     "types": ["fighting", "psychic"],
+     "fastMoves": ["COUNTER"], "chargedMoves": ["ICE_PUNCH"], "released": true},
+    {"dex": 68, "speciesId": "machamp", "speciesName": "Machamp",
+     "baseStats": {"atk": 234, "def": 159, "hp": 207},
+     "types": ["fighting"],
+     "fastMoves": ["COUNTER"], "chargedMoves": ["CROSS_CHOP"], "released": true}
+  ],
+  "moves": [
+    {"moveId": "COUNTER", "name": "Counter", "type": "fighting",
+     "power": 8, "energy": 0, "energyGain": 7, "cooldown": 1000, "turns": 2},
+    {"moveId": "ICE_PUNCH", "name": "Ice Punch", "type": "ice",
+     "power": 55, "energy": 40, "cooldown": 500},
+    {"moveId": "CROSS_CHOP", "name": "Cross Chop", "type": "fighting",
+     "power": 50, "energy": 35, "cooldown": 500}
+  ]
+}`
+
+	mgr := newManagerWithFixture(t, shadowFixture)
+	handler := tools.NewMatchupTool(mgr, nil).Handler()
+
+	_, result, err := handler(t.Context(), nil, tools.MatchupParams{
+		Attacker: tools.Combatant{
+			Species:  speciesMedichamShadow,
+			IV:       [3]int{15, 15, 15},
+			Level:    40,
+			FastMove: "COUNTER", ChargedMoves: []string{"ICE_PUNCH"},
+			Options: tools.CombatantOptions{Shadow: true},
+		},
+		Defender: tools.Combatant{
+			Species:  "machamp",
+			IV:       [3]int{15, 15, 15},
+			Level:    40,
+			FastMove: "COUNTER", ChargedMoves: []string{"CROSS_CHOP"},
+		},
+		League:  "great",
+		Shields: [2]int{1, 1},
+	})
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+
+	if result.Attacker.ResolvedSpeciesID != speciesMedichamShadow {
+		t.Errorf("Attacker.ResolvedSpeciesID = %q, want %q (suffix should be stripped then re-added)",
+			result.Attacker.ResolvedSpeciesID, speciesMedichamShadow)
+	}
+
+	if result.Attacker.ShadowVariantMissing {
+		t.Errorf("ShadowVariantMissing = true; pvpoke DOES publish medicham_shadow — must not signal missing")
+	}
+}

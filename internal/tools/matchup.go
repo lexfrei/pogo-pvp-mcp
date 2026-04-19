@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	pogopvp "github.com/lexfrei/pogo-pvp-engine"
 	"github.com/lexfrei/pogo-pvp-mcp/internal/gamemaster"
@@ -149,6 +150,15 @@ const shadowSuffix = "_shadow"
 //     fall back to baseID and report shadowMissing=true so callers
 //     can surface the approximation to the end user.
 //
+// Dual-convention tolerance: if Options.Shadow=true AND baseID
+// already ends in "_shadow" the suffix is stripped before the
+// lookup. Clients mixing the old suffix convention with the new
+// flag would otherwise get a misleading shadow_variant_missing=true
+// against their already-shadow species id (the lookup would chase
+// "medicham_shadow_shadow"). Stripping is the forgiving option —
+// the strict alternative would be a dedicated error, but the wire
+// semantics are unambiguous so we just normalise.
+//
 // resolvedID is the pvpoke key actually used. ok=false means the
 // base species id doesn't exist at all, which is an input error the
 // caller should wrap into ErrUnknownSpecies.
@@ -158,6 +168,8 @@ func resolveSpeciesLookup(
 	snapshot *pogopvp.Gamemaster, baseID string, opts CombatantOptions,
 ) (pogopvp.Species, string, bool, bool) {
 	if opts.Shadow {
+		baseID = strings.TrimSuffix(baseID, shadowSuffix)
+
 		shadowID := baseID + shadowSuffix
 		if species, found := snapshot.Pokemon[shadowID]; found {
 			return species, shadowID, false, true
