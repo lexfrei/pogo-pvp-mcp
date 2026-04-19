@@ -66,27 +66,41 @@ type EvolutionTargetParams struct {
 	Options             CombatantOptions `json:"options,omitzero" jsonschema:"shadow / lucky / purified flags"`
 }
 
-// EvolutionTargetResult is the JSON output. MaxCPToCatch is the highest
-// CP of the chain-root species at which SOME IV spread evolved up to
-// target still clears the threshold — a ceiling, not a guarantee for
-// every IV. PercentOfBestAtMax echoes the actual fraction achieved by
-// the winning IV / level (always ≥ threshold by construction).
+// EvolutionTargetResult is the JSON output.
+//
+// MaxRootCPAtEvolvedLevel is the CP the chain-root species WOULD
+// DISPLAY if it were at the winning (IV, level) pair — i.e. AFTER
+// the caller has powered it up to EvolvedLevel. It is NOT clamped
+// to wild-catch levels; for leagues whose optimal level exceeds the
+// wild ceiling (Ultra L40+, Master L50 with XL) this value will
+// exceed anything a freshly-caught root species can display. Use
+// TypicalWildCPRangeUnboosted to bound the realistic wild-catch CP
+// space and compare against the current catch's actual CP on the
+// caller side.
+//
+// EvolvedLevel is the 0.5-grid level of the winning spread. Level
+// preserves across evolution in Pokémon GO so the target inherits
+// this exact level after evolving.
+//
+// PercentOfBestAtMax echoes the actual stat-product fraction
+// achieved by the winning (IV, level) spread (always ≥ threshold
+// by construction).
 type EvolutionTargetResult struct {
-	TargetSpecies        string   `json:"target_species"`
-	ResolvedSpeciesID    string   `json:"resolved_species_id,omitempty"`
-	FromSpecies          string   `json:"from_species"`
-	ChainFromTo          []string `json:"chain_from_to"`
-	League               string   `json:"league"`
-	Cup                  string   `json:"cup,omitempty"`
-	CPCap                int      `json:"cp_cap"`
-	TargetPercentOfBest  float64  `json:"target_percent_of_best"`
-	MaxCPToCatch         int      `json:"max_cp_to_catch"`
-	MaxLevel             float64  `json:"max_level"`
-	TypicalWildCPRange   [2]int   `json:"typical_wild_cp_range"`
-	PercentOfBestAtMax   float64  `json:"percent_of_best_at_max"`
-	EvolutionHint        string   `json:"evolution_hint"`
-	BestStatProduct      float64  `json:"best_stat_product"`
-	ShadowVariantMissing bool     `json:"shadow_variant_missing,omitempty"`
+	TargetSpecies               string   `json:"target_species"`
+	ResolvedSpeciesID           string   `json:"resolved_species_id,omitempty"`
+	FromSpecies                 string   `json:"from_species"`
+	ChainFromTo                 []string `json:"chain_from_to"`
+	League                      string   `json:"league"`
+	Cup                         string   `json:"cup,omitempty"`
+	CPCap                       int      `json:"cp_cap"`
+	TargetPercentOfBest         float64  `json:"target_percent_of_best"`
+	MaxRootCPAtEvolvedLevel     int      `json:"max_root_cp_at_evolved_level"`
+	EvolvedLevel                float64  `json:"evolved_level"`
+	TypicalWildCPRangeUnboosted [2]int   `json:"typical_wild_cp_range_unboosted"`
+	PercentOfBestAtMax          float64  `json:"percent_of_best_at_max"`
+	EvolutionHint               string   `json:"evolution_hint"`
+	BestStatProduct             float64  `json:"best_stat_product"`
+	ShadowVariantMissing        bool     `json:"shadow_variant_missing,omitempty"`
 }
 
 // EvolutionTargetTool wraps the gamemaster manager.
@@ -150,7 +164,7 @@ func (tool *EvolutionTargetTool) handle(
 		return nil, EvolutionTargetResult{}, err
 	}
 
-	if ceiling.MaxCPToCatch == 0 {
+	if ceiling.MaxRootCPAtEvolvedLevel == 0 {
 		return nil, EvolutionTargetResult{}, fmt.Errorf(
 			"%w: target %q under cpCap=%d at threshold %.1f%%",
 			ErrThresholdUnreachable, inputs.resolvedTargetID, inputs.cpCap, threshold)
@@ -167,21 +181,21 @@ func buildEvolutionTargetResult(
 	best pogopvp.OptimalSpread, threshold float64, ceiling searchCandidate,
 ) EvolutionTargetResult {
 	return EvolutionTargetResult{
-		TargetSpecies:        params.TargetSpecies,
-		ResolvedSpeciesID:    inputs.resolvedTargetID,
-		FromSpecies:          inputs.root.ID,
-		ChainFromTo:          inputs.chain,
-		League:               params.League,
-		Cup:                  params.Cup,
-		CPCap:                inputs.cpCap,
-		TargetPercentOfBest:  threshold,
-		MaxCPToCatch:         ceiling.MaxCPToCatch,
-		MaxLevel:             ceiling.MaxLevel,
-		TypicalWildCPRange:   typicalWildCPRangeFor(inputs.root),
-		PercentOfBestAtMax:   ceiling.PercentOfBestAtMax,
-		EvolutionHint:        evolutionHintFor(inputs.chain),
-		BestStatProduct:      best.StatProduct,
-		ShadowVariantMissing: inputs.shadowMissing,
+		TargetSpecies:               params.TargetSpecies,
+		ResolvedSpeciesID:           inputs.resolvedTargetID,
+		FromSpecies:                 inputs.root.ID,
+		ChainFromTo:                 inputs.chain,
+		League:                      params.League,
+		Cup:                         params.Cup,
+		CPCap:                       inputs.cpCap,
+		TargetPercentOfBest:         threshold,
+		MaxRootCPAtEvolvedLevel:     ceiling.MaxRootCPAtEvolvedLevel,
+		EvolvedLevel:                ceiling.EvolvedLevel,
+		TypicalWildCPRangeUnboosted: typicalWildCPRangeFor(inputs.root),
+		PercentOfBestAtMax:          ceiling.PercentOfBestAtMax,
+		EvolutionHint:               evolutionHintFor(inputs.chain),
+		BestStatProduct:             best.StatProduct,
+		ShadowVariantMissing:        inputs.shadowMissing,
 	}
 }
 
@@ -281,9 +295,9 @@ func walkPreEvolutionChain(
 
 // searchCandidate is the running best-so-far during the IV sweep.
 type searchCandidate struct {
-	MaxCPToCatch       int
-	MaxLevel           float64
-	PercentOfBestAtMax float64
+	MaxRootCPAtEvolvedLevel int
+	EvolvedLevel            float64
+	PercentOfBestAtMax      float64
 }
 
 // searchEvolutionTargetCeiling iterates every IV spread in [0, MaxIV]^3.
@@ -356,14 +370,14 @@ func evaluateIVCandidate(
 	}
 
 	rootCP := pogopvp.ComputeCP(inputs.root.BaseStats, ivs, cpm)
-	if rootCP <= candidate.MaxCPToCatch {
+	if rootCP <= candidate.MaxRootCPAtEvolvedLevel {
 		return
 	}
 
 	*candidate = searchCandidate{
-		MaxCPToCatch:       rootCP,
-		MaxLevel:           level,
-		PercentOfBestAtMax: pct,
+		MaxRootCPAtEvolvedLevel: rootCP,
+		EvolvedLevel:            level,
+		PercentOfBestAtMax:      pct,
 	}
 }
 
