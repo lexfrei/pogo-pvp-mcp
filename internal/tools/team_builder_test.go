@@ -1269,3 +1269,213 @@ func TestTeamBuilderTool_AutoEvolveBranchingSkipped(t *testing.T) {
 			eeveeBreakdown.Flags)
 	}
 }
+
+// autoEvolveFirstHopOverCapFixture publishes a base species whose
+// immediate evolution has inflated stats that bust Great League at
+// level 1. The base form itself fits (L1 CP comfortably < 1500),
+// so validatePoolForLeague allows it into the pool; autoEvolve
+// then refuses to promote because the first hop blows the cap
+// with no intermediate fit.
+const autoEvolveFirstHopOverCapFixture = `{
+  "id": "gamemaster",
+  "timestamp": "2026-04-19 00:00:00",
+  "pokemon": [
+    {"dex": 500, "speciesId": "tinybase", "speciesName": "Tinybase",
+     "baseStats": {"atk": 80, "def": 80, "hp": 80}, "types": ["normal"],
+     "fastMoves": ["FAST1"], "chargedMoves": ["CH1"],
+     "family": {"id": "FAMILY_TINYBASE", "evolutions": ["hugeevo"]},
+     "released": true},
+    {"dex": 501, "speciesId": "hugeevo", "speciesName": "Hugeevo",
+     "baseStats": {"atk": 9000, "def": 9000, "hp": 9000}, "types": ["normal"],
+     "fastMoves": ["FAST1"], "chargedMoves": ["CH1"],
+     "family": {"id": "FAMILY_TINYBASE", "parent": "tinybase"},
+     "released": true},
+    {"dex": 2, "speciesId": "b", "speciesName": "B",
+     "baseStats": {"atk": 152, "def": 143, "hp": 216}, "types": ["water"],
+     "fastMoves": ["FAST1"], "chargedMoves": ["CH1"], "released": true},
+    {"dex": 3, "speciesId": "c", "speciesName": "C",
+     "baseStats": {"atk": 234, "def": 159, "hp": 207}, "types": ["fighting"],
+     "fastMoves": ["FAST1"], "chargedMoves": ["CH1"], "released": true}
+  ],
+  "moves": [
+    {"moveId": "FAST1", "name": "Fast 1", "type": "normal",
+     "power": 3, "energy": 0, "energyGain": 5, "cooldown": 1000, "turns": 2},
+    {"moveId": "CH1", "name": "Charged 1", "type": "normal",
+     "power": 50, "energy": 35, "cooldown": 500}
+  ]
+}`
+
+// TestTeamBuilderTool_AutoEvolveFirstHopOverCap pins the
+// "first-hop busts" path: the base species' single next evolution
+// has stats so inflated that level-1 CP already blows the cap.
+// walkEvolutionChain returns (nil, "auto_evolve_over_cap"); the
+// base form stays in the team with the flag appended.
+func TestTeamBuilderTool_AutoEvolveFirstHopOverCap(t *testing.T) {
+	t.Parallel()
+
+	const rankingsPayload = `[
+  {"speciesId": "tinybase", "speciesName": "Tinybase", "rating": 500,
+   "moveset": ["FAST1", "CH1"],
+   "stats": {"product": 2000, "atk": 80, "def": 80, "hp": 150}},
+  {"speciesId": "b", "speciesName": "B", "rating": 600,
+   "moveset": ["FAST1", "CH1"],
+   "stats": {"product": 2000, "atk": 100, "def": 120, "hp": 150}},
+  {"speciesId": "c", "speciesName": "C", "rating": 650,
+   "moveset": ["FAST1", "CH1"],
+   "stats": {"product": 2050, "atk": 105, "def": 125, "hp": 145}}
+]`
+
+	tool := newTeamBuilderToolFromFixture(t, autoEvolveFirstHopOverCapFixture, rankingsPayload)
+	handler := tool.Handler()
+
+	pool := []tools.Combatant{
+		{Species: "tinybase", IV: [3]int{15, 15, 15}, Level: 20, FastMove: "FAST1", ChargedMoves: []string{"CH1"}},
+		baseCombatant("b"),
+		baseCombatant("c"),
+	}
+
+	_, result, err := handler(t.Context(), nil, tools.TeamBuilderParams{
+		Pool:       pool,
+		League:     leagueGreat,
+		AutoEvolve: true,
+	})
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+
+	if len(result.Teams) == 0 {
+		t.Fatal("no teams returned")
+	}
+
+	var basePresent bool
+
+	var baseBreakdown *tools.MemberCostBreakdown
+
+	for i := range result.Teams[0].Members {
+		if result.Teams[0].Members[i].Species == "tinybase" {
+			basePresent = true
+			baseBreakdown = &result.Teams[0].CostBreakdowns[i]
+
+			break
+		}
+	}
+
+	if !basePresent {
+		t.Fatalf("tinybase not in team; first-hop-busts must leave base intact. members=%+v",
+			result.Teams[0].Members)
+	}
+
+	if !slices.Contains(baseBreakdown.Flags, "auto_evolve_over_cap:tinybase") {
+		t.Errorf("auto_evolve_over_cap:tinybase flag missing in Flags=%v",
+			baseBreakdown.Flags)
+	}
+}
+
+// autoEvolvePartialWalkFixture publishes a three-stage linear
+// chain where the mid-stage fits the cap but the terminal busts
+// it. walkEvolutionChain must stop at the mid-stage and return it
+// as a successful promotion (not a skip). The flag on the
+// resolved member is auto_evolved_from:<orig> — same as a full
+// promotion — because partial walks are recorded as normal
+// promotions per the godoc.
+const autoEvolvePartialWalkFixture = `{
+  "id": "gamemaster",
+  "timestamp": "2026-04-19 00:00:00",
+  "pokemon": [
+    {"dex": 600, "speciesId": "stepbase", "speciesName": "Stepbase",
+     "baseStats": {"atk": 80, "def": 80, "hp": 80}, "types": ["normal"],
+     "fastMoves": ["FAST1"], "chargedMoves": ["CH1"],
+     "family": {"id": "FAMILY_STEP", "evolutions": ["stepmid"]},
+     "released": true},
+    {"dex": 601, "speciesId": "stepmid", "speciesName": "Stepmid",
+     "baseStats": {"atk": 120, "def": 120, "hp": 150}, "types": ["normal"],
+     "fastMoves": ["FAST1"], "chargedMoves": ["CH1"],
+     "family": {"id": "FAMILY_STEP", "parent": "stepbase", "evolutions": ["stephuge"]},
+     "released": true},
+    {"dex": 602, "speciesId": "stephuge", "speciesName": "Stephuge",
+     "baseStats": {"atk": 9000, "def": 9000, "hp": 9000}, "types": ["normal"],
+     "fastMoves": ["FAST1"], "chargedMoves": ["CH1"],
+     "family": {"id": "FAMILY_STEP", "parent": "stepmid"},
+     "released": true},
+    {"dex": 2, "speciesId": "b", "speciesName": "B",
+     "baseStats": {"atk": 152, "def": 143, "hp": 216}, "types": ["water"],
+     "fastMoves": ["FAST1"], "chargedMoves": ["CH1"], "released": true},
+    {"dex": 3, "speciesId": "c", "speciesName": "C",
+     "baseStats": {"atk": 234, "def": 159, "hp": 207}, "types": ["fighting"],
+     "fastMoves": ["FAST1"], "chargedMoves": ["CH1"], "released": true}
+  ],
+  "moves": [
+    {"moveId": "FAST1", "name": "Fast 1", "type": "normal",
+     "power": 3, "energy": 0, "energyGain": 5, "cooldown": 1000, "turns": 2},
+    {"moveId": "CH1", "name": "Charged 1", "type": "normal",
+     "power": 50, "energy": 35, "cooldown": 500}
+  ]
+}`
+
+// TestTeamBuilderTool_AutoEvolvePartialWalkTerminalOverCap pins
+// the partial-walk path: stepbase → stepmid fits, stepmid →
+// stephuge busts. Result: member becomes stepmid (not stephuge,
+// not stepbase). Flag is auto_evolved_from:stepbase — the same
+// flag a full terminal promotion would emit — because the godoc
+// records partial walks as normal promotions rather than a
+// separate "terminal_over_cap" signal.
+func TestTeamBuilderTool_AutoEvolvePartialWalkTerminalOverCap(t *testing.T) {
+	t.Parallel()
+
+	const rankingsPayload = `[
+  {"speciesId": "stepmid", "speciesName": "Stepmid", "rating": 600,
+   "moveset": ["FAST1", "CH1"],
+   "stats": {"product": 2100, "atk": 120, "def": 120, "hp": 150}},
+  {"speciesId": "b", "speciesName": "B", "rating": 600,
+   "moveset": ["FAST1", "CH1"],
+   "stats": {"product": 2000, "atk": 100, "def": 120, "hp": 150}},
+  {"speciesId": "c", "speciesName": "C", "rating": 650,
+   "moveset": ["FAST1", "CH1"],
+   "stats": {"product": 2050, "atk": 105, "def": 125, "hp": 145}}
+]`
+
+	tool := newTeamBuilderToolFromFixture(t, autoEvolvePartialWalkFixture, rankingsPayload)
+	handler := tool.Handler()
+
+	pool := []tools.Combatant{
+		{Species: "stepbase", IV: [3]int{15, 15, 15}, Level: 1, FastMove: "FAST1", ChargedMoves: []string{"CH1"}},
+		baseCombatant("b"),
+		baseCombatant("c"),
+	}
+
+	_, result, err := handler(t.Context(), nil, tools.TeamBuilderParams{
+		Pool:       pool,
+		League:     leagueGreat,
+		AutoEvolve: true,
+	})
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+
+	if len(result.Teams) == 0 {
+		t.Fatal("no teams returned")
+	}
+
+	var promoted *tools.ResolvedCombatant
+
+	var promotedBreakdown *tools.MemberCostBreakdown
+
+	for i := range result.Teams[0].Members {
+		if result.Teams[0].Members[i].Species == "stepmid" {
+			promoted = &result.Teams[0].Members[i]
+			promotedBreakdown = &result.Teams[0].CostBreakdowns[i]
+
+			break
+		}
+	}
+
+	if promoted == nil {
+		t.Fatalf("stepmid not in team (partial walk should stop at mid-stage); members=%+v",
+			result.Teams[0].Members)
+	}
+
+	if !slices.Contains(promotedBreakdown.Flags, "auto_evolved_from:stepbase") {
+		t.Errorf("auto_evolved_from:stepbase flag missing in Flags=%v",
+			promotedBreakdown.Flags)
+	}
+}

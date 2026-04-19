@@ -19,17 +19,24 @@ const autoEvolveMaxDepth = 5
 // its autoEvolvedFrom runtime bookkeeping captures the original id
 // so computeMemberCost can surface the swap as a flag.
 //
-// Three skip paths leave the member at its current species and
-// append a diagnostic flag to the post-resolution cost breakdown
-// (via autoEvolvedFrom / autoEvolveSkipReason):
+// Three terminal conditions distinct from full-terminal promotion:
 //
 //   - Branching chain: len(Evolutions) > 1 without a caller-
 //     supplied target means the helper has no way to pick a
-//     descendant (eevee → vaporeon / jolteon / flareon etc.). Leave
-//     the base form, flag "auto_evolve_skipped_branching".
-//   - Over-cap terminal: the deepest fit found is still over the
-//     league cap at level 1 (e.g. gloom → vileplume busts Great
-//     League). Leave the base form, flag "auto_evolve_over_cap".
+//     descendant (eevee → vaporeon / jolteon / flareon). Leave
+//     the base form. Flag: "auto_evolve_skipped_branching:<orig>".
+//   - First-hop over-cap: the immediate next evolution already
+//     busts the league cap at level 1; no intermediate fit exists.
+//     Leave the base form. Flag: "auto_evolve_over_cap:<orig>".
+//   - Partial walk, terminal over-cap: some intermediate step
+//     fits, but the chain's terminal form busts the cap. The
+//     helper stops at the last fitting step and treats this as a
+//     successful promotion (the member IS evolved — just not to
+//     the absolute terminal). Flag: "auto_evolved_from:<orig>"
+//     (same as full-terminal promotion). No separate
+//     "terminal_over_cap" flag emitted; the caller can compare
+//     the member's resolved Species against the original to spot
+//     a partial walk.
 //   - Unknown species / no snapshot: defensive no-op; the pool
 //     validation phase already rejects unknowns with a hard error.
 func autoEvolvePool(snapshot *pogopvp.Gamemaster, pool []Combatant, cpCap int) {
