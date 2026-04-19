@@ -2,7 +2,9 @@ package tools_test
 
 import (
 	"errors"
+	"fmt"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/lexfrei/pogo-pvp-mcp/internal/config"
@@ -105,7 +107,11 @@ func TestPokedexLookup_DexNumber(t *testing.T) {
 
 // TestPokedexLookup_ExactSpeciesID pins the exact-id path: when the
 // query matches a species id verbatim, that species comes first in
-// the response; substring matches follow.
+// the response; substring matches follow. Also locks the dedup
+// invariant: the substring phase of matchesByNameOrID would
+// otherwise emit farigiraf a second time (substring "farigiraf" ⊂
+// id "farigiraf"), so the single-entry result is the only signal
+// that the dedup filter actually runs.
 func TestPokedexLookup_ExactSpeciesID(t *testing.T) {
 	t.Parallel()
 
@@ -117,8 +123,9 @@ func TestPokedexLookup_ExactSpeciesID(t *testing.T) {
 		t.Fatalf("handler: %v", err)
 	}
 
-	if len(result.Matches) == 0 {
-		t.Fatal("Matches empty; want at least farigiraf")
+	if len(result.Matches) != 1 {
+		t.Fatalf("Matches len = %d, want 1 (dedup must prevent farigiraf from appearing twice — exact hit plus substring match on its own id)",
+			len(result.Matches))
 	}
 
 	if result.Matches[0].SpeciesID != "farigiraf" {
@@ -243,6 +250,93 @@ func TestPokedexLookup_NoMatches(t *testing.T) {
 
 	if len(result.Matches) != 0 {
 		t.Errorf("Matches = %+v, want empty for unmatched query", result.Matches)
+	}
+}
+
+// buildBulkFixture returns a gamemaster JSON document with count
+// species, each sharing the "bulk_species_" prefix so a single
+// substring query matches all of them. Used by the truncation
+// tests to exercise the ≥10 / exactly-10 boundaries around
+// pokedexLookupResultLimit.
+func buildBulkFixture(count int) string {
+	parts := make([]string, 0, count)
+	for i := range count {
+		parts = append(parts, fmt.Sprintf(
+			`{"dex": %d, "speciesId": "bulk_species_%02d", "speciesName": "Bulk Species %d",
+     "baseStats": {"atk": 100, "def": 100, "hp": 100},
+     "types": ["normal"],
+     "fastMoves": ["FAST1"], "chargedMoves": ["CH1"],
+     "released": true}`, 1000+i, i, i))
+	}
+
+	return `{
+  "id": "gamemaster",
+  "timestamp": "2026-04-19 00:00:00",
+  "pokemon": [` + strings.Join(parts, ",\n") + `],
+  "moves": [
+    {"moveId": "FAST1", "name": "Fast 1", "type": "normal",
+     "power": 3, "energy": 0, "energyGain": 5, "cooldown": 1000, "turns": 2},
+    {"moveId": "CH1", "name": "Charged 1", "type": "normal",
+     "power": 50, "energy": 35, "cooldown": 500}
+  ]
+}`
+}
+
+// TestPokedexLookup_TruncatedAtLimit pins the truncation path: a
+// substring query matching 11+ species must report exactly 10
+// entries, Truncated=true, and TotalBefore=11. Guards against a
+// silent regression where the > / >= boundary flips or the slice
+// isn't clipped.
+func TestPokedexLookup_TruncatedAtLimit(t *testing.T) {
+	t.Parallel()
+
+	mgr := newManagerWithFixture(t, buildBulkFixture(11))
+	handler := tools.NewPokedexLookupTool(mgr).Handler()
+
+	_, result, err := handler(t.Context(), nil, tools.PokedexLookupParams{Query: "bulk_species"})
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+
+	if len(result.Matches) != 10 {
+		t.Errorf("Matches len = %d, want 10 (capped at pokedexLookupResultLimit)",
+			len(result.Matches))
+	}
+
+	if !result.Truncated {
+		t.Errorf("Truncated = false, want true (11 matches > 10 cap)")
+	}
+
+	if result.TotalBefore != 11 {
+		t.Errorf("TotalBefore = %d, want 11", result.TotalBefore)
+	}
+}
+
+// TestPokedexLookup_ExactlyAtLimit pins the non-truncation
+// boundary: 10 matches is the largest non-truncated response.
+// Truncated and TotalBefore must be zero-value (omitempty works).
+func TestPokedexLookup_ExactlyAtLimit(t *testing.T) {
+	t.Parallel()
+
+	mgr := newManagerWithFixture(t, buildBulkFixture(10))
+	handler := tools.NewPokedexLookupTool(mgr).Handler()
+
+	_, result, err := handler(t.Context(), nil, tools.PokedexLookupParams{Query: "bulk_species"})
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+
+	if len(result.Matches) != 10 {
+		t.Errorf("Matches len = %d, want 10", len(result.Matches))
+	}
+
+	if result.Truncated {
+		t.Errorf("Truncated = true, want false (10 matches == cap, not over)")
+	}
+
+	if result.TotalBefore != 0 {
+		t.Errorf("TotalBefore = %d, want 0 (untruncated response must leave the field zero-value)",
+			result.TotalBefore)
 	}
 }
 

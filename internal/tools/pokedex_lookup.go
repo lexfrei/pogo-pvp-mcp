@@ -84,11 +84,11 @@ func NewPokedexLookupTool(gm *gamemaster.Manager) *PokedexLookupTool {
 	return &PokedexLookupTool{gm: gm}
 }
 
-const pokedexLookupToolDescription = "Find species in the current gamemaster by pokedex number, species id, " +
-	"or substring of name. Use when the client has a human-readable name (e.g. \"farigiraf\", \"galarian moltres\") " +
-	"and needs the canonical species id to feed into pvp_rank / pvp_matchup / pvp_team_analysis. Shadow variants " +
-	"excluded by default; set include_shadow=true to include them. Results capped at 10; narrow the query if more " +
-	"than 10 species match."
+const pokedexLookupToolDescription = "Find species in the current gamemaster by pokedex number, exact species id, " +
+	"or case-insensitive substring of species id or display name. Use when the client has a human-readable name " +
+	"(e.g. \"farigiraf\", \"galarian moltres\") and needs the canonical species id to feed into pvp_rank / " +
+	"pvp_matchup / pvp_team_analysis. Shadow variants excluded by default; set include_shadow=true to include them. " +
+	"Results capped at 10; narrow the query if more than 10 species match."
 
 // Tool returns the MCP registration.
 func (*PokedexLookupTool) Tool() *mcp.Tool {
