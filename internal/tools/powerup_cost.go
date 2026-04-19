@@ -20,17 +20,23 @@ var ErrLevelRangeEmpty = errors.New("to_level must be strictly greater than from
 // PowerupCostParams is the JSON input for pvp_powerup_cost. Options
 // carries the per-Pokémon modifier flags (Phase X): Shadow ×1.2,
 // Purified ×0.9, Lucky ×0.5 on stardust (powerup-specific). All
-// three stack multiplicatively (Lucky+Purified = 0.45×, etc.) —
-// scaleCost's integer arithmetic keeps every canonical tier exact
-// because the pre-XL stardust values (200..10000) and the XL-era
-// values (10000..15000) are all multiples of 100.
+// three stack multiplicatively (Lucky+Purified = 0.45×, etc.).
+// scaleStardust uses integer arithmetic (×12/÷10, ×9/÷10, ÷2)
+// per single flag so every one-flag result is exact on the
+// canonical tiers; stacked combinations fall back to math.Round
+// with float multiplication, which still returns an integer.
 //
-// Candy cost is still NOT emitted: public sources disagree on the
-// per-half-step candy table (Bulbapedia's published bucket totals
-// fail their own arithmetic check — 19×1+20×2+12×3+26×4 = 199, not
-// the 304 they claim). The tool refuses to guess and directs
-// callers to an authoritative external source. Same applies to XL
-// candy in the L40-L50 range.
+// Candy cost is NOT emitted in this phase. Bulbapedia's L1-L50
+// candy table is self-consistent (9 regular-candy buckets summing
+// to 304 over L1→L40, plus 296 XL candy over L40→L50), but other
+// publicly-cited sources (mathiasbynens/pogopowerupcost, older
+// GamePress pages) publish different per-bucket numbers that
+// contradict Bulbapedia on several boundaries. Shipping candy
+// without cross-source agreement risks handing callers a number
+// that disagrees with their alternate reference. Candy lands in a
+// dedicated follow-up branch once the cross-source audit is done;
+// Phase 3A team_builder cost estimation uses stardust only until
+// then.
 type PowerupCostParams struct {
 	FromLevel float64          `json:"from_level" jsonschema:"starting level on the 0.5 grid (min 1.0)"`
 	ToLevel   float64          `json:"to_level" jsonschema:"target level on the 0.5 grid (max 50.0)"`
@@ -212,13 +218,17 @@ func powerupStardustMultiplierFor(opts CombatantOptions) float64 {
 const luckyStardustMultiplier = 0.5
 
 // scaleStardust applies a float multiplier to an integer baseline
-// using integer arithmetic where it is exact (Shadow ×1.2 via
-// ×12/÷10, Purified ×0.9 via ×9/÷10, Lucky ×0.5 via ÷2). Stacked
-// combinations fall back to float multiplication with round-half-
-// to-even rounding — all canonical tiers are still exact multiples
-// of 100 after every stack since the pre-XL and XL stardust values
-// are all ×100 integers and the multipliers are each exact
-// tenths / halves.
+// using integer arithmetic where it is exact: Shadow-only ×12/÷10,
+// Purified-only ×9/÷10, Lucky-only ÷2. Each of the three single-
+// flag paths is exact on every canonical tier because the
+// baselines are multiples of 100 (×12 and ×9 on a multiple of 100
+// are divisible by 10; ÷2 on a multiple of 100 is divisible by 2).
+// Stacked multipliers fall through to math.Round with float math —
+// the result remains an integer (rounding guarantees that) but is
+// not guaranteed to land on the canonical-tier grid (e.g.
+// 200 × 1.08 = 216, which is not a multiple of 100). That
+// non-grid result is still correct per Niantic's published
+// Lucky+Purified and Shadow+Purified stacking semantics.
 func scaleStardust(baseline int, multiplier float64) int {
 	switch multiplier {
 	case 1.0:
@@ -285,10 +295,11 @@ func (tool *PowerupCostTool) handle(
 		StardustMultiplier:   stardustMult,
 		CrossesXLBoundary:    xlSteps > 0,
 		XLStepsIncluded:      xlSteps,
-		Note: "Candy cost is NOT returned: public sources disagree on the per-half-step candy table " +
-			"(Bulbapedia's own bucket totals fail arithmetic). Consult an authoritative external source " +
-			"if you need the candy number. Lucky affects stardust only (Niantic's 50% discount is " +
-			"powerup-specific).",
+		Note: "Candy cost is NOT returned in this phase: Bulbapedia's L1-L50 candy table is " +
+			"self-consistent (304 regular candy L1→L40, 296 XL candy L40→L50) but other publicly-cited " +
+			"sources publish different per-bucket numbers; shipping candy before cross-source agreement " +
+			"risks disagreement with the caller's own reference. Deferred to a dedicated candy-cost " +
+			"branch. Lucky affects stardust only (Niantic's 50% discount is powerup-specific).",
 	}, nil
 }
 

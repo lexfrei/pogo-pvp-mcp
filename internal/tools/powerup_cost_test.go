@@ -600,6 +600,174 @@ func TestPowerupCost_PurifiedStardustDiscount(t *testing.T) {
 	}
 }
 
+// TestPowerupCost_CostMultiplierVsStardustMultiplier pins the
+// design rationale for carrying both wire fields: CostMultiplier
+// is the "future candy scaler" (Shadow + Purified, Lucky excluded)
+// while StardustMultiplier is stardust-only (includes Lucky). The
+// two must diverge when Lucky is set alone. A refactor that
+// accidentally collapses the two into one field would silently
+// regress the response shape; this test fails loudly in that case.
+func TestPowerupCost_CostMultiplierVsStardustMultiplier(t *testing.T) {
+	t.Parallel()
+
+	tool := tools.NewPowerupCostTool()
+	handler := tool.Handler()
+
+	cases := []struct {
+		name          string
+		opts          tools.CombatantOptions
+		wantCostMult  float64
+		wantStardMult float64
+	}{
+		{
+			name:          "no flags: both 1.0",
+			opts:          tools.CombatantOptions{},
+			wantCostMult:  1.0,
+			wantStardMult: 1.0,
+		},
+		{
+			name:          "Lucky only: cost 1.0, stardust 0.5 (divergent)",
+			opts:          tools.CombatantOptions{Lucky: true},
+			wantCostMult:  1.0,
+			wantStardMult: 0.5,
+		},
+		{
+			name:          "Shadow only: both 1.2 (convergent when Lucky is off)",
+			opts:          tools.CombatantOptions{Shadow: true},
+			wantCostMult:  1.2,
+			wantStardMult: 1.2,
+		},
+		{
+			name:          "Purified only: both 0.9 (convergent when Lucky is off)",
+			opts:          tools.CombatantOptions{Purified: true},
+			wantCostMult:  0.9,
+			wantStardMult: 0.9,
+		},
+		{
+			name:          "Lucky + Shadow: cost 1.2, stardust 0.6 (divergent)",
+			opts:          tools.CombatantOptions{Lucky: true, Shadow: true},
+			wantCostMult:  1.2,
+			wantStardMult: 0.6,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			_, result, err := handler(t.Context(), nil, tools.PowerupCostParams{
+				FromLevel: 40.0,
+				ToLevel:   40.5,
+				Options:   tc.opts,
+			})
+			if err != nil {
+				t.Fatalf("handler: %v", err)
+			}
+
+			if math.Abs(result.CostMultiplier-tc.wantCostMult) > 1e-9 {
+				t.Errorf("CostMultiplier = %v, want %v", result.CostMultiplier, tc.wantCostMult)
+			}
+
+			if math.Abs(result.StardustMultiplier-tc.wantStardMult) > 1e-9 {
+				t.Errorf("StardustMultiplier = %v, want %v", result.StardustMultiplier, tc.wantStardMult)
+			}
+		})
+	}
+}
+
+// TestPowerupCost_NoteAccurate pins the disclaimer prose against
+// two kinds of drift: (1) the old "fails arithmetic" phrasing
+// incorrectly accused Bulbapedia of publishing inconsistent
+// totals — round-1 review caught that Bulbapedia's candy table
+// IS self-consistent (304 = 20+40+30+40+24+32+40+48+30 across 9
+// buckets) and the "199" sum was a strawman; (2) the Note must
+// mention the cross-source-disagreement rationale that justifies
+// deferring candy output. Locking both conditions prevents either
+// form of drift.
+func TestPowerupCost_NoteAccurate(t *testing.T) {
+	t.Parallel()
+
+	tool := tools.NewPowerupCostTool()
+	handler := tool.Handler()
+
+	_, result, err := handler(t.Context(), nil, tools.PowerupCostParams{
+		FromLevel: 1.0,
+		ToLevel:   40.0,
+	})
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+
+	forbidden := []string{"fails arithmetic", "199"}
+	for _, f := range forbidden {
+		if strings.Contains(result.Note, f) {
+			t.Errorf("Note still contains forbidden phrase %q (Bulbapedia is self-consistent): %q",
+				f, result.Note)
+		}
+	}
+
+	requiredLower := []string{"candy", "self-consistent"}
+
+	noteLower := strings.ToLower(result.Note)
+	for _, r := range requiredLower {
+		if !strings.Contains(noteLower, r) {
+			t.Errorf("Note missing required phrase %q: %q", r, result.Note)
+		}
+	}
+}
+
+// TestPowerupCost_JSONShapeXLEra pins the response JSON shape for
+// an XL-era query: crosses_xl_boundary and xl_steps_included are
+// non-zero in that case and must appear in the payload. Paired
+// with the existing TestPowerupCost_JSONShape (pre-XL path, those
+// two keys omitted) to lock both shapes.
+func TestPowerupCost_JSONShapeXLEra(t *testing.T) {
+	t.Parallel()
+
+	tool := tools.NewPowerupCostTool()
+	handler := tool.Handler()
+
+	_, result, err := handler(t.Context(), nil, tools.PowerupCostParams{
+		FromLevel: 40.0,
+		ToLevel:   41.0,
+	})
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+
+	payload, err := json.Marshal(result)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+
+	decoded := map[string]any{}
+
+	err = json.Unmarshal(payload, &decoded)
+	if err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	wantKeys := []string{
+		"from_level", "to_level", "steps",
+		"stardust_cost", "baseline_stardust_cost",
+		"cost_multiplier", "stardust_multiplier",
+		"crosses_xl_boundary", "xl_steps_included",
+		"note",
+	}
+
+	gotKeys := make([]string, 0, len(decoded))
+	for k := range decoded {
+		gotKeys = append(gotKeys, k)
+	}
+
+	slices.Sort(wantKeys)
+	slices.Sort(gotKeys)
+
+	if !slices.Equal(gotKeys, wantKeys) {
+		t.Errorf("XL-era JSON keys = %v, want %v", gotKeys, wantKeys)
+	}
+}
+
 // TestPowerupCost_LuckyPurifiedStack pins the stacking multiplier:
 // Lucky ×0.5 × Purified ×0.9 = 0.45. A 10k baseline step becomes
 // 4500 stardust.
