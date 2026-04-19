@@ -13,6 +13,11 @@ import (
 	"github.com/lexfrei/pogo-pvp-mcp/internal/tools"
 )
 
+// paretoLabelBestOverall is the label the production code writes onto
+// overall-ranked teams; hoisted here so the test assertions and the
+// quoted-string compare against one source of truth.
+const paretoLabelBestOverall = "best overall"
+
 func newTeamBuilderTool(t *testing.T) *tools.TeamBuilderTool {
 	t.Helper()
 
@@ -367,6 +372,91 @@ func TestTeamBuilderTool_ReturnsPoolIndices(t *testing.T) {
 			t.Errorf("PoolIndices[%d]->%s does not match Members[%d].Species=%s",
 				idx, pool[poolIdx].Species, idx, team.Members[idx].Species)
 		}
+	}
+}
+
+// TestTeamBuilderTool_ParetoLabelPopulated confirms the default
+// overall pipeline labels every returned team paretoLabelBestOverall — the
+// hardcoded "highest average battle rating..." string is gone.
+func TestTeamBuilderTool_ParetoLabelPopulated(t *testing.T) {
+	t.Parallel()
+
+	tool := newTeamBuilderTool(t)
+	handler := tool.Handler()
+
+	_, result, err := handler(t.Context(), nil, tools.TeamBuilderParams{
+		Pool: []tools.Combatant{
+			baseCombatant("a"),
+			baseCombatant("b"),
+			baseCombatant("c"),
+		},
+		League: leagueGreat,
+	})
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+
+	for i, team := range result.Teams {
+		if team.ParetoLabel != paretoLabelBestOverall {
+			t.Errorf("Teams[%d].ParetoLabel = %q, want \"best overall\"", i, team.ParetoLabel)
+		}
+	}
+}
+
+// TestTeamBuilderTool_AllParetoScenarioCoverage confirms that
+// optimize_for=all_pareto returns one paretoLabelBestOverall plus up to
+// three per-scenario bests. The exact team count depends on whether
+// the same triple wins multiple axes (deduplicated), but the label
+// set must be a subset of the expected Pareto labels and always
+// include paretoLabelBestOverall.
+func TestTeamBuilderTool_AllParetoScenarioCoverage(t *testing.T) {
+	t.Parallel()
+
+	tool := newTeamBuilderTool(t)
+	handler := tool.Handler()
+
+	_, result, err := handler(t.Context(), nil, tools.TeamBuilderParams{
+		Pool: []tools.Combatant{
+			baseCombatant("a"),
+			baseCombatant("b"),
+			baseCombatant("c"),
+		},
+		League:      leagueGreat,
+		OptimizeFor: "all_pareto",
+		MaxResults:  10,
+	})
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+
+	if len(result.Teams) == 0 {
+		t.Fatal("Teams is empty, want at least one Pareto team")
+	}
+
+	if len(result.Teams) > 4 {
+		t.Errorf("Teams len = %d, want ≤ 4 (overall + 3 scenarios)", len(result.Teams))
+	}
+
+	validLabels := map[string]bool{
+		paretoLabelBestOverall: true,
+		"best 0-shield":        true,
+		"best 1-shield":        true,
+		"best 2-shield":        true,
+	}
+
+	sawOverall := false
+
+	for i, team := range result.Teams {
+		if !validLabels[team.ParetoLabel] {
+			t.Errorf("Teams[%d].ParetoLabel = %q, not in Pareto label set", i, team.ParetoLabel)
+		}
+		if team.ParetoLabel == paretoLabelBestOverall {
+			sawOverall = true
+		}
+	}
+
+	if !sawOverall {
+		t.Error("no \"best overall\" team in result, expected one regardless of scenario wins")
 	}
 }
 
