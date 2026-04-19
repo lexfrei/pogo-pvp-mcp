@@ -10,6 +10,15 @@ import (
 	"github.com/lexfrei/pogo-pvp-mcp/internal/tools"
 )
 
+// speciesScyther and speciesScytherGalarian are hoisted species ids
+// used by the sort-ordering assertions in the substring and dex
+// tests. goconst flagged repeated literals; the constants keep the
+// test body focused on the assertion intent.
+const (
+	speciesScyther         = "scyther"
+	speciesScytherGalarian = "scyther_galarian"
+)
+
 // pokedexLookupFixtureGamemaster publishes a small cross-section of
 // species covering every query-shape path the tool dispatches on:
 //   - dex-only lookups (multiple species share dex 123 via regional
@@ -83,14 +92,14 @@ func TestPokedexLookup_DexNumber(t *testing.T) {
 		t.Fatalf("Matches len = %d, want 2 (scyther + scyther_galarian)", len(result.Matches))
 	}
 
-	if result.Matches[0].SpeciesID != "scyther" {
-		t.Errorf("Matches[0].SpeciesID = %q, want \"scyther\" (base form must sort first)",
-			result.Matches[0].SpeciesID)
+	if result.Matches[0].SpeciesID != speciesScyther {
+		t.Errorf("Matches[0].SpeciesID = %q, want %q (base form must sort first)",
+			result.Matches[0].SpeciesID, speciesScyther)
 	}
 
-	if result.Matches[1].SpeciesID != "scyther_galarian" {
-		t.Errorf("Matches[1].SpeciesID = %q, want \"scyther_galarian\"",
-			result.Matches[1].SpeciesID)
+	if result.Matches[1].SpeciesID != speciesScytherGalarian {
+		t.Errorf("Matches[1].SpeciesID = %q, want %q",
+			result.Matches[1].SpeciesID, speciesScytherGalarian)
 	}
 }
 
@@ -134,6 +143,20 @@ func TestPokedexLookup_Substring(t *testing.T) {
 
 	if len(result.Matches) != 2 {
 		t.Fatalf("Matches len = %d, want 2 (both scyther forms)", len(result.Matches))
+	}
+
+	// Both entries share the same dex; the substring path sorts
+	// by (Dex, SpeciesID) so "scyther" must come before
+	// "scyther_galarian" alphabetically. This pins the sort
+	// comparator against a silent regression.
+	if result.Matches[0].SpeciesID != speciesScyther {
+		t.Errorf("Matches[0].SpeciesID = %q, want %q (alphabetical tie-break at same dex)",
+			result.Matches[0].SpeciesID, speciesScyther)
+	}
+
+	if result.Matches[1].SpeciesID != speciesScytherGalarian {
+		t.Errorf("Matches[1].SpeciesID = %q, want %q",
+			result.Matches[1].SpeciesID, speciesScytherGalarian)
 	}
 
 	for _, m := range result.Matches {

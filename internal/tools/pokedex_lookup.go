@@ -145,6 +145,11 @@ func (tool *PokedexLookupTool) handle(
 
 // collectPokedexMatches dispatches the query by shape (dex number,
 // exact species id, substring) and returns the sorted result.
+// "0" and negative numeric strings fall through to substring
+// matching — there is no dex 0, and the lookup treats such inputs
+// as text the caller might have meant as part of a species name
+// (e.g. "001" → substring on "001" → no matches → empty slice
+// without a confusing "dex 0 has no entries" response).
 func collectPokedexMatches(
 	snapshot *pogopvp.Gamemaster, query string, includeShadow bool,
 ) []PokedexLookupMatch {
@@ -163,9 +168,16 @@ func shouldSkipShadow(speciesID string, includeShadow bool) bool {
 }
 
 // matchesByDex returns every species whose Dex equals the given
-// number. Order: base forms (no "_" in id) first, then variants
-// alphabetically by id — gives the caller the canonical species
-// first and then the alternative forms.
+// number. Order: base forms before variants at the same dex, then
+// alphabetically by id within each group. The "no `_` in id"
+// heuristic used to distinguish base from variant is not bulletproof
+// — real pvpoke ids like mr_mime, ho_oh, tapu_koko are base forms
+// that contain an underscore — but those species are the sole
+// occupants of their dex slot today, so the ordering only matters
+// when a shared-dex regional variant ships alongside a simple-name
+// base (scyther + scyther_galarian, etc.). If pvpoke ever publishes
+// a regional variant of an underscore-containing base, tighten the
+// heuristic.
 func matchesByDex(
 	snapshot *pogopvp.Gamemaster, dexNum int, includeShadow bool,
 ) []PokedexLookupMatch {
