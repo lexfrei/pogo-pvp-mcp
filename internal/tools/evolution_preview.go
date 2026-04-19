@@ -2,7 +2,6 @@ package tools
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"sort"
 
@@ -10,11 +9,6 @@ import (
 	"github.com/lexfrei/pogo-pvp-mcp/internal/gamemaster"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
-
-// ErrCyclicEvolution is returned when a cycle is detected while
-// walking the evolution tree. pvpoke's gamemaster is acyclic in
-// practice, but a defensive guard protects against upstream drift.
-var ErrCyclicEvolution = errors.New("evolution tree cycle detected")
 
 // EvolutionPreviewParams is the JSON input for pvp_evolution_preview.
 // The caller provides the current (pre-evolution) species, its IVs,
@@ -115,10 +109,7 @@ func (tool *EvolutionPreviewTool) handle(
 		return nil, EvolutionPreviewResult{}, fmt.Errorf("cpm at level %.1f: %w", inverted.Level, err)
 	}
 
-	stages, err := collectEvolutionStages(snapshot, base, ivs, cpm)
-	if err != nil {
-		return nil, EvolutionPreviewResult{}, err
-	}
+	stages := collectEvolutionStages(snapshot, base, ivs, cpm)
 
 	sort.Slice(stages, func(i, j int) bool {
 		if len(stages[i].Path) != len(stages[j].Path) {
@@ -182,27 +173,35 @@ type evolutionWalkFrame struct {
 // gamemaster refresh and the manager caches can drift by up to a
 // day, and a missing link in the chain should not fail the whole
 // request.
+//
+// Deduplication happens at enqueue time (not dequeue): pvpoke's
+// gamemaster legitimately contains diamond-shaped subgraphs (e.g.
+// pichu/raichu reached via both pichu→pikachu→raichu and a direct
+// alolan-raichu listing) and duplicate ids in the children array
+// (litleo→[pyroar, pyroar] — gendered evolutions collapsing onto
+// one species id). Both are valid DAG structures, not cycles. Each
+// reachable descendant is emitted exactly once via its
+// shortest-discovered path.
 func collectEvolutionStages(
 	snapshot *pogopvp.Gamemaster, base *pogopvp.Species, ivs pogopvp.IV, cpm float64,
-) ([]EvolutionStage, error) {
+) []EvolutionStage {
+	seen := map[string]bool{base.ID: true}
 	frontier := make([]evolutionWalkFrame, 0, len(base.Evolutions))
+
 	for _, evoID := range base.Evolutions {
+		if seen[evoID] {
+			continue
+		}
+
+		seen[evoID] = true
 		frontier = append(frontier, evolutionWalkFrame{speciesID: evoID, path: []string{evoID}})
 	}
 
-	seen := map[string]bool{base.ID: true}
 	stages := make([]EvolutionStage, 0, len(frontier))
 
 	for len(frontier) > 0 {
 		frame := frontier[0]
 		frontier = frontier[1:]
-
-		if seen[frame.speciesID] {
-			return nil, fmt.Errorf("%w: revisited %q via %v",
-				ErrCyclicEvolution, frame.speciesID, frame.path)
-		}
-
-		seen[frame.speciesID] = true
 
 		evolved, ok := snapshot.Pokemon[frame.speciesID]
 		if !ok {
@@ -217,6 +216,12 @@ func collectEvolutionStages(
 		}
 
 		for _, nextID := range evolved.Evolutions {
+			if seen[nextID] {
+				continue
+			}
+
+			seen[nextID] = true
+
 			nextPath := make([]string, 0, len(frame.path)+1)
 			nextPath = append(nextPath, frame.path...)
 			nextPath = append(nextPath, nextID)
@@ -224,7 +229,7 @@ func collectEvolutionStages(
 		}
 	}
 
-	return stages, nil
+	return stages
 }
 
 // projectEvolutionStage computes stats/CP for `evolved` at the
@@ -254,21 +259,11 @@ func projectEvolutionStage(
 // every cap — pathological since master's cap is the sentinel
 // 10000, but kept for defensive correctness.
 func leaguesFitting(combatPower int) []string {
-	order := []struct {
-		name string
-		cap  int
-	}{
-		{"little", littleLeagueCap},
-		{"great", greatLeagueCap},
-		{"ultra", ultraLeagueCap},
-		{"master", masterLeagueCap},
-	}
+	out := make([]string, 0, len(standardLeagues))
 
-	out := make([]string, 0, len(order))
-
-	for _, entry := range order {
-		if combatPower <= entry.cap {
-			out = append(out, entry.name)
+	for _, entry := range standardLeagues {
+		if combatPower <= entry.Cap {
+			out = append(out, entry.Name)
 		}
 	}
 

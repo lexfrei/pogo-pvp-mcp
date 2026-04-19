@@ -245,6 +245,19 @@ func TestEvolutionPreview_BranchingRoot(t *testing.T) {
 	if !found["vaporeon"] || !found["jolteon"] {
 		t.Errorf("Evolutions = %+v, want both vaporeon and jolteon present", result.Evolutions)
 	}
+
+	// Lock the alphabetical tiebreak: at equal Path length the sort
+	// orders by species id ascending, so jolteon must come before
+	// vaporeon. Guards against a silent regression of the sort key.
+	if result.Evolutions[0].Species != "jolteon" {
+		t.Errorf("Evolutions[0].Species = %q, want \"jolteon\" (alphabetical tiebreak)",
+			result.Evolutions[0].Species)
+	}
+
+	if result.Evolutions[1].Species != "vaporeon" {
+		t.Errorf("Evolutions[1].Species = %q, want \"vaporeon\" (alphabetical tiebreak)",
+			result.Evolutions[1].Species)
+	}
 }
 
 // TestEvolutionPreview_TerminalSpecies pins the no-further-evolution
@@ -445,5 +458,257 @@ func TestEvolutionPreview_MissingEvolutionIsSkipped(t *testing.T) {
 
 	if result.Evolutions[0].Species != speciesWartortle {
 		t.Errorf("only stage species = %q, want wartortle", result.Evolutions[0].Species)
+	}
+}
+
+// TestEvolutionPreview_DuplicateEvolutionID pins the fix for the
+// false-positive cycle error: pvpoke's real gamemaster contains
+// species whose `evolutions` array lists the same child id twice
+// (litleo→[pyroar, pyroar], espurr→[meowstic, meowstic], etc. —
+// gendered evolutions collapsing onto one species id). This used
+// to error with "cycle detected" until enqueue-time dedup landed.
+func TestEvolutionPreview_DuplicateEvolutionID(t *testing.T) {
+	t.Parallel()
+
+	const duplicateChildFixture = `{
+  "id": "gamemaster",
+  "timestamp": "2026-04-19 00:00:00",
+  "pokemon": [
+    {
+      "dex": 667,
+      "speciesId": "litleo",
+      "speciesName": "Litleo",
+      "baseStats": {"atk": 150, "def": 100, "hp": 160},
+      "types": ["fire", "normal"],
+      "fastMoves": ["TACKLE"],
+      "chargedMoves": ["FLAME_CHARGE"],
+      "family": {"id": "FAMILY_LITLEO", "evolutions": ["pyroar", "pyroar"]},
+      "released": true
+    },
+    {
+      "dex": 668,
+      "speciesId": "pyroar",
+      "speciesName": "Pyroar",
+      "baseStats": {"atk": 221, "def": 139, "hp": 200},
+      "types": ["fire", "normal"],
+      "fastMoves": ["TACKLE"],
+      "chargedMoves": ["FIRE_BLAST"],
+      "family": {"id": "FAMILY_LITLEO", "parent": "litleo", "evolutions": []},
+      "released": true
+    }
+  ],
+  "moves": [
+    {"moveId": "TACKLE", "name": "Tackle", "type": "normal",
+     "power": 3, "energy": 0, "energyGain": 3, "cooldown": 500, "turns": 1},
+    {"moveId": "FLAME_CHARGE", "name": "Flame Charge", "type": "fire",
+     "power": 65, "energy": 50, "cooldown": 500},
+    {"moveId": "FIRE_BLAST", "name": "Fire Blast", "type": "fire",
+     "power": 140, "energy": 80, "cooldown": 500}
+  ]
+}`
+
+	tool := newEvolutionPreviewTool(t, duplicateChildFixture)
+	handler := tool.Handler()
+
+	_, result, err := handler(t.Context(), nil, tools.EvolutionPreviewParams{
+		Species: "litleo",
+		IV:      [3]int{15, 15, 15},
+		CP:      1500,
+	})
+	if err != nil {
+		t.Fatalf("handler: %v (duplicate child id must not surface as cycle)", err)
+	}
+
+	if len(result.Evolutions) != 1 {
+		t.Fatalf("Evolutions len = %d, want 1 (duplicate collapses to one stage)",
+			len(result.Evolutions))
+	}
+
+	if result.Evolutions[0].Species != "pyroar" {
+		t.Errorf("Evolutions[0].Species = %q, want \"pyroar\"",
+			result.Evolutions[0].Species)
+	}
+}
+
+// TestEvolutionPreview_DiamondSubgraph pins the other real-world DAG
+// shape: two distinct parents (pichu and a synthetic alt-pichu) both
+// list `raichu` as an evolution. A BFS from a root whose chain
+// crosses that diamond used to panic the dequeue-time cycle guard;
+// with enqueue-time dedup, raichu appears exactly once via its
+// shortest-discovered path.
+func TestEvolutionPreview_DiamondSubgraph(t *testing.T) {
+	t.Parallel()
+
+	const diamondFixture = `{
+  "id": "gamemaster",
+  "timestamp": "2026-04-19 00:00:00",
+  "pokemon": [
+    {
+      "dex": 172,
+      "speciesId": "pichu",
+      "speciesName": "Pichu",
+      "baseStats": {"atk": 77, "def": 53, "hp": 85},
+      "types": ["electric"],
+      "fastMoves": ["THUNDER_SHOCK"],
+      "chargedMoves": ["DISCHARGE"],
+      "family": {"id": "FAMILY_PICHU", "evolutions": ["pikachu", "raichu"]},
+      "released": true
+    },
+    {
+      "dex": 25,
+      "speciesId": "pikachu",
+      "speciesName": "Pikachu",
+      "baseStats": {"atk": 112, "def": 96, "hp": 111},
+      "types": ["electric"],
+      "fastMoves": ["THUNDER_SHOCK"],
+      "chargedMoves": ["DISCHARGE"],
+      "family": {"id": "FAMILY_PICHU", "parent": "pichu", "evolutions": ["raichu"]},
+      "released": true
+    },
+    {
+      "dex": 26,
+      "speciesId": "raichu",
+      "speciesName": "Raichu",
+      "baseStats": {"atk": 193, "def": 151, "hp": 155},
+      "types": ["electric"],
+      "fastMoves": ["THUNDER_SHOCK"],
+      "chargedMoves": ["WILD_CHARGE"],
+      "family": {"id": "FAMILY_PICHU", "parent": "pikachu", "evolutions": []},
+      "released": true
+    }
+  ],
+  "moves": [
+    {"moveId": "THUNDER_SHOCK", "name": "Thunder Shock", "type": "electric",
+     "power": 3, "energy": 0, "energyGain": 3, "cooldown": 500, "turns": 1},
+    {"moveId": "DISCHARGE", "name": "Discharge", "type": "electric",
+     "power": 65, "energy": 45, "cooldown": 500},
+    {"moveId": "WILD_CHARGE", "name": "Wild Charge", "type": "electric",
+     "power": 100, "energy": 45, "cooldown": 500}
+  ]
+}`
+
+	tool := newEvolutionPreviewTool(t, diamondFixture)
+	handler := tool.Handler()
+
+	_, result, err := handler(t.Context(), nil, tools.EvolutionPreviewParams{
+		Species: "pichu",
+		IV:      [3]int{15, 15, 15},
+		CP:      500,
+	})
+	if err != nil {
+		t.Fatalf("handler: %v (diamond subgraph must not surface as cycle)", err)
+	}
+
+	raichuCount := 0
+
+	for _, stage := range result.Evolutions {
+		if stage.Species == "raichu" {
+			raichuCount++
+		}
+	}
+
+	if raichuCount != 1 {
+		t.Errorf("raichu appeared %d times, want exactly 1 (diamond dedup)", raichuCount)
+	}
+
+	if len(result.Evolutions) != 2 {
+		t.Errorf("Evolutions len = %d, want 2 (pikachu, raichu) — diamond collapses",
+			len(result.Evolutions))
+	}
+}
+
+// TestEvolutionPreview_DepthCap pins the maxEvolutionDepth bound: a
+// synthetic chain of length 7 must return exactly five stages (the
+// first five hops) without erroring. Locks the cap at 5 so a future
+// change to the constant forces an explicit test update.
+func TestEvolutionPreview_DepthCap(t *testing.T) {
+	t.Parallel()
+
+	const deepChainFixture = `{
+  "id": "gamemaster",
+  "timestamp": "2026-04-19 00:00:00",
+  "pokemon": [
+    {"dex": 1, "speciesId": "link0", "speciesName": "Link0",
+     "baseStats": {"atk": 100, "def": 100, "hp": 100}, "types": ["normal"],
+     "fastMoves": ["TACKLE"], "chargedMoves": ["BODY_SLAM"],
+     "family": {"id": "FAMILY_LINK", "evolutions": ["link1"]}, "released": true},
+    {"dex": 2, "speciesId": "link1", "speciesName": "Link1",
+     "baseStats": {"atk": 105, "def": 100, "hp": 100}, "types": ["normal"],
+     "fastMoves": ["TACKLE"], "chargedMoves": ["BODY_SLAM"],
+     "family": {"id": "FAMILY_LINK", "parent": "link0", "evolutions": ["link2"]},
+     "released": true},
+    {"dex": 3, "speciesId": "link2", "speciesName": "Link2",
+     "baseStats": {"atk": 110, "def": 100, "hp": 100}, "types": ["normal"],
+     "fastMoves": ["TACKLE"], "chargedMoves": ["BODY_SLAM"],
+     "family": {"id": "FAMILY_LINK", "parent": "link1", "evolutions": ["link3"]},
+     "released": true},
+    {"dex": 4, "speciesId": "link3", "speciesName": "Link3",
+     "baseStats": {"atk": 115, "def": 100, "hp": 100}, "types": ["normal"],
+     "fastMoves": ["TACKLE"], "chargedMoves": ["BODY_SLAM"],
+     "family": {"id": "FAMILY_LINK", "parent": "link2", "evolutions": ["link4"]},
+     "released": true},
+    {"dex": 5, "speciesId": "link4", "speciesName": "Link4",
+     "baseStats": {"atk": 120, "def": 100, "hp": 100}, "types": ["normal"],
+     "fastMoves": ["TACKLE"], "chargedMoves": ["BODY_SLAM"],
+     "family": {"id": "FAMILY_LINK", "parent": "link3", "evolutions": ["link5"]},
+     "released": true},
+    {"dex": 6, "speciesId": "link5", "speciesName": "Link5",
+     "baseStats": {"atk": 125, "def": 100, "hp": 100}, "types": ["normal"],
+     "fastMoves": ["TACKLE"], "chargedMoves": ["BODY_SLAM"],
+     "family": {"id": "FAMILY_LINK", "parent": "link4", "evolutions": ["link6"]},
+     "released": true},
+    {"dex": 7, "speciesId": "link6", "speciesName": "Link6",
+     "baseStats": {"atk": 130, "def": 100, "hp": 100}, "types": ["normal"],
+     "fastMoves": ["TACKLE"], "chargedMoves": ["BODY_SLAM"],
+     "family": {"id": "FAMILY_LINK", "parent": "link5", "evolutions": ["link7"]},
+     "released": true},
+    {"dex": 8, "speciesId": "link7", "speciesName": "Link7",
+     "baseStats": {"atk": 135, "def": 100, "hp": 100}, "types": ["normal"],
+     "fastMoves": ["TACKLE"], "chargedMoves": ["BODY_SLAM"],
+     "family": {"id": "FAMILY_LINK", "parent": "link6", "evolutions": []},
+     "released": true}
+  ],
+  "moves": [
+    {"moveId": "TACKLE", "name": "Tackle", "type": "normal",
+     "power": 3, "energy": 0, "energyGain": 3, "cooldown": 500, "turns": 1},
+    {"moveId": "BODY_SLAM", "name": "Body Slam", "type": "normal",
+     "power": 60, "energy": 35, "cooldown": 500}
+  ]
+}`
+
+	tool := newEvolutionPreviewTool(t, deepChainFixture)
+	handler := tool.Handler()
+
+	_, result, err := handler(t.Context(), nil, tools.EvolutionPreviewParams{
+		Species: "link0",
+		IV:      [3]int{15, 15, 15},
+		CP:      1500,
+	})
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+
+	if len(result.Evolutions) != 5 {
+		t.Fatalf("Evolutions len = %d, want 5 (depth cap drops link6/link7)",
+			len(result.Evolutions))
+	}
+
+	// Lock ordering: depth 1 first, depth 5 last.
+	if result.Evolutions[0].Species != "link1" {
+		t.Errorf("Evolutions[0] = %q, want \"link1\" (shallowest)",
+			result.Evolutions[0].Species)
+	}
+
+	if result.Evolutions[4].Species != "link5" {
+		t.Errorf("Evolutions[4] = %q, want \"link5\" (depth cap = 5)",
+			result.Evolutions[4].Species)
+	}
+
+	// link6 and link7 must not be present — both exceed maxEvolutionDepth.
+	for _, stage := range result.Evolutions {
+		if stage.Species == "link6" || stage.Species == "link7" {
+			t.Errorf("species %q leaked past the depth cap; Evolutions = %+v",
+				stage.Species, result.Evolutions)
+		}
 	}
 }

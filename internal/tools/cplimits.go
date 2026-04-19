@@ -12,17 +12,10 @@ import (
 
 // cpLimitLeagues is the ordered list of leagues reported by
 // pvp_cp_limits. Master has no CP cap (10000 is unreachable in
-// practice) so it is omitted.
+// practice) so it is sliced off the shared standardLeagues table.
 //
 //nolint:gochecknoglobals // ordered domain lookup — struct-literal, no reassignment
-var cpLimitLeagues = []struct {
-	Name string
-	Cap  int
-}{
-	{"little", littleLeagueCap},
-	{"great", greatLeagueCap},
-	{"ultra", ultraLeagueCap},
-}
+var cpLimitLeagues = standardLeagues[:len(standardLeagues)-1]
 
 // CPLimitsParams is the JSON input contract for pvp_cp_limits.
 type CPLimitsParams struct {
