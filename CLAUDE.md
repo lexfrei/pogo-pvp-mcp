@@ -2,6 +2,13 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Workflow — hard rules
+
+- **Все изменения делаются через feature-ветки.** Никогда не коммитить прямо в `master` — даже hotfix.
+- **Никаких мержей без LGTM от `review-toolkit:branch-review`.** `git merge --ff-only` и `git merge --no-ff` оба запрещены до явного LGTM. Нарушение = регрессия процесса, даже если код зелёный (go test + golangci-lint не заменяют review).
+- Тот же порядок распространяется на sibling-репозиторий `pogo-pvp-engine` — правки в нём тоже живут через feature-ветки, проходят `branch-review`, и только после LGTM мержатся в `engine/master`.
+- Если откатываешь ошибочный merge: `git reset --hard <pre-merge-sha>`, пересоздай ветку из потерянного коммита, прогони review, жди LGTM.
+
 ## Module and repository layout
 
 - Go module: `github.com/lexfrei/pogo-pvp-mcp`. The on-disk directory is still `pvpoke-mcp` — a `gh repo rename` to `pogo-pvp-mcp` is pending.
