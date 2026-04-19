@@ -131,6 +131,9 @@ const (
 	speciesSquirtle  = "squirtle"
 	speciesWartortle = "wartortle"
 	speciesBlastoise = "blastoise"
+	speciesEevee     = "eevee"
+	speciesVaporeon  = "vaporeon"
+	speciesJolteon   = "jolteon"
 )
 
 func newEvolutionPreviewTool(t *testing.T, gmJSON string) *tools.EvolutionPreviewTool {
@@ -249,14 +252,14 @@ func TestEvolutionPreview_BranchingRoot(t *testing.T) {
 	// Lock the alphabetical tiebreak: at equal Path length the sort
 	// orders by species id ascending, so jolteon must come before
 	// vaporeon. Guards against a silent regression of the sort key.
-	if result.Evolutions[0].Species != "jolteon" {
-		t.Errorf("Evolutions[0].Species = %q, want \"jolteon\" (alphabetical tiebreak)",
-			result.Evolutions[0].Species)
+	if result.Evolutions[0].Species != speciesJolteon {
+		t.Errorf("Evolutions[0].Species = %q, want %q (alphabetical tiebreak)",
+			result.Evolutions[0].Species, speciesJolteon)
 	}
 
-	if result.Evolutions[1].Species != "vaporeon" {
-		t.Errorf("Evolutions[1].Species = %q, want \"vaporeon\" (alphabetical tiebreak)",
-			result.Evolutions[1].Species)
+	if result.Evolutions[1].Species != speciesVaporeon {
+		t.Errorf("Evolutions[1].Species = %q, want %q (alphabetical tiebreak)",
+			result.Evolutions[1].Species, speciesVaporeon)
 	}
 }
 

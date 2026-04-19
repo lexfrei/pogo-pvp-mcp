@@ -104,12 +104,15 @@ func TestReadmeToolCountConsistent(t *testing.T) {
 
 	readme := readRepoFile(t, "README.md")
 
-	const currentToolCount = "twenty-one"
+	const currentToolCount = "twenty-two"
 
 	// Stale number-words from prior milestones. If a new tool
-	// pushes the count past "twenty-one", add the retired word
+	// pushes the count past "twenty-two", add the retired word
 	// here and bump currentToolCount above.
-	stale := []string{"nineteen", "twenty MCP", "twenty `pvp_*`", "twenty currently"}
+	stale := []string{
+		"nineteen", "twenty MCP", "twenty `pvp_*`", "twenty currently",
+		"twenty-one",
+	}
 
 	for _, word := range stale {
 		if strings.Contains(readme, word) {
