@@ -4,22 +4,42 @@ MCP server that will expose a Pokémon GO PvP battle simulator and ranker to
 LLM assistants. The simulation math will live in a companion engine module
 developed alongside this server.
 
-**Status**: early development. Six tools are implemented:
+**Status**: approaching v0.1. Six MCP tools plus a `diff-gm` CLI
+helper are implemented:
 
-- `pvp_rank` — rank one Pokémon in a league/cup by IV and level, with
-  percent-of-best vs the species' global stat-product optimum.
-- `pvp_matchup` — 1v1 simulation returning winner, turns, HP / energy /
-  shields used, and charged-move firing counts.
+- `pvp_rank` — rank one Pokémon in a league/cup by IV and level,
+  with percent-of-best vs the species' global stat-product optimum,
+  a recommended moveset projected from pvpoke's rankings, and a
+  `comparison_to_hundo` block showing the best-case 15/15/15 spread.
+- `pvp_matchup` — 1v1 simulation returning winner, turns, HP / energy
+  / shields used, charged-move firing counts, and the resolved
+  moveset used on each side (so omitted `fast_move` / `charged_moves`
+  get auto-filled from the cup/league recommended build).
 - `pvp_cp_limits` — given species + IVs, return the highest level and
   CP reachable while staying under each PvP league's CP cap.
-- `pvp_meta` — top-N species from pvpoke's overall rankings for a
-  league, including recommended moveset and display stats.
+- `pvp_meta` — top-N species from pvpoke's per-(cup, league)
+  rankings, including recommended moveset, display stats, and a
+  role classification (`lead` / `switch` / `closer` / `flex`) from
+  the per-role pvpoke rankings.
 - `pvp_team_analysis` — evaluate a 3-member team against the sampled
-  meta: per-member battle ratings, hard wins / losses, coverage
-  matrix, and uncovered threats.
-- `pvp_team_builder` — enumerate 3-member teams from a candidate pool,
-  score each against the meta, return the highest-scoring subset
-  (required / banned species filters honoured).
+  meta: per-member battle ratings (averaged across the requested
+  shield scenarios), resolved moveset per member, hard wins /
+  losses, coverage matrix, and uncovered threats.
+- `pvp_team_builder` — enumerate 3-member teams from a candidate
+  pool and score each against a per-scenario rating matrix. The
+  `optimize_for` parameter selects the scoring axis
+  (`overall` / `0s` / `1s` / `2s` / `all_pareto`); `all_pareto`
+  returns up to four teams (best overall plus best-in-class per
+  shield scenario). Required / banned species filters honoured.
+- `diff-gm` (CLI-only, not an MCP tool) — diff the upstream
+  gamemaster against the local cache. Exits non-zero on any
+  difference so cron / CI can alert on unexpected drift. See
+  "Gamemaster drift" below.
+
+Every MCP tool accepts an optional `cup` parameter naming a pvpoke
+cup (`spring`, `retro`, `jungle`, ...); empty resolves to the
+open-league `all` rankings. 404s on unsupported (cup, cap) pairs
+surface as `ErrUnknownCup` rather than silently falling back.
 
 No tagged release exists yet. The GitHub repository rename
 from `pvpoke-mcp` to `pogo-pvp-mcp` is pending, so
@@ -67,6 +87,23 @@ Two filesystem caches live alongside each other by default:
   every (cup, cap) pair exists upstream (Spring Cup only publishes at
   1500); the manager surfaces `rankings.ErrUnknownCup` when upstream
   returns 404.
+
+## Gamemaster drift
+
+`pogo-pvp-mcp diff-gm` compares the upstream pvpoke gamemaster
+against the local cache and prints a human-readable report of
+added / removed / changed species and moves. It does **not** mutate
+the cache. Exits `0` on a clean diff, `1` on any drift — drop it in
+a cron or CI job to catch balance patches the moment they land:
+
+```bash
+pogo-pvp-mcp diff-gm           # fetch upstream, diff vs local cache
+pogo-pvp-mcp diff-gm --against /path/to/older-gamemaster.json
+```
+
+Use `--against` to diff two on-disk snapshots without touching the
+network — useful for historical comparisons after `fetch-gm` has
+already overwritten the cache.
 
 ## Debug HTTP surface
 

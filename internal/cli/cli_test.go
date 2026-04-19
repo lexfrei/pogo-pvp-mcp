@@ -2,6 +2,7 @@ package cli_test
 
 import (
 	"bytes"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -128,6 +129,107 @@ func TestNewRootCommand_ConfigEnvDefault(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "load config") {
 		t.Errorf("error = %v, want to contain 'load config' (env path should have been honoured)", err)
+	}
+}
+
+// TestNewRootCommand_DiffGMNoChanges exercises the diff-gm subcommand
+// end-to-end when upstream and local cache hold the same payload:
+// the command exits 0 and prints the "no changes" line.
+func TestNewRootCommand_DiffGMNoChanges(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(cliFixtureGamemaster))
+	}))
+	defer server.Close()
+
+	cachePath := filepath.Join(t.TempDir(), "gamemaster.json")
+
+	err := os.WriteFile(cachePath, []byte(cliFixtureGamemaster), 0o600)
+	if err != nil {
+		t.Fatalf("seed cache: %v", err)
+	}
+
+	t.Setenv("POGO_PVP_GAMEMASTER_SOURCE", server.URL)
+	t.Setenv("POGO_PVP_GAMEMASTER_LOCAL_PATH", cachePath)
+
+	var stdout, stderr bytes.Buffer
+
+	root := cli.NewRootCommand(&stdout, &stderr)
+	root.SetArgs([]string{"diff-gm"})
+
+	err = root.Execute()
+	if err != nil {
+		t.Fatalf("Execute: %v (stderr=%s)", err, stderr.String())
+	}
+
+	if !strings.Contains(stdout.String(), "no changes") {
+		t.Errorf("stdout = %q, want \"no changes\" line", stdout.String())
+	}
+}
+
+// TestNewRootCommand_DiffGMDetectsDrift seeds an old gamemaster on
+// disk, serves a mutated one upstream, and asserts the command prints
+// the drift summary and exits via ErrDiffDirty.
+func TestNewRootCommand_DiffGMDetectsDrift(t *testing.T) {
+	const mutatedGamemaster = `{
+  "id": "gamemaster",
+  "timestamp": "2026-04-19 00:00:00",
+  "pokemon": [
+    {
+      "dex": 1,
+      "speciesId": "bulbasaur",
+      "speciesName": "Bulbasaur",
+      "baseStats": {"atk": 125, "def": 111, "hp": 128},
+      "types": ["grass", "poison"],
+      "fastMoves": ["VINE_WHIP"],
+      "chargedMoves": ["SLUDGE_BOMB"],
+      "released": true
+    }
+  ],
+  "moves": [
+    {"moveId": "VINE_WHIP", "name": "Vine Whip", "type": "grass", "power": 5, "energy": 0, "energyGain": 8, "cooldown": 1000, "turns": 2},
+    {"moveId": "SLUDGE_BOMB", "name": "Sludge Bomb", "type": "poison", "power": 80, "energy": 50, "energyGain": 0, "cooldown": 500}
+  ]
+}`
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(mutatedGamemaster))
+	}))
+	defer server.Close()
+
+	cachePath := filepath.Join(t.TempDir(), "gamemaster.json")
+
+	err := os.WriteFile(cachePath, []byte(cliFixtureGamemaster), 0o600)
+	if err != nil {
+		t.Fatalf("seed cache: %v", err)
+	}
+
+	t.Setenv("POGO_PVP_GAMEMASTER_SOURCE", server.URL)
+	t.Setenv("POGO_PVP_GAMEMASTER_LOCAL_PATH", cachePath)
+
+	var stdout, stderr bytes.Buffer
+
+	root := cli.NewRootCommand(&stdout, &stderr)
+	root.SetArgs([]string{"diff-gm"})
+
+	err = root.Execute()
+	if !errors.Is(err, cli.ErrDiffDirty) {
+		t.Fatalf("Execute = %v, want wrapping ErrDiffDirty", err)
+	}
+
+	if !strings.Contains(stdout.String(), "bulbasaur") {
+		t.Errorf("stdout = %q, want to mention the changed species", stdout.String())
+	}
+
+	// diff-gm is read-only — the cache must still hold the seeded
+	// content after the command runs, not the mutated upstream.
+	cached, err := os.ReadFile(cachePath)
+	if err != nil {
+		t.Fatalf("read cache: %v", err)
+	}
+	if !strings.Contains(string(cached), `"atk": 118`) {
+		t.Error("diff-gm mutated the cache; Phase F.4 invariant broken")
 	}
 }
 
