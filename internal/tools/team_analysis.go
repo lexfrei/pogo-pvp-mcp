@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 
 	pogopvp "github.com/lexfrei/pogo-pvp-engine"
 	"github.com/lexfrei/pogo-pvp-mcp/internal/gamemaster"
@@ -15,8 +16,11 @@ import (
 // exactly [TeamSize] combatants.
 var ErrTeamSizeMismatch = errors.New("team must have exactly 3 members")
 
-// ErrInvalidShields is returned when the shields slice is neither nil
-// nor of length 2 with values in [0, MaxShields].
+// ErrInvalidShields is returned when the shields slice contains a
+// value outside [0, maxShieldCount] or a duplicate scenario value.
+// Phase E broke the v0.1 "length-2 tuple [team, meta] shields"
+// meaning — the field is now a list of symmetric shield scenarios,
+// averaged across.
 var ErrInvalidShields = errors.New("invalid shields")
 
 // ErrMovesetTooShort is returned when a rankings entry for a meta
@@ -42,11 +46,20 @@ func validateShields(shields []int) error {
 		return nil
 	}
 
+	seen := make(map[int]struct{}, len(shields))
+
 	for i, value := range shields {
 		if value < 0 || value > maxShieldCount {
 			return fmt.Errorf("%w: shields[%d]=%d outside [0, %d]",
 				ErrInvalidShields, i, value, maxShieldCount)
 		}
+
+		if _, dup := seen[value]; dup {
+			return fmt.Errorf("%w: shields[%d]=%d already appeared earlier in the slice",
+				ErrInvalidShields, i, value)
+		}
+
+		seen[value] = struct{}{}
 	}
 
 	return nil
@@ -111,25 +124,50 @@ type TeamMemberAnalysis struct {
 	HardLosses   []string `json:"hard_losses"`
 }
 
-// TeamAnalysisResult is the JSON output contract for pvp_team_analysis.
-// SimulationFailures counts (member, meta) pairs whose engine call
-// returned an error and were skipped for aggregation purposes; a
-// non-zero value means the team score is less trustworthy.
-// SkippedMetaSpecies lists meta entries whose species / moves were
-// not found in the current gamemaster snapshot and were therefore
-// dropped from the simulation (typical for a post-balance-patch
-// cache race between gamemaster and rankings).
-type TeamAnalysisResult struct {
-	League             string               `json:"league"`
-	Cup                string               `json:"cup"`
-	CPCap              int                  `json:"cp_cap"`
-	MetaSize           int                  `json:"meta_size"`
+// TeamAnalysisAggregate bundles the per-scope metrics produced by one
+// simulation sweep (either the multi-scenario mean — "overall" — or
+// one isolated shield scenario). Members carry their AvgRating scoped
+// to this sweep; Coverage / Uncovered / SimulationFailures likewise.
+//
+// SimulationFailures counts (member, opp) pairs whose rating lookup
+// returned ok=false in this scope: for Overall that means every
+// scenario in the scenarios slice failed for that pair (if at least
+// one succeeded the pair contributes its mean and is not counted);
+// for a PerScenario["Ns"] entry that means the single scenario N
+// failed for that pair. The sum over PerScenario entries is not
+// expected to equal Overall — a pair that fails in one scenario but
+// succeeds in another counts in the scenario entry but not in
+// Overall.
+type TeamAnalysisAggregate struct {
 	TeamScore          float64              `json:"team_score"`
 	SimulationFailures int                  `json:"simulation_failures"`
-	SkippedMetaSpecies []string             `json:"skipped_meta_species,omitempty"`
 	PerMember          []TeamMemberAnalysis `json:"per_member"`
 	Coverage           map[string]int       `json:"coverage_matrix"`
 	Uncovered          []string             `json:"uncovered_threats"`
+}
+
+// TeamAnalysisResult is the JSON output contract for pvp_team_analysis.
+// Overall is the mean-of-means aggregate across every shield scenario
+// (same semantics as the post-Phase-E top-level team_score used to
+// carry). PerScenario maps each scenario key ("0s", "1s", "2s") to the
+// same shape run against that single scenario only, so clients can
+// compare team performance under different shield pressure without a
+// second tool call. SkippedMetaSpecies lists meta entries whose
+// species / moves were not found in the current gamemaster snapshot
+// and were therefore dropped from the simulation (typical for a
+// post-balance-patch cache race between gamemaster and rankings).
+//
+// Phase 2B breaks the flat top-level team_score / per_member /
+// coverage_matrix shape — pre-v0.1 rename, no compat layer.
+type TeamAnalysisResult struct {
+	League             string                           `json:"league"`
+	Cup                string                           `json:"cup"`
+	CPCap              int                              `json:"cp_cap"`
+	MetaSize           int                              `json:"meta_size"`
+	Scenarios          []int                            `json:"scenarios"`
+	SkippedMetaSpecies []string                         `json:"skipped_meta_species,omitempty"`
+	Overall            TeamAnalysisAggregate            `json:"overall"`
+	PerScenario        map[string]TeamAnalysisAggregate `json:"per_scenario"`
 }
 
 // TeamAnalysisTool wraps the gamemaster and rankings managers.
@@ -461,52 +499,173 @@ func resolveChargedMoves(snapshot *pogopvp.Gamemaster, ids []string) ([]pogopvp.
 	return out, nil
 }
 
+// teamSimCell is one (member, opponent, scenario) simulation result
+// in teamSimMatrix. OK=false means the engine errored for that
+// triple and Rating must not be consumed.
+type teamSimCell struct {
+	Rating int
+	OK     bool
+}
+
+// teamSimMatrix is a 3D indexable table of teamSimCell with shape
+// [len(team)][len(meta)][len(scenarios)]. Computed once per
+// runTeamAnalysis call; Overall and each PerScenario aggregate are
+// derived from the same cells with different rating-lookup rules so
+// no Simulate call is duplicated.
+type teamSimMatrix [][][]teamSimCell
+
 // runTeamAnalysis simulates the full cartesian product of user team ×
-// meta, aggregates ratings, and builds the output struct. Each
-// (member, meta) pair is simulated exactly once; the rating feeds
-// both the per-member stats and the team-wide coverage map. Checks
-// ctx.Err() at each outer iteration so a client disconnect aborts
-// the sweep.
+// meta × shield scenarios exactly once and projects the result into
+// the two-tier output: Overall (averaged across scenarios per
+// (member, opponent)) + PerScenario (single-scenario view per shield
+// count in scenarios). Checks ctx.Err() at each outer iteration so a
+// client disconnect aborts the sweep.
+//
+// PerScenario is keyed as "Ns" (e.g. "0s", "1s", "2s"). Overall uses
+// the averaged rating semantics introduced in Phase E; PerScenario
+// entries use the per-scenario rating directly. The single-pass
+// teamSimMatrix build avoids the 2× regression the previous draft
+// would have caused.
 func runTeamAnalysis(
 	ctx context.Context,
 	team, meta []pogopvp.Combatant,
 	metaEntries []rankings.RankingEntry,
 	league string, cpCap, topN int, scenarios []int,
 ) TeamAnalysisResult {
+	matrix := simulateTeamMatrix(ctx, team, meta, scenarios)
+
+	overall := aggregateFromRatings(team, metaEntries, func(i, j int) (int, bool) {
+		return averageMatrixRow(matrix[i][j])
+	})
+
+	perScenario := make(map[string]TeamAnalysisAggregate, len(scenarios))
+
+	for k, scenario := range scenarios {
+		perScenario[scenarioKey(scenario)] = aggregateFromRatings(
+			team, metaEntries, func(i, j int) (int, bool) {
+				cell := matrix[i][j][k]
+
+				return cell.Rating, cell.OK
+			})
+	}
+
+	return TeamAnalysisResult{
+		League:      league,
+		CPCap:       cpCap,
+		MetaSize:    topN,
+		Scenarios:   append([]int(nil), scenarios...),
+		Overall:     overall,
+		PerScenario: perScenario,
+	}
+}
+
+// simulateTeamMatrix runs ratingFor for every (member, opponent,
+// scenario) triple, storing each result in the 3D matrix. Each cell
+// is simulated exactly once. Ctx.Err() is polled at each outer
+// iteration so cancellation promptly aborts the sweep.
+func simulateTeamMatrix(
+	ctx context.Context,
+	team, meta []pogopvp.Combatant,
+	scenarios []int,
+) teamSimMatrix {
+	matrix := make(teamSimMatrix, len(team))
+	for i := range team {
+		matrix[i] = make([][]teamSimCell, len(meta))
+		for j := range meta {
+			matrix[i][j] = make([]teamSimCell, len(scenarios))
+		}
+	}
+
+	for i := range team {
+		if ctx.Err() != nil {
+			return matrix
+		}
+
+		for oppIdx := range meta {
+			for scenarioIdx, shields := range scenarios {
+				attacker := team[i]
+				defender := meta[oppIdx]
+				attacker.Shields = shields
+				defender.Shields = shields
+
+				rating, err := ratingFor(&attacker, &defender)
+				if err != nil {
+					continue
+				}
+
+				matrix[i][oppIdx][scenarioIdx] = teamSimCell{Rating: rating, OK: true}
+			}
+		}
+	}
+
+	return matrix
+}
+
+// averageMatrixRow returns the mean rating of the OK cells in a
+// (member, opponent) scenarios row. ok=false when every cell errored
+// so the pair is counted as a failure rather than silently injecting
+// the midpoint — matches averageRatingAcrossScenarios semantics.
+func averageMatrixRow(row []teamSimCell) (int, bool) {
+	var (
+		sum     int
+		counted int
+	)
+
+	for _, cell := range row {
+		if !cell.OK {
+			continue
+		}
+
+		sum += cell.Rating
+		counted++
+	}
+
+	if counted == 0 {
+		return 0, false
+	}
+
+	return sum / counted, true
+}
+
+// aggregateFromRatings builds one TeamAnalysisAggregate from a
+// caller-supplied (memberIdx, oppIdx) → (rating, ok) rating lookup.
+// Overall passes an averager over the scenarios row; each
+// PerScenario entry passes a single-scenario cell accessor. Keeping
+// the aggregation logic in one place guarantees Overall and per-
+// scenario views compute their team_score / coverage / failures
+// consistently.
+func aggregateFromRatings(
+	team []pogopvp.Combatant,
+	metaEntries []rankings.RankingEntry,
+	ratings func(memberIdx, oppIdx int) (int, bool),
+) TeamAnalysisAggregate {
 	perMember := make([]TeamMemberAnalysis, len(team))
-	coverage := make(map[string]int, len(meta))
+	coverage := make(map[string]int, len(metaEntries))
 
 	var (
 		overallSum float64
 		failures   int
 	)
 
-	for memberIdx := range team {
-		if ctx.Err() != nil {
-			break
-		}
-
-		tally := analyzeMember(&team[memberIdx], meta, metaEntries, coverage, scenarios)
-		perMember[memberIdx] = tally.Analysis
+	for i := range team {
+		tally := aggregateOneMember(&team[i], metaEntries, coverage, i, ratings)
+		perMember[i] = tally.Analysis
 		overallSum += tally.RatingSum
 		failures += tally.Failures
 	}
 
 	// Successful matchups count — failures are excluded from both
-	// numerator (analyzeMember skipped them) and denominator so the
+	// numerator (aggregateOneMember skipped them) and denominator so the
 	// team_score is the average over pairs that actually produced a
 	// rating, not depressed toward zero by engine errors.
-	successful := len(team)*len(meta) - failures
+	successful := len(team)*len(metaEntries) - failures
 
 	var teamScore float64
 	if successful > 0 {
 		teamScore = overallSum / float64(successful)
 	}
 
-	return TeamAnalysisResult{
-		League:             league,
-		CPCap:              cpCap,
-		MetaSize:           topN,
+	return TeamAnalysisAggregate{
 		TeamScore:          teamScore,
 		SimulationFailures: failures,
 		PerMember:          perMember,
@@ -515,29 +674,17 @@ func runTeamAnalysis(
 	}
 }
 
-// memberTally bundles the per-member analysis, the raw sum of ratings
-// (for the overall team score), and the count of failed Simulate
-// calls so runTeamAnalysis can surface simulation issues rather than
-// burying them behind the tie-midpoint fallback.
-type memberTally struct {
-	Analysis  TeamMemberAnalysis
-	RatingSum float64
-	Failures  int
-}
-
-// analyzeMember simulates one team member against the full meta slice
-// and returns its memberTally. The caller-supplied coverage map is
-// updated in place with the best rating-per-opponent seen so far.
-// Each (member, opponent) pair is simulated once per scenario in
-// `scenarios`; the rating used for aggregation is the mean across
-// scenarios. A failed scenario skips the rating for that (pair,
-// scenario) but does not skip the whole pair.
-func analyzeMember(
+// aggregateOneMember fills the TeamMemberAnalysis + coverage
+// contribution for one team member by iterating the meta entries
+// via the ratings function. Split out of aggregateFromRatings to
+// keep the latter under funlen and to let the test layer pin one
+// member's aggregation independently.
+func aggregateOneMember(
 	member *pogopvp.Combatant,
-	meta []pogopvp.Combatant,
 	metaEntries []rankings.RankingEntry,
 	coverage map[string]int,
-	scenarios []int,
+	memberIdx int,
+	ratings func(memberIdx, oppIdx int) (int, bool),
 ) memberTally {
 	analysis := TeamMemberAnalysis{
 		Species:      member.Species.ID,
@@ -550,8 +697,8 @@ func analyzeMember(
 		failures  int
 	)
 
-	for oppIdx := range meta {
-		rating, ok := averageRatingAcrossScenarios(member, &meta[oppIdx], scenarios)
+	for oppIdx := range metaEntries {
+		rating, ok := ratings(memberIdx, oppIdx)
 		if !ok {
 			failures++
 
@@ -568,12 +715,28 @@ func analyzeMember(
 		}
 	}
 
-	successful := len(meta) - failures
+	successful := len(metaEntries) - failures
 	if successful > 0 {
 		analysis.AvgRating = memberSum / float64(successful)
 	}
 
 	return memberTally{Analysis: analysis, RatingSum: memberSum, Failures: failures}
+}
+
+// scenarioKey formats a shield count as the "Ns" key used in the
+// per-scenario map (e.g. 0 → "0s"). Zero-alloc via strconv.
+func scenarioKey(shields int) string {
+	return strconv.Itoa(shields) + "s"
+}
+
+// memberTally bundles the per-member analysis, the raw sum of ratings
+// (for the overall team score), and the count of failed Simulate
+// calls so runTeamAnalysis can surface simulation issues rather than
+// burying them behind the tie-midpoint fallback.
+type memberTally struct {
+	Analysis  TeamMemberAnalysis
+	RatingSum float64
+	Failures  int
 }
 
 // averageRatingAcrossScenarios runs ratingFor with both sides' shield
