@@ -44,7 +44,7 @@ type TeamBuilderParams struct {
 	League      string      `json:"league" jsonschema:"little|great|ultra|master"`
 	Cup         string      `json:"cup,omitempty" jsonschema:"cup id from pvpoke (e.g. spring, retro); empty = open-league all"`
 	TopN        int         `json:"top_n,omitempty" jsonschema:"meta size for scoring (default 30)"`
-	Shields     []int       `json:"shields,omitempty" jsonschema:"[team, meta] shield counts; omit for [1, 1]; each 0..2"`
+	Shields     []int       `json:"shields,omitempty" jsonschema:"symmetric shield scenarios; omit for [1]; each 0..2"`
 	MaxResults  int         `json:"max_results,omitempty" jsonschema:"how many top teams to return (default 5)"`
 	Required    []string    `json:"required,omitempty" jsonschema:"species ids that must appear in the returned team"`
 	Banned      []string    `json:"banned,omitempty" jsonschema:"species ids to exclude from the pool"`
@@ -225,7 +225,7 @@ func (tool *TeamBuilderTool) buildTeamBuilderInputs(
 ) (*teamBuilderInputs, error) {
 	defaults := resolveTeamDefaults(params.Shields, params.TopN)
 
-	pool, err := tool.preparePool(snapshot, params, defaults.TeamShields)
+	pool, err := tool.preparePool(snapshot, params, defaults.Scenarios[0])
 	if err != nil {
 		return nil, err
 	}
@@ -333,7 +333,7 @@ func (tool *TeamBuilderTool) prepareMeta(
 
 	metaEntries := entries[:min(defaults.TopN, len(entries))]
 
-	combatants, _, _, err := buildMetaCombatants(snapshot, metaEntries, cpCap, defaults.MetaShields)
+	combatants, _, _, err := buildMetaCombatants(snapshot, metaEntries, cpCap, defaults.Scenarios[0])
 
 	return combatants, err
 }
