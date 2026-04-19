@@ -60,6 +60,9 @@ The MCP server is a thin wrapper around the engine. The hot shape: an MCP tool h
 4. `pvp_meta` — trimmed top-N rankings slice from pvpoke's pre-computed JSON.
 5. `pvp_team_analysis` — simulates team × top-N-meta, aggregates per-member rating, coverage matrix, uncovered threats.
 6. `pvp_team_builder` — enumerates C(pool, 3) triples from a candidate pool, scores each against meta, returns top-K.
+7. `pvp_species_info` — read-only gamemaster lookup: base stats, move lists with per-move legacy flags, evolution chain, best-effort rank per standard league.
+8. `pvp_move_info` — read-only gamemaster lookup: type/power/energy/duration plus the reverse index of every species on which this move is flagged legacy.
+9. `pvp_type_matchup` — wraps `pogopvp.TypeEffectiveness` with a human-readable calculation breakdown; validates the 18 canonical pvpoke types and rejects unknowns with `ErrUnknownType`.
 
 ### Non-obvious invariants (you will break these)
 
