@@ -116,5 +116,5 @@ Phase X-II landed: `CombatantOptions` extended to the info-path tools (`pvp_rank
 ## Known limitations (roadmap, not bugs)
 
 - The `pvp_meta` / `pvp_team_analysis` / `pvp_team_builder` tools depend on pvpoke's pre-computed rankings JSON. A full engine-side ranker would eliminate that dependency.
-- Battle simulator does not model Charge-Move-Priority or shadow atk/def multipliers; charged throws resolve after fast damage on the shared tick. Documented on `Simulate`'s godoc.
+- Battle simulator does not model Charge-Move-Priority; charged throws resolve after fast damage on the shared tick. Shadow ATK × 1.2 / DEF ÷ 1.2 multipliers ARE applied via `pogopvp.Combatant.IsShadow` (Phase R4.7; engine commit in `pogo-pvp-engine` master). `buildEngineCombatant` in `matchup.go` sets `IsShadow = Options.Shadow || strings.HasSuffix(resolvedID, "_shadow")` so both the `Options.Shadow=true` flag path and the dual-convention `_shadow` suffix path surface the multipliers consistently. Meta combatants in `team_analysis.go` set `IsShadow = strings.HasSuffix(entry.SpeciesID, "_shadow")` for pvpoke-published shadow rankings. Documented on `Simulate`'s godoc.
 - `team_builder` is single-threaded. A worker-pool version is planned once the quadratic work is bounded (already helped by the rating matrix).

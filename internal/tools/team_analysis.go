@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 
 	pogopvp "github.com/lexfrei/pogo-pvp-engine"
 	"github.com/lexfrei/pogo-pvp-mcp/internal/gamemaster"
@@ -557,6 +558,7 @@ func buildOneMetaCombatant(
 		FastMove:     fast,
 		ChargedMoves: charged,
 		Shields:      shields,
+		IsShadow:     strings.HasSuffix(entry.SpeciesID, shadowSuffix),
 	}, nil
 }
 
