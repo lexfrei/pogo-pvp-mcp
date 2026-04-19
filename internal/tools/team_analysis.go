@@ -673,16 +673,25 @@ func ratingFor(attacker, defender *pogopvp.Combatant) (int, error) {
 		return ratingMidpoint, fmt.Errorf("simulate: %w", err)
 	}
 
+	return ratingFromResult(attacker, defender, &result), nil
+}
+
+// ratingFromResult applies the same 0..1000 rating formula as
+// ratingFor but from an already-computed BattleResult. Callers
+// that need both the remaining HP pair and the rating (e.g.
+// counter_finder) can avoid a second Simulate call by invoking
+// this helper directly.
+func ratingFromResult(attacker, defender *pogopvp.Combatant, result *pogopvp.BattleResult) int {
 	attMax := initialHP(attacker)
 	defMax := initialHP(defender)
 
 	switch result.Winner {
 	case 0:
-		return ratingMidpoint + scaleHP(result.HPRemaining[0], attMax), nil
+		return ratingMidpoint + scaleHP(result.HPRemaining[0], attMax)
 	case 1:
-		return ratingMidpoint - scaleHP(result.HPRemaining[1], defMax), nil
+		return ratingMidpoint - scaleHP(result.HPRemaining[1], defMax)
 	default:
-		return ratingMidpoint, nil
+		return ratingMidpoint
 	}
 }
 
