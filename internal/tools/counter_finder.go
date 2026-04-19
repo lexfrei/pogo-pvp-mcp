@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"sort"
-	"strconv"
 
 	pogopvp "github.com/lexfrei/pogo-pvp-engine"
 	"github.com/lexfrei/pogo-pvp-mcp/internal/gamemaster"
@@ -27,14 +26,27 @@ type CounterFinderParams struct {
 	DisallowLegacy bool        `json:"disallow_legacy,omitempty" jsonschema:"reject legacy moves; default false"`
 }
 
-// CounterEntry is one scored counter in the result. ScenarioBreakdown
-// reports the per-shield rating (keys "0", "1", "2") for diagnostics.
+// CounterScenarioResult is the per-scenario detail inside a
+// CounterEntry: the integer battle rating plus post-simulate
+// remaining HP for both sides. A scalar "remaining HP" is
+// meaningless across shield scenarios, so we surface every
+// scenario individually rather than mixing an averaged rating
+// with a last-scenario HP pair.
+type CounterScenarioResult struct {
+	Shields            int `json:"shields"`
+	Rating             int `json:"rating"`
+	HPRemainingCounter int `json:"hp_remaining_counter"`
+	HPRemainingTarget  int `json:"hp_remaining_target"`
+}
+
+// CounterEntry is one scored counter in the result. BattleRating
+// is the mean across the scenario slice; ScenarioResults carries
+// the per-scenario breakdown aligned with
+// CounterFinderResult.Scenarios (same order, same length).
 type CounterEntry struct {
-	Counter            ResolvedCombatant `json:"counter"`
-	BattleRating       int               `json:"battle_rating"`
-	ScenarioBreakdown  map[string]int    `json:"scenario_breakdown"`
-	HPRemainingCounter int               `json:"hp_remaining_counter"`
-	HPRemainingTarget  int               `json:"hp_remaining_target"`
+	Counter         ResolvedCombatant       `json:"counter"`
+	BattleRating    int                     `json:"battle_rating"`
+	ScenarioResults []CounterScenarioResult `json:"scenario_results"`
 }
 
 // CounterFinderResult is the JSON output contract.
@@ -74,6 +86,34 @@ func (tool *CounterFinderTool) Handler() mcp.ToolHandlerFor[CounterFinderParams,
 	return tool.handle
 }
 
+// validateCounterFinderParams runs the cheap pre-flight checks
+// (cancel, TopN/MetaTopN ranges, FromPool size under MaxPoolSize,
+// shields shape) before any gamemaster or rankings lookup. Keeps
+// the main handler body within funlen.
+func validateCounterFinderParams(ctx context.Context, params *CounterFinderParams) error {
+	err := ctx.Err()
+	if err != nil {
+		return fmt.Errorf("counter_finder cancelled: %w", err)
+	}
+
+	if params.TopN < 0 {
+		return fmt.Errorf("%w: top_n %d must be non-negative",
+			ErrInvalidTopN, params.TopN)
+	}
+
+	if params.MetaTopN < 0 {
+		return fmt.Errorf("%w: meta_top_n %d must be non-negative",
+			ErrInvalidTopN, params.MetaTopN)
+	}
+
+	if len(params.FromPool) > MaxPoolSize {
+		return fmt.Errorf("%w: from_pool size %d exceeds MaxPoolSize %d",
+			ErrPoolTooLarge, len(params.FromPool), MaxPoolSize)
+	}
+
+	return validateShields(params.Shields)
+}
+
 // defaultCounterFinderTopN is the counter count returned when the
 // caller leaves TopN at zero.
 const defaultCounterFinderTopN = 5
@@ -103,17 +143,7 @@ func (tool *CounterFinderTool) handle(
 	_ *mcp.CallToolRequest,
 	params CounterFinderParams,
 ) (*mcp.CallToolResult, CounterFinderResult, error) {
-	err := ctx.Err()
-	if err != nil {
-		return nil, CounterFinderResult{}, fmt.Errorf("counter_finder cancelled: %w", err)
-	}
-
-	if params.TopN < 0 {
-		return nil, CounterFinderResult{}, fmt.Errorf("%w: %d must be non-negative",
-			ErrInvalidTopN, params.TopN)
-	}
-
-	err = validateShields(params.Shields)
+	err := validateCounterFinderParams(ctx, &params)
 	if err != nil {
 		return nil, CounterFinderResult{}, err
 	}
@@ -317,19 +347,21 @@ func (tool *CounterFinderTool) scoreCandidates(
 }
 
 // scoreCounter simulates one candidate × target across each shield
-// scenario, averaging the rating and collecting the per-scenario
-// breakdown. Returns ok=false when every scenario failed.
+// scenario via a single pogopvp.Simulate call per scenario (no
+// double-dispatch through ratingFor). Returns ok=false when every
+// scenario failed to simulate; otherwise BattleRating is the mean
+// rating over the scenarios that did simulate, and ScenarioResults
+// is aligned 1:1 with the scenarios slice for the scenarios that
+// succeeded.
 func scoreCounter(
 	candidate, target *pogopvp.Combatant,
 	spec *Combatant, scenarios []int,
 ) (CounterEntry, bool) {
-	breakdown := make(map[string]int, len(scenarios))
+	results := make([]CounterScenarioResult, 0, len(scenarios))
 
 	var (
-		sum         int
-		counted     int
-		lastCounter int
-		lastTarget  int
+		sum     int
+		counted int
 	)
 
 	for _, shields := range scenarios {
@@ -338,18 +370,19 @@ func scoreCounter(
 		att.Shields = shields
 		def.Shields = shields
 
-		rating, err := ratingFor(&att, &def)
+		result, err := pogopvp.Simulate(&att, &def, pogopvp.BattleOptions{})
 		if err != nil {
 			continue
 		}
 
-		result, simErr := pogopvp.Simulate(&att, &def, pogopvp.BattleOptions{})
-		if simErr == nil {
-			lastCounter = result.HPRemaining[0]
-			lastTarget = result.HPRemaining[1]
-		}
+		rating := scenarioRating(&att, &def, &result)
 
-		breakdown[strconv.Itoa(shields)] = rating
+		results = append(results, CounterScenarioResult{
+			Shields:            shields,
+			Rating:             rating,
+			HPRemainingCounter: result.HPRemaining[0],
+			HPRemainingTarget:  result.HPRemaining[1],
+		})
 		sum += rating
 		counted++
 	}
@@ -359,10 +392,29 @@ func scoreCounter(
 	}
 
 	return CounterEntry{
-		Counter:            resolvedFromSpec(spec),
-		BattleRating:       sum / counted,
-		ScenarioBreakdown:  breakdown,
-		HPRemainingCounter: lastCounter,
-		HPRemainingTarget:  lastTarget,
+		Counter:         resolvedFromSpec(spec),
+		BattleRating:    sum / counted,
+		ScenarioResults: results,
 	}, true
+}
+
+// scenarioRating computes the same 0..1000 rating that
+// team_analysis.ratingFor produces, but from an existing
+// BattleResult rather than re-running Simulate. Duplicates the
+// rating formula on purpose — factoring a shared helper would
+// couple counter_finder to the team_analysis scoring internals.
+func scenarioRating(
+	attacker, defender *pogopvp.Combatant, result *pogopvp.BattleResult,
+) int {
+	attMax := initialHP(attacker)
+	defMax := initialHP(defender)
+
+	switch result.Winner {
+	case 0:
+		return ratingMidpoint + scaleHP(result.HPRemaining[0], attMax)
+	case 1:
+		return ratingMidpoint - scaleHP(result.HPRemaining[1], defMax)
+	default:
+		return ratingMidpoint
+	}
 }
