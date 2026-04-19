@@ -372,23 +372,22 @@ func TestEvolutionTargetTool_BranchingChainTarget(t *testing.T) {
 	}
 }
 
-// TestEvolutionTargetTool_ThresholdUnreachable pins the ErrThresholdUnreachable
-// path. Requesting 100% threshold on a fixture species under GL admits
-// only the exact best-spread IV — FP comparison with the percent math
-// can push it below 100% even for the winning spread. The 100.0001%
-// request forces the error path deterministically.
-func TestEvolutionTargetTool_ThresholdUnreachable(t *testing.T) {
+// TestEvolutionTargetTool_ThresholdAbove100Rejected pins the upper
+// bound on TargetPercentOfBest: any value strictly above 100 is
+// rejected with ErrInvalidTargetPercent before the sweep runs, since
+// no IV spread can by definition exceed the best spread's stat
+// product. This is the upfront-validation path; ErrThresholdUnreachable
+// remains as a defensive sentinel for future scenarios (e.g. a cup
+// filter one day excluding the winning IV range).
+func TestEvolutionTargetTool_ThresholdAbove100Rejected(t *testing.T) {
 	t.Parallel()
 
 	tool := newEvolutionTargetTool(t, evolutionFixtureGamemaster)
 	handler := tool.Handler()
 
 	_, _, err := handler(t.Context(), nil, tools.EvolutionTargetParams{
-		TargetSpecies: speciesBlastoise,
-		League:        leagueGreat,
-		// Tighten just above 100 — no IV can exceed the best spread
-		// by definition, so the sweep finds no candidate clearing
-		// the bar.
+		TargetSpecies:       speciesBlastoise,
+		League:              leagueGreat,
 		TargetPercentOfBest: 100.01,
 	})
 	if !errors.Is(err, tools.ErrInvalidTargetPercent) {
