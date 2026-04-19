@@ -11,8 +11,14 @@ import (
 )
 
 // SpeciesInfoParams is the JSON input contract for pvp_species_info.
+// Shadow variants are addressed by setting Options.Shadow=true; the
+// legacy "medicham_shadow" suffix is still tolerated. Shadow rows in
+// pvpoke carry their OWN LegacyMoves list and (sometimes) distinct
+// rankings, so Options.Shadow is load-bearing. Lucky / Purified are
+// accepted for Options-struct symmetry but no-op here.
 type SpeciesInfoParams struct {
-	Species string `json:"species" jsonschema:"species id in the pvpoke gamemaster (e.g. \"medicham\")"`
+	Species string           `json:"species" jsonschema:"species id in the pvpoke gamemaster"`
+	Options CombatantOptions `json:"options,omitzero" jsonschema:"shadow / lucky / purified flags; only Shadow is load-bearing here"`
 }
 
 // SpeciesInfoMoveRef is the per-move projection in SpeciesInfoResult's
@@ -40,21 +46,28 @@ type SpeciesLeagueRank struct {
 	Rating int    `json:"rating"`
 }
 
-// SpeciesInfoResult is the JSON output for pvp_species_info.
+// SpeciesInfoResult is the JSON output for pvp_species_info. Species
+// echoes the resolved pvpoke id so Options.Shadow=true with a base
+// input ("medicham") produces Species="medicham_shadow" when the
+// shadow row is published. ShadowVariantMissing=true signals that
+// Options.Shadow was set but pvpoke has no dedicated shadow entry —
+// LegacyMoves and league rankings then come from the base species.
 type SpeciesInfoResult struct {
-	Species      string               `json:"species"`
-	Name         string               `json:"name"`
-	Dex          int                  `json:"dex"`
-	Types        []string             `json:"types"`
-	BaseStats    SpeciesBaseStats     `json:"base_stats"`
-	FastMoves    []SpeciesInfoMoveRef `json:"fast_moves"`
-	ChargedMoves []SpeciesInfoMoveRef `json:"charged_moves"`
-	LegacyMoves  []string             `json:"legacy_moves"`
-	Evolutions   []string             `json:"evolutions"`
-	PreEvolution string               `json:"pre_evolution,omitempty"`
-	Tags         []string             `json:"tags"`
-	Released     bool                 `json:"released"`
-	LeagueRanks  []SpeciesLeagueRank  `json:"league_ranks,omitempty"`
+	Species              string               `json:"species"`
+	RequestedSpeciesID   string               `json:"requested_species_id,omitempty"`
+	Name                 string               `json:"name"`
+	Dex                  int                  `json:"dex"`
+	Types                []string             `json:"types"`
+	BaseStats            SpeciesBaseStats     `json:"base_stats"`
+	FastMoves            []SpeciesInfoMoveRef `json:"fast_moves"`
+	ChargedMoves         []SpeciesInfoMoveRef `json:"charged_moves"`
+	LegacyMoves          []string             `json:"legacy_moves"`
+	Evolutions           []string             `json:"evolutions"`
+	PreEvolution         string               `json:"pre_evolution,omitempty"`
+	Tags                 []string             `json:"tags"`
+	Released             bool                 `json:"released"`
+	LeagueRanks          []SpeciesLeagueRank  `json:"league_ranks,omitempty"`
+	ShadowVariantMissing bool                 `json:"shadow_variant_missing,omitempty"`
 }
 
 // SpeciesBaseStats mirrors pogopvp.BaseStats with JSON-friendly tags.
@@ -123,25 +136,27 @@ func (tool *SpeciesInfoTool) handle(
 		return nil, SpeciesInfoResult{}, ErrGamemasterNotLoaded
 	}
 
-	species, ok := snapshot.Pokemon[params.Species]
+	species, _, shadowMissing, ok := resolveSpeciesLookup(snapshot, params.Species, params.Options)
 	if !ok {
 		return nil, SpeciesInfoResult{}, fmt.Errorf("%w: %q", ErrUnknownSpecies, params.Species)
 	}
 
 	result := SpeciesInfoResult{
-		Species:      species.ID,
-		Name:         species.Name,
-		Dex:          species.Dex,
-		Types:        nonNilStrings(species.Types),
-		BaseStats:    SpeciesBaseStats{Atk: species.BaseStats.Atk, Def: species.BaseStats.Def, HP: species.BaseStats.HP},
-		FastMoves:    projectSpeciesMoves(snapshot, &species, species.FastMoves),
-		ChargedMoves: projectSpeciesMoves(snapshot, &species, species.ChargedMoves),
-		LegacyMoves:  nonNilStrings(species.LegacyMoves),
-		Evolutions:   nonNilStrings(species.Evolutions),
-		PreEvolution: species.PreEvolution,
-		Tags:         nonNilStrings(species.Tags),
-		Released:     species.Released,
-		LeagueRanks:  lookupLeagueRanks(ctx, tool.rankings, species.ID),
+		Species:              species.ID,
+		RequestedSpeciesID:   params.Species,
+		Name:                 species.Name,
+		Dex:                  species.Dex,
+		Types:                nonNilStrings(species.Types),
+		BaseStats:            SpeciesBaseStats{Atk: species.BaseStats.Atk, Def: species.BaseStats.Def, HP: species.BaseStats.HP},
+		FastMoves:            projectSpeciesMoves(snapshot, &species, species.FastMoves),
+		ChargedMoves:         projectSpeciesMoves(snapshot, &species, species.ChargedMoves),
+		LegacyMoves:          nonNilStrings(species.LegacyMoves),
+		Evolutions:           nonNilStrings(species.Evolutions),
+		PreEvolution:         species.PreEvolution,
+		Tags:                 nonNilStrings(species.Tags),
+		Released:             species.Released,
+		LeagueRanks:          lookupLeagueRanks(ctx, tool.rankings, species.ID),
+		ShadowVariantMissing: shadowMissing,
 	}
 
 	return nil, result, nil

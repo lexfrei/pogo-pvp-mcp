@@ -10,30 +10,38 @@ import (
 )
 
 // LevelFromCPParams is the JSON input contract for pvp_level_from_cp.
-// Shadow / purified variants ride on the species id suffix convention
-// (e.g. "medicham_shadow") — no separate param. XL allows levels
-// above NoXLMaxLevel (40); default false.
+// Shadow variants are addressed by setting Options.Shadow=true; the
+// legacy "medicham_shadow" suffix is still tolerated for backward
+// compatibility (see resolveSpeciesLookup's TrimSuffix). Lucky /
+// Purified are accepted for Options-struct symmetry across tools
+// but have no effect on CP inversion math. XL allows levels above
+// NoXLMaxLevel (40); default false.
 type LevelFromCPParams struct {
-	Species string `json:"species" jsonschema:"species id in the pvpoke gamemaster (shadow: \"medicham_shadow\")"`
-	IV      [3]int `json:"iv" jsonschema:"individual values [atk, def, sta]; each 0..15"`
-	CP      int    `json:"cp" jsonschema:"the observed CP to invert back into a level"`
-	XL      bool   `json:"xl,omitempty" jsonschema:"allow XL candy levels above 40"`
+	Species string           `json:"species" jsonschema:"species id in the pvpoke gamemaster"`
+	IV      [3]int           `json:"iv" jsonschema:"individual values [atk, def, sta]; each 0..15"`
+	CP      int              `json:"cp" jsonschema:"the observed CP to invert back into a level"`
+	XL      bool             `json:"xl,omitempty" jsonschema:"allow XL candy levels above 40"`
+	Options CombatantOptions `json:"options,omitzero" jsonschema:"shadow / lucky / purified flags; only Shadow is load-bearing here"`
 }
 
 // LevelFromCPResult reports the highest level (on the 0.5 grid) at
 // which (species, iv) reaches CP ≤ the requested target. Exact is
 // true when the level's CP equals the requested CP; otherwise the
 // returned level is the greatest one that still fits under target.
+// ResolvedSpeciesID / ShadowVariantMissing echo the shadow-aware
+// lookup (see resolveSpeciesLookup).
 type LevelFromCPResult struct {
-	Species     string  `json:"species"`
-	IV          [3]int  `json:"iv"`
-	Level       float64 `json:"level"`
-	Exact       bool    `json:"exact"`
-	CP          int     `json:"cp"`
-	Atk         float64 `json:"atk"`
-	Def         float64 `json:"def"`
-	HP          int     `json:"hp"`
-	StatProduct float64 `json:"stat_product"`
+	Species              string  `json:"species"`
+	ResolvedSpeciesID    string  `json:"resolved_species_id,omitempty"`
+	IV                   [3]int  `json:"iv"`
+	Level                float64 `json:"level"`
+	Exact                bool    `json:"exact"`
+	CP                   int     `json:"cp"`
+	Atk                  float64 `json:"atk"`
+	Def                  float64 `json:"def"`
+	HP                   int     `json:"hp"`
+	StatProduct          float64 `json:"stat_product"`
+	ShadowVariantMissing bool    `json:"shadow_variant_missing,omitempty"`
 }
 
 // LevelFromCPTool is a thin wrapper around pogopvp.LevelForCP. The
@@ -85,7 +93,7 @@ func (tool *LevelFromCPTool) handle(
 		return nil, LevelFromCPResult{}, ErrGamemasterNotLoaded
 	}
 
-	species, ok := snapshot.Pokemon[params.Species]
+	species, resolvedID, shadowMissing, ok := resolveSpeciesLookup(snapshot, params.Species, params.Options)
 	if !ok {
 		return nil, LevelFromCPResult{}, fmt.Errorf("%w: %q", ErrUnknownSpecies, params.Species)
 	}
@@ -109,14 +117,16 @@ func (tool *LevelFromCPTool) handle(
 	stats := pogopvp.ComputeStats(species.BaseStats, ivs, cpm)
 
 	return nil, LevelFromCPResult{
-		Species:     params.Species,
-		IV:          params.IV,
-		Level:       result.Level,
-		Exact:       result.Exact,
-		CP:          result.CP,
-		Atk:         stats.Atk,
-		Def:         stats.Def,
-		HP:          stats.HP,
-		StatProduct: pogopvp.ComputeStatProduct(stats),
+		Species:              params.Species,
+		ResolvedSpeciesID:    resolvedID,
+		IV:                   params.IV,
+		Level:                result.Level,
+		Exact:                result.Exact,
+		CP:                   result.CP,
+		Atk:                  stats.Atk,
+		Def:                  stats.Def,
+		HP:                   stats.HP,
+		StatProduct:          pogopvp.ComputeStatProduct(stats),
+		ShadowVariantMissing: shadowMissing,
 	}, nil
 }

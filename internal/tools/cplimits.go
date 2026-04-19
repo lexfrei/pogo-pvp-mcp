@@ -18,10 +18,17 @@ import (
 var cpLimitLeagues = standardLeagues[:len(standardLeagues)-1]
 
 // CPLimitsParams is the JSON input contract for pvp_cp_limits.
+// Shadow variants are addressed by setting Options.Shadow=true; the
+// legacy "medicham_shadow" suffix is still tolerated. Lucky /
+// Purified accepted for Options-struct symmetry but no-op here (CP
+// math is stat-driven; shadow stats are identical to base in the
+// pvpoke gamemaster, so Options.Shadow only affects which entry is
+// looked up, not the CP number).
 type CPLimitsParams struct {
-	Species string `json:"species" jsonschema:"species id in the pvpoke gamemaster (shadow variants use e.g. \"medicham_shadow\")"`
-	IV      [3]int `json:"iv" jsonschema:"individual values in [atk, def, sta] order, each 0..15"`
-	XL      bool   `json:"xl,omitempty" jsonschema:"allow XL candy levels above 40 — matches pvp_rank's XL flag semantics"`
+	Species string           `json:"species" jsonschema:"species id in the pvpoke gamemaster"`
+	IV      [3]int           `json:"iv" jsonschema:"individual values in [atk, def, sta] order, each 0..15"`
+	XL      bool             `json:"xl,omitempty" jsonschema:"allow XL candy levels above 40 — matches pvp_rank's XL flag semantics"`
+	Options CombatantOptions `json:"options,omitzero" jsonschema:"shadow / lucky / purified flags; only Shadow is load-bearing here"`
 }
 
 // LeagueCPLimit reports the best level + CP a Pokémon with given IVs
@@ -40,12 +47,15 @@ type LeagueCPLimit struct {
 // CPLimitsResult is the JSON output contract for pvp_cp_limits. XL
 // echoes the request flag so callers can distinguish "level 40, no XL
 // candy" from "level 40, XL allowed but nothing above 40 fit" without
-// keeping the request context around.
+// keeping the request context around. ResolvedSpeciesID /
+// ShadowVariantMissing echo the shadow-aware lookup.
 type CPLimitsResult struct {
-	Species string          `json:"species"`
-	IV      [3]int          `json:"iv"`
-	XL      bool            `json:"xl"`
-	Leagues []LeagueCPLimit `json:"leagues"`
+	Species              string          `json:"species"`
+	ResolvedSpeciesID    string          `json:"resolved_species_id,omitempty"`
+	IV                   [3]int          `json:"iv"`
+	XL                   bool            `json:"xl"`
+	Leagues              []LeagueCPLimit `json:"leagues"`
+	ShadowVariantMissing bool            `json:"shadow_variant_missing,omitempty"`
 }
 
 // CPLimitsTool wraps the shared gamemaster.Manager and exposes
@@ -95,7 +105,7 @@ func (tool *CPLimitsTool) handle(
 		return nil, CPLimitsResult{}, ErrGamemasterNotLoaded
 	}
 
-	species, ok := snapshot.Pokemon[params.Species]
+	species, resolvedID, shadowMissing, ok := resolveSpeciesLookup(snapshot, params.Species, params.Options)
 	if !ok {
 		return nil, CPLimitsResult{}, fmt.Errorf("%w: %q", ErrUnknownSpecies, params.Species)
 	}
@@ -116,10 +126,12 @@ func (tool *CPLimitsTool) handle(
 	}
 
 	return nil, CPLimitsResult{
-		Species: params.Species,
-		IV:      params.IV,
-		XL:      params.XL,
-		Leagues: leagues,
+		Species:              params.Species,
+		ResolvedSpeciesID:    resolvedID,
+		IV:                   params.IV,
+		XL:                   params.XL,
+		Leagues:              leagues,
+		ShadowVariantMissing: shadowMissing,
 	}, nil
 }
 
