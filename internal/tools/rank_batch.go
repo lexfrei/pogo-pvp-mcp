@@ -29,17 +29,20 @@ var ErrTooManyIVs = errors.New("iv list exceeds maxRankBatchSize")
 const maxRankBatchSize = 64
 
 // RankBatchParams is the JSON input for pvp_rank_batch: the same
-// species + league + cup + CP cap + XL flag as pvp_rank, applied to
-// each IV triple in IVs. Batching saves N-1 round-trips when a
-// client is sweeping IV space (typical use: "score my entire box of
-// this species in one call").
+// species + league + cup + CP cap + XL flag + Options as pvp_rank,
+// applied to each IV triple in IVs. Batching saves N-1 round-trips
+// when a client is sweeping IV space (typical use: "score my entire
+// box of this species in one call"). Options applies batch-wide —
+// every IV triple is evaluated against the same resolved species,
+// so Options.Shadow=true sweeps the shadow variant's ranking.
 type RankBatchParams struct {
-	Species string   `json:"species" jsonschema:"species id in the pvpoke gamemaster (shadow variants use e.g. \"medicham_shadow\")"`
-	IVs     [][3]int `json:"ivs" jsonschema:"list of [atk, def, sta] triples; each component 0..15"`
-	League  string   `json:"league" jsonschema:"little|great|ultra|master"`
-	Cup     string   `json:"cup,omitempty" jsonschema:"cup id from pvpoke; empty = open-league all"`
-	CPCap   int      `json:"cp_cap,omitempty" jsonschema:"overrides the league default CP cap"`
-	XL      bool     `json:"xl,omitempty" jsonschema:"allow XL candy levels above 40"`
+	Species string           `json:"species" jsonschema:"species id in the pvpoke gamemaster"`
+	IVs     [][3]int         `json:"ivs" jsonschema:"list of [atk, def, sta] triples; each component 0..15"`
+	League  string           `json:"league" jsonschema:"little|great|ultra|master"`
+	Cup     string           `json:"cup,omitempty" jsonschema:"cup id from pvpoke; empty = open-league all"`
+	CPCap   int              `json:"cp_cap,omitempty" jsonschema:"overrides the league default CP cap"`
+	XL      bool             `json:"xl,omitempty" jsonschema:"allow XL candy levels above 40"`
+	Options CombatantOptions `json:"options,omitzero" jsonschema:"shadow / lucky / purified flags applied batch-wide"`
 }
 
 // RankBatchEntry is one (IV → RankResult) pair in the batch response.
@@ -173,8 +176,7 @@ func (tool *RankBatchTool) validateBatch(
 		return 0, ErrGamemasterNotLoaded
 	}
 
-	_, ok := snapshot.Pokemon[params.Species]
-	if !ok {
+	if !speciesExists(snapshot, params.Species, params.Options) {
 		return 0, fmt.Errorf("%w: %q", ErrUnknownSpecies, params.Species)
 	}
 
@@ -205,6 +207,7 @@ func runRankBatchEntry(
 		Cup:     params.Cup,
 		CPCap:   resolvedCPCap,
 		XL:      params.XL,
+		Options: params.Options,
 	}
 
 	_, result, err := handler(ctx, req, single)

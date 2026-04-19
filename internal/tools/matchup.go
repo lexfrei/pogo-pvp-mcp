@@ -192,6 +192,19 @@ func resolveSpeciesLookup(
 	return species, baseID, false, true
 }
 
+// speciesExists is a predicate wrapper over resolveSpeciesLookup for
+// call sites (pvp_rank_batch precondition check) that only need the
+// ok bool. Extracted so the batch validator can avoid the
+// three-blank-identifier dogsled pattern while still honouring
+// dual-convention tolerance and the Options.Shadow flip.
+func speciesExists(
+	snapshot *pogopvp.Gamemaster, baseID string, opts CombatantOptions,
+) bool {
+	_, _, _, ok := resolveSpeciesLookup(snapshot, baseID, opts) //nolint:dogsled // intentional: only the bool is needed
+
+	return ok
+}
+
 // MatchupParams is the JSON input contract for pvp_matchup. Cup is
 // used only to pick the recommended moveset when a Combatant omits
 // its moves — cup rules do not otherwise modify simulation mechanics.

@@ -82,12 +82,13 @@ var standardLeagues = []leagueSpec{
 // once that wiring is in place so callers get a different CP / SP when
 // they ask for shadow.
 type RankParams struct {
-	Species string `json:"species" jsonschema:"species id in the pvpoke gamemaster (e.g. \"medicham\")"`
-	IV      [3]int `json:"iv" jsonschema:"individual values in [atk, def, sta] order, each 0..15"`
-	League  string `json:"league" jsonschema:"little|great|ultra|master"`
-	Cup     string `json:"cup,omitempty" jsonschema:"cup id from pvpoke (spring/retro/etc.); empty=all; affects optimal_moveset lookup only"`
-	CPCap   int    `json:"cp_cap,omitempty" jsonschema:"overrides the league default CP cap"`
-	XL      bool   `json:"xl,omitempty" jsonschema:"allow XL candy levels above 40"`
+	Species string           `json:"species" jsonschema:"species id in the pvpoke gamemaster (e.g. \"medicham\")"`
+	IV      [3]int           `json:"iv" jsonschema:"individual values in [atk, def, sta] order, each 0..15"`
+	League  string           `json:"league" jsonschema:"little|great|ultra|master"`
+	Cup     string           `json:"cup,omitempty" jsonschema:"cup id from pvpoke (spring/retro/etc.); empty=all; optimal_moveset only"`
+	CPCap   int              `json:"cp_cap,omitempty" jsonschema:"overrides the league default CP cap"`
+	XL      bool             `json:"xl,omitempty" jsonschema:"allow XL candy levels above 40"`
+	Options CombatantOptions `json:"options,omitzero" jsonschema:"shadow / lucky / purified flags; Shadow flips to the pvpoke _shadow entry"`
 }
 
 // Moveset is the fast + charged pairing pvp_rank reports as the
@@ -129,20 +130,22 @@ type NonLegacyMoveset struct {
 // alternative without legacy plus the rating delta so the trade-off
 // is explicit.
 type RankResult struct {
-	Species          string            `json:"species"`
-	CP               int               `json:"cp"`
-	StatProduct      float64           `json:"stat_product"`
-	Level            float64           `json:"level"`
-	Atk              float64           `json:"atk"`
-	Def              float64           `json:"def"`
-	HP               int               `json:"hp"`
-	PercentOfBest    float64           `json:"percent_of_best"`
-	League           string            `json:"league"`
-	Cup              string            `json:"cup"`
-	CPCap            int               `json:"cp_cap"`
-	OptimalMoveset   *Moveset          `json:"optimal_moveset,omitempty"`
-	NonLegacyMoveset *NonLegacyMoveset `json:"non_legacy_moveset,omitempty"`
-	Hundo            *HundoComparison  `json:"comparison_to_hundo,omitempty"`
+	Species              string            `json:"species"`
+	ResolvedSpeciesID    string            `json:"resolved_species_id,omitempty"`
+	CP                   int               `json:"cp"`
+	StatProduct          float64           `json:"stat_product"`
+	Level                float64           `json:"level"`
+	Atk                  float64           `json:"atk"`
+	Def                  float64           `json:"def"`
+	HP                   int               `json:"hp"`
+	PercentOfBest        float64           `json:"percent_of_best"`
+	League               string            `json:"league"`
+	Cup                  string            `json:"cup"`
+	CPCap                int               `json:"cp_cap"`
+	OptimalMoveset       *Moveset          `json:"optimal_moveset,omitempty"`
+	NonLegacyMoveset     *NonLegacyMoveset `json:"non_legacy_moveset,omitempty"`
+	Hundo                *HundoComparison  `json:"comparison_to_hundo,omitempty"`
+	ShadowVariantMissing bool              `json:"shadow_variant_missing,omitempty"`
 }
 
 // HundoComparison carries the best-case 15/15/15 spread for the same
@@ -267,15 +270,24 @@ func (tool *RankTool) lookupMoveset(
 }
 
 // rankInputs bundles the values derived from RankParams that the build
-// step needs — keeps handle's body small enough for funlen.
+// step needs — keeps handle's body small enough for funlen. speciesID
+// echoes params.Species verbatim (the caller's input id); resolvedID
+// is the pvpoke gamemaster key actually used for the lookup (same as
+// input unless Options.Shadow=true flipped to the "_shadow" entry).
+// shadowVariantMissing=true when Options.Shadow was set but pvpoke
+// published no dedicated shadow entry — falls back to the base
+// species with the flag raised so the response can signal the
+// approximation.
 type rankInputs struct {
-	species   pogopvp.Species
-	ivs       pogopvp.IV
-	cpCap     int
-	league    string
-	cup       string
-	opts      pogopvp.FindSpreadOpts
-	speciesID string
+	species              pogopvp.Species
+	ivs                  pogopvp.IV
+	cpCap                int
+	league               string
+	cup                  string
+	opts                 pogopvp.FindSpreadOpts
+	speciesID            string
+	resolvedID           string
+	shadowVariantMissing bool
 }
 
 // resolveRankInputs performs all upfront validation and IV / league
@@ -286,7 +298,7 @@ func resolveRankInputs(manager *gamemaster.Manager, params *RankParams) (rankInp
 		return rankInputs{}, ErrGamemasterNotLoaded
 	}
 
-	species, ok := gm.Pokemon[params.Species]
+	species, resolvedID, shadowMissing, ok := resolveSpeciesLookup(gm, params.Species, params.Options)
 	if !ok {
 		return rankInputs{}, fmt.Errorf("%w: %q", ErrUnknownSpecies, params.Species)
 	}
@@ -302,13 +314,15 @@ func resolveRankInputs(manager *gamemaster.Manager, params *RankParams) (rankInp
 	}
 
 	return rankInputs{
-		species:   species,
-		ivs:       ivs,
-		cpCap:     cpCap,
-		league:    params.League,
-		cup:       params.Cup,
-		opts:      pogopvp.FindSpreadOpts{XLAllowed: params.XL},
-		speciesID: params.Species,
+		species:              species,
+		ivs:                  ivs,
+		cpCap:                cpCap,
+		league:               params.League,
+		cup:                  params.Cup,
+		opts:                 pogopvp.FindSpreadOpts{XLAllowed: params.XL},
+		speciesID:            params.Species,
+		resolvedID:           resolvedID,
+		shadowVariantMissing: shadowMissing,
 	}, nil
 }
 
@@ -338,18 +352,20 @@ func buildRankResult(inputs rankInputs) (RankResult, error) {
 	}
 
 	return RankResult{
-		Species:       inputs.speciesID,
-		CP:            spread.CP,
-		StatProduct:   spread.StatProduct,
-		Level:         spread.Level,
-		Atk:           stats.Atk,
-		Def:           stats.Def,
-		HP:            stats.HP,
-		PercentOfBest: percentOfBest,
-		League:        inputs.league,
-		Cup:           resolveCupLabel(inputs.cup),
-		CPCap:         inputs.cpCap,
-		Hundo:         computeHundo(inputs),
+		Species:              inputs.speciesID,
+		ResolvedSpeciesID:    inputs.resolvedID,
+		CP:                   spread.CP,
+		StatProduct:          spread.StatProduct,
+		Level:                spread.Level,
+		Atk:                  stats.Atk,
+		Def:                  stats.Def,
+		HP:                   stats.HP,
+		PercentOfBest:        percentOfBest,
+		League:               inputs.league,
+		Cup:                  resolveCupLabel(inputs.cup),
+		CPCap:                inputs.cpCap,
+		Hundo:                computeHundo(inputs),
+		ShadowVariantMissing: inputs.shadowVariantMissing,
 	}, nil
 }
 

@@ -30,16 +30,14 @@ func readRepoFile(t *testing.T, relPath string) string {
 }
 
 // TestReadmeDocumentsCombatantOptions pins the Phase X-I round-3
-// review fix: README.md must explicitly document that the battle /
-// team tools accept a per-Pokémon options block (shadow / lucky /
-// purified). Before the fix the README only mentioned options on the
-// pvp_second_move_cost bullet, leaving a user with no way to
-// discover that matchup / team_analysis / team_builder /
-// counter_finder / threat_coverage were also migrated.
+// review fix + Phase X-II extension: README.md must document that
+// every Combatant / species-id-accepting tool takes a per-Pokémon
+// options block (shadow / lucky / purified). The lock now also
+// enforces that the info-path tools (migrated in Phase X-II) are
+// named in the documentation paragraph alongside the battle tools.
 //
-// The lock tests against the generic paragraph text and the tool
-// names the paragraph must enumerate. If someone removes the
-// paragraph or drops a tool from it the test fails loudly.
+// If someone removes the paragraph or drops a tool from it the
+// test fails loudly.
 func TestReadmeDocumentsCombatantOptions(t *testing.T) {
 	t.Parallel()
 
@@ -50,11 +48,21 @@ func TestReadmeDocumentsCombatantOptions(t *testing.T) {
 		"shadow",
 		"purified",
 		"lucky",
+		// Combat / team tools — Phase X-I surface.
 		"pvp_matchup",
 		"pvp_team_analysis",
 		"pvp_team_builder",
 		"pvp_counter_finder",
 		"pvp_threat_coverage",
+		// Info-path tools — Phase X-II surface.
+		"pvp_rank",
+		"pvp_species_info",
+		"pvp_level_from_cp",
+		"pvp_cp_limits",
+		"pvp_evolution_preview",
+		"pvp_rank_batch",
+		// Cost tool.
+		"pvp_second_move_cost",
 		"shadow_variant_missing",
 	}
 
@@ -62,10 +70,6 @@ func TestReadmeDocumentsCombatantOptions(t *testing.T) {
 		if !strings.Contains(readme, phrase) {
 			t.Errorf("README.md missing required phrase %q (Combatant Options documentation drift)", phrase)
 		}
-	}
-
-	if !strings.Contains(readme, "Phase X-II") {
-		t.Errorf("README.md must acknowledge that info-path tools have NOT migrated to Options yet (Phase X-II follow-up)")
 	}
 }
 

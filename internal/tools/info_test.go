@@ -480,3 +480,79 @@ func TestSpeciesInfo_LeagueRanksFromManager(t *testing.T) {
 		t.Errorf("LeagueRanks[0].Rating = %d, want 800", entry.Rating)
 	}
 }
+
+// speciesInfoShadowFixture publishes both medicham and
+// medicham_shadow with DIFFERENT LegacyMoves lists so Phase X-II
+// shadow option tests can observe that pvpoke's shadow-specific
+// legacy flagging is reflected in the response — the base row's
+// legacy marker must NOT leak through to the shadow response.
+const speciesInfoShadowFixture = `{
+  "id": "gamemaster",
+  "timestamp": "2026-04-19 00:00:00",
+  "pokemon": [
+    {"dex": 308, "speciesId": "medicham", "speciesName": "Medicham",
+     "baseStats": {"atk": 121, "def": 152, "hp": 155},
+     "types": ["fighting", "psychic"],
+     "fastMoves": ["COUNTER"],
+     "chargedMoves": ["ICE_PUNCH", "PSYCHIC"],
+     "legacyMoves": ["ICE_PUNCH"],
+     "released": true},
+    {"dex": 308, "speciesId": "medicham_shadow", "speciesName": "Medicham (Shadow)",
+     "baseStats": {"atk": 121, "def": 152, "hp": 155},
+     "types": ["fighting", "psychic"],
+     "fastMoves": ["COUNTER"],
+     "chargedMoves": ["ICE_PUNCH", "PSYCHIC"],
+     "legacyMoves": ["PSYCHIC"],
+     "released": true}
+  ],
+  "moves": [
+    {"moveId": "COUNTER", "name": "Counter", "type": "fighting",
+     "power": 8, "energy": 0, "energyGain": 7, "cooldown": 1000, "turns": 2},
+    {"moveId": "ICE_PUNCH", "name": "Ice Punch", "type": "ice",
+     "power": 55, "energy": 40, "cooldown": 500},
+    {"moveId": "PSYCHIC", "name": "Psychic", "type": "psychic",
+     "power": 90, "energy": 55, "cooldown": 500}
+  ]
+}`
+
+// TestSpeciesInfoTool_ShadowOptionResolvesToShadowEntry pins Phase
+// X-II: Options.Shadow=true on pvp_species_info switches the
+// response's Species id and LegacyMoves to the "_shadow" row.
+// This matters because pvpoke's shadow-form legacy lists can
+// legitimately differ from the base form's.
+func TestSpeciesInfoTool_ShadowOptionResolvesToShadowEntry(t *testing.T) {
+	t.Parallel()
+
+	mgr := newManagerWithFixture(t, speciesInfoShadowFixture)
+	handler := tools.NewSpeciesInfoTool(mgr, nil).Handler()
+
+	_, result, err := handler(t.Context(), nil, tools.SpeciesInfoParams{
+		Species: speciesMedicham,
+		Options: tools.CombatantOptions{Shadow: true},
+	})
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+
+	if result.Species != speciesMedicham {
+		t.Errorf("Species = %q, want %q (echo of input)",
+			result.Species, speciesMedicham)
+	}
+
+	if result.ResolvedSpeciesID != speciesMedichamShadow {
+		t.Errorf("ResolvedSpeciesID = %q, want %q (Options.Shadow must flip lookup)",
+			result.ResolvedSpeciesID, speciesMedichamShadow)
+	}
+
+	if result.ShadowVariantMissing {
+		t.Errorf("ShadowVariantMissing = true; fixture publishes _shadow — must not signal missing")
+	}
+
+	// Shadow row has PSYCHIC as legacy, NOT ICE_PUNCH. Leaking
+	// base-row legacy flags into the shadow response is the
+	// primary drift this test catches.
+	if len(result.LegacyMoves) != 1 || result.LegacyMoves[0] != movePsychic {
+		t.Errorf("LegacyMoves = %v, want [%s] (shadow-specific legacy list)",
+			result.LegacyMoves, movePsychic)
+	}
+}

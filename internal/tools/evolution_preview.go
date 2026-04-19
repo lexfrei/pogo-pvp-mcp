@@ -14,12 +14,16 @@ import (
 // The caller provides the current (pre-evolution) species, its IVs,
 // and an observed CP. The tool inverts CP to level via engine's
 // LevelForCP, then projects each reachable descendant's stats at the
-// same level (evolution preserves level in Pokémon GO).
+// same level (evolution preserves level in Pokémon GO). Shadow
+// variants are addressed by setting Options.Shadow=true; the legacy
+// "medicham_shadow" suffix is still tolerated. Lucky / Purified
+// accepted for Options-struct symmetry but no-op here.
 type EvolutionPreviewParams struct {
-	Species string `json:"species" jsonschema:"the current species id (pre-evolution; shadow variants use e.g. \"medicham_shadow\")"`
-	IV      [3]int `json:"iv" jsonschema:"individual values [atk, def, sta]; each 0..15"`
-	CP      int    `json:"cp" jsonschema:"observed CP of the current form; inverted to a level"`
-	XL      bool   `json:"xl,omitempty" jsonschema:"allow XL candy levels above 40"`
+	Species string           `json:"species" jsonschema:"the current species id (pre-evolution)"`
+	IV      [3]int           `json:"iv" jsonschema:"individual values [atk, def, sta]; each 0..15"`
+	CP      int              `json:"cp" jsonschema:"observed CP of the current form; inverted to a level"`
+	XL      bool             `json:"xl,omitempty" jsonschema:"allow XL candy levels above 40"`
+	Options CombatantOptions `json:"options,omitzero" jsonschema:"shadow / lucky / purified flags; only Shadow is load-bearing here"`
 }
 
 // EvolutionStage is one descendant form reachable by evolving the
@@ -49,13 +53,20 @@ type EvolutionStage struct {
 // can tell "observed CP matched" from "rounded down to the nearest
 // grid point". Evolutions is sorted by Path length (direct evolutions
 // first) and then alphabetically so the output is deterministic.
+// ResolvedSpeciesID / ShadowVariantMissing echo the shadow-aware
+// base species lookup (evolution chain members remain in their
+// non-shadow forms — pvpoke does not publish per-stage shadow
+// evolutions, so descendants are always projected from the non-
+// shadow chain).
 type EvolutionPreviewResult struct {
-	Species    string           `json:"species"`
-	IV         [3]int           `json:"iv"`
-	Level      float64          `json:"level"`
-	Exact      bool             `json:"exact"`
-	BaseCP     int              `json:"base_cp"`
-	Evolutions []EvolutionStage `json:"evolutions"`
+	Species              string           `json:"species"`
+	ResolvedSpeciesID    string           `json:"resolved_species_id,omitempty"`
+	IV                   [3]int           `json:"iv"`
+	Level                float64          `json:"level"`
+	Exact                bool             `json:"exact"`
+	BaseCP               int              `json:"base_cp"`
+	Evolutions           []EvolutionStage `json:"evolutions"`
+	ShadowVariantMissing bool             `json:"shadow_variant_missing,omitempty"`
 }
 
 // EvolutionPreviewTool wraps the gamemaster manager.
@@ -99,7 +110,7 @@ func (tool *EvolutionPreviewTool) handle(
 	_ *mcp.CallToolRequest,
 	params EvolutionPreviewParams,
 ) (*mcp.CallToolResult, EvolutionPreviewResult, error) {
-	snapshot, base, ivs, err := tool.resolveEvolutionPreview(ctx, &params)
+	snapshot, base, ivs, resolvedID, shadowMissing, err := tool.resolveEvolutionPreview(ctx, &params)
 	if err != nil {
 		return nil, EvolutionPreviewResult{}, err
 	}
@@ -126,44 +137,51 @@ func (tool *EvolutionPreviewTool) handle(
 	})
 
 	return nil, EvolutionPreviewResult{
-		Species:    params.Species,
-		IV:         params.IV,
-		Level:      inverted.Level,
-		Exact:      inverted.Exact,
-		BaseCP:     inverted.CP,
-		Evolutions: stages,
+		Species:              params.Species,
+		ResolvedSpeciesID:    resolvedID,
+		IV:                   params.IV,
+		Level:                inverted.Level,
+		Exact:                inverted.Exact,
+		BaseCP:               inverted.CP,
+		Evolutions:           stages,
+		ShadowVariantMissing: shadowMissing,
 	}, nil
 }
 
 // resolveEvolutionPreview centralises the cheap precondition work
-// (cancel check, gamemaster snapshot, species lookup, IV parse) so
-// handle stays under funlen. The quadruple return is (snapshot,
-// base species, parsed IV, error) — kept unnamed to stay consistent
-// with the rest of the resolveX helpers in this package.
+// (cancel check, gamemaster snapshot, shadow-aware species lookup,
+// IV parse) so handle stays under funlen. The sextuple return is
+// (snapshot, base species, parsed IV, resolvedSpeciesID,
+// shadowVariantMissing, error). resolvedSpeciesID is the pvpoke id
+// that drove the lookup (base or "_shadow"); shadowVariantMissing
+// is true when Options.Shadow was set but pvpoke published no
+// dedicated shadow entry for this species.
+//
+//nolint:gocritic // unnamedResult: return order documented in godoc, matches resolveSpeciesLookup
 func (tool *EvolutionPreviewTool) resolveEvolutionPreview(
 	ctx context.Context, params *EvolutionPreviewParams,
-) (*pogopvp.Gamemaster, *pogopvp.Species, pogopvp.IV, error) {
+) (*pogopvp.Gamemaster, *pogopvp.Species, pogopvp.IV, string, bool, error) {
 	err := ctx.Err()
 	if err != nil {
-		return nil, nil, pogopvp.IV{}, fmt.Errorf("evolution_preview cancelled: %w", err)
+		return nil, nil, pogopvp.IV{}, "", false, fmt.Errorf("evolution_preview cancelled: %w", err)
 	}
 
 	snapshot := tool.manager.Current()
 	if snapshot == nil {
-		return nil, nil, pogopvp.IV{}, ErrGamemasterNotLoaded
+		return nil, nil, pogopvp.IV{}, "", false, ErrGamemasterNotLoaded
 	}
 
-	base, ok := snapshot.Pokemon[params.Species]
+	base, resolvedID, shadowMissing, ok := resolveSpeciesLookup(snapshot, params.Species, params.Options)
 	if !ok {
-		return nil, nil, pogopvp.IV{}, fmt.Errorf("%w: %q", ErrUnknownSpecies, params.Species)
+		return nil, nil, pogopvp.IV{}, "", false, fmt.Errorf("%w: %q", ErrUnknownSpecies, params.Species)
 	}
 
 	ivs, err := pogopvp.NewIV(params.IV[0], params.IV[1], params.IV[2])
 	if err != nil {
-		return nil, nil, pogopvp.IV{}, fmt.Errorf("invalid IV: %w", err)
+		return nil, nil, pogopvp.IV{}, "", false, fmt.Errorf("invalid IV: %w", err)
 	}
 
-	return snapshot, &base, ivs, nil
+	return snapshot, &base, ivs, resolvedID, shadowMissing, nil
 }
 
 // evolutionWalkFrame is one BFS frontier node: a reachable species
