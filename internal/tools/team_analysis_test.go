@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"testing"
 
@@ -698,7 +699,10 @@ func TestTeamAnalysisTool_UnknownLeague(t *testing.T) {
 // PerMember entry across Overall + every PerScenario aggregate
 // carries a CostBreakdown pointer populated via computeMemberCost.
 // Target level = 0 → per-species default (deepest climb under
-// league cap with 15/15/15 IVs).
+// league cap with 15/15/15 IVs). All three shield scenarios are
+// requested so the test can also assert the CLAUDE.md invariant
+// that cost is scenario-independent: every aggregate sees the
+// same per-member breakdown.
 func TestTeamAnalysisTool_CostBreakdownPresent(t *testing.T) {
 	t.Parallel()
 
@@ -717,8 +721,9 @@ func TestTeamAnalysisTool_CostBreakdownPresent(t *testing.T) {
 	memberC.Species = "c"
 
 	_, result, err := handler(t.Context(), nil, tools.TeamAnalysisParams{
-		Team:   []tools.Combatant{memberA, memberB, memberC},
-		League: leagueGreat,
+		Team:    []tools.Combatant{memberA, memberB, memberC},
+		League:  leagueGreat,
+		Shields: []int{0, 1, 2},
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -742,10 +747,43 @@ func TestTeamAnalysisTool_CostBreakdownPresent(t *testing.T) {
 		}
 	}
 
-	for key, agg := range result.PerScenario {
+	if len(result.PerScenario) == 0 {
+		t.Fatal("PerScenario map is empty; expected at least one scenario entry")
+	}
+
+	wantKeys := []string{"0s", "1s", "2s"}
+	for _, key := range wantKeys {
+		agg, ok := result.PerScenario[key]
+		if !ok {
+			t.Errorf("PerScenario[%q] missing", key)
+
+			continue
+		}
+
+		if len(agg.PerMember) != len(result.Overall.PerMember) {
+			t.Errorf("PerScenario[%q].PerMember len = %d, want %d",
+				key, len(agg.PerMember), len(result.Overall.PerMember))
+
+			continue
+		}
+
+		// CLAUDE.md invariant: cost is scenario-independent. Every
+		// aggregate must carry identical breakdowns to Overall.
 		for i, m := range agg.PerMember {
 			if m.CostBreakdown == nil {
 				t.Errorf("PerScenario[%s].PerMember[%d] CostBreakdown = nil", key, i)
+
+				continue
+			}
+
+			overall := result.Overall.PerMember[i].CostBreakdown
+			if overall == nil {
+				continue
+			}
+
+			if !reflect.DeepEqual(*m.CostBreakdown, *overall) {
+				t.Errorf("PerScenario[%s].PerMember[%d] CostBreakdown diverges from Overall — cost must be scenario-independent",
+					key, i)
 			}
 		}
 	}

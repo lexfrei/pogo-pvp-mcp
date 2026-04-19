@@ -207,6 +207,7 @@ func (tool *TeamAnalysisTool) Handler() mcp.ToolHandlerFor[TeamAnalysisParams, T
 // Scenarios is the list of symmetric shield counts to simulate per
 // (member, opponent) pair; their ratings are averaged.
 type teamAnalysisWorkspace struct {
+	Snapshot       *pogopvp.Gamemaster
 	TeamCombatants []pogopvp.Combatant
 	MetaCombatants []pogopvp.Combatant
 	KeptEntries    []rankings.RankingEntry
@@ -239,7 +240,7 @@ func (tool *TeamAnalysisTool) handle(
 	result.Cup = resolveCupLabel(params.Cup)
 	result.SkippedMetaSpecies = workspace.SkippedMeta
 
-	tool.attachAnalysisCostBreakdowns(&result, &params, workspace.CPCap)
+	attachAnalysisCostBreakdowns(&result, &params, workspace.Snapshot, workspace.CPCap)
 
 	if ctx.Err() != nil {
 		return nil, TeamAnalysisResult{}, fmt.Errorf("team_analysis cancelled: %w", ctx.Err())
@@ -254,14 +255,18 @@ func (tool *TeamAnalysisTool) handle(
 // from team_builder_costs so the pvp_team_analysis and
 // pvp_team_builder cost semantics stay identical — same target
 // resolution, same Options multipliers, same clamp-at-or-above-
-// target behaviour. The snapshot pointer is captured once per call
-// so the attach pass sees the gamemaster the validation ran
-// against, not a second .Current() read that could race a
-// mid-refresh pointer.
-func (tool *TeamAnalysisTool) attachAnalysisCostBreakdowns(
-	result *TeamAnalysisResult, params *TeamAnalysisParams, cpCap int,
+// target behaviour.
+//
+// snapshot is passed in (not re-read via tool.gm.Current()) so the
+// attach pass sees the exact gamemaster pointer prepareTeamAnalysis
+// validated against. A mid-refresh pointer swap between the two
+// calls would otherwise let the cost attach observe a snapshot
+// where species / base stats differ from what the pool validation
+// ran against — narrow race window, but the fix is trivial.
+func attachAnalysisCostBreakdowns(
+	result *TeamAnalysisResult, params *TeamAnalysisParams,
+	snapshot *pogopvp.Gamemaster, cpCap int,
 ) {
-	snapshot := tool.gm.Current()
 	if snapshot == nil {
 		return
 	}
@@ -362,6 +367,7 @@ func (tool *TeamAnalysisTool) prepareTeamAnalysis(
 	}
 
 	return &teamAnalysisWorkspace{
+		Snapshot:       snapshot,
 		TeamCombatants: teamCombatants,
 		MetaCombatants: metaCombatants,
 		KeptEntries:    keptEntries,
