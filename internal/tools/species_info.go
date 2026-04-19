@@ -47,14 +47,22 @@ type SpeciesLeagueRank struct {
 }
 
 // SpeciesInfoResult is the JSON output for pvp_species_info. Species
-// echoes the resolved pvpoke id so Options.Shadow=true with a base
-// input ("medicham") produces Species="medicham_shadow" when the
-// shadow row is published. ShadowVariantMissing=true signals that
-// Options.Shadow was set but pvpoke has no dedicated shadow entry —
-// LegacyMoves and league rankings then come from the base species.
+// echoes params.Species verbatim (the caller's input id).
+// ResolvedSpeciesID is the pvpoke gamemaster key actually used —
+// differs from Species only when Options.Shadow=true flipped to the
+// "_shadow" row. Name / Dex / BaseStats / FastMoves / ChargedMoves /
+// LegacyMoves / Evolutions / PreEvolution / Tags / Released all
+// come from the resolved row. ShadowVariantMissing=true signals
+// that Options.Shadow was set but pvpoke has no dedicated shadow
+// entry — the content then comes from the base species.
+//
+// Naming convention across Phase X-II tools: Species = verbatim
+// input echo, ResolvedSpeciesID = pvpoke key used. The two
+// coincide for non-shadow requests (no redirect) — the field is
+// still emitted in that case so the response shape is uniform.
 type SpeciesInfoResult struct {
 	Species              string               `json:"species"`
-	RequestedSpeciesID   string               `json:"requested_species_id,omitempty"`
+	ResolvedSpeciesID    string               `json:"resolved_species_id,omitempty"`
 	Name                 string               `json:"name"`
 	Dex                  int                  `json:"dex"`
 	Types                []string             `json:"types"`
@@ -136,14 +144,14 @@ func (tool *SpeciesInfoTool) handle(
 		return nil, SpeciesInfoResult{}, ErrGamemasterNotLoaded
 	}
 
-	species, _, shadowMissing, ok := resolveSpeciesLookup(snapshot, params.Species, params.Options)
+	species, resolvedID, shadowMissing, ok := resolveSpeciesLookup(snapshot, params.Species, params.Options)
 	if !ok {
 		return nil, SpeciesInfoResult{}, fmt.Errorf("%w: %q", ErrUnknownSpecies, params.Species)
 	}
 
 	result := SpeciesInfoResult{
-		Species:              species.ID,
-		RequestedSpeciesID:   params.Species,
+		Species:              params.Species,
+		ResolvedSpeciesID:    resolvedID,
 		Name:                 species.Name,
 		Dex:                  species.Dex,
 		Types:                nonNilStrings(species.Types),

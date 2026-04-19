@@ -534,14 +534,14 @@ func TestSpeciesInfoTool_ShadowOptionResolvesToShadowEntry(t *testing.T) {
 		t.Fatalf("handler: %v", err)
 	}
 
-	if result.Species != speciesMedichamShadow {
-		t.Errorf("Species = %q, want %q (shadow entry id expected)",
-			result.Species, speciesMedichamShadow)
+	if result.Species != speciesMedicham {
+		t.Errorf("Species = %q, want %q (echo of input)",
+			result.Species, speciesMedicham)
 	}
 
-	if result.RequestedSpeciesID != speciesMedicham {
-		t.Errorf("RequestedSpeciesID = %q, want %q (echo of input)",
-			result.RequestedSpeciesID, speciesMedicham)
+	if result.ResolvedSpeciesID != speciesMedichamShadow {
+		t.Errorf("ResolvedSpeciesID = %q, want %q (Options.Shadow must flip lookup)",
+			result.ResolvedSpeciesID, speciesMedichamShadow)
 	}
 
 	if result.ShadowVariantMissing {
