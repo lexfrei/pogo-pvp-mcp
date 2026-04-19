@@ -41,7 +41,7 @@ type RankBatchParams struct {
 	Species string           `json:"species" jsonschema:"species id in the pvpoke gamemaster"`
 	IVs     [][3]int         `json:"ivs" jsonschema:"list of [atk, def, sta] triples; each component 0..15"`
 	League  string           `json:"league" jsonschema:"little|great|ultra|master"`
-	CPCap   int              `json:"cp_cap,omitempty" jsonschema:"overrides the league default CP cap"`
+	CPCap   int              `json:"cp_cap,omitempty" jsonschema:"override (0 = league default); optimal level re-searched under the override"`
 	XL      bool             `json:"xl,omitempty" jsonschema:"allow XL candy levels above 40"`
 	Options CombatantOptions `json:"options,omitzero" jsonschema:"shadow / lucky / purified flags applied batch-wide"`
 }

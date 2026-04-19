@@ -179,6 +179,29 @@ func TestTargetLevelJSONSchemaTagsMatch(t *testing.T) {
 	}
 }
 
+// TestCPCapJSONSchemaTagsMatch pins the same sibling invariant for
+// the cp_cap override: pvp_rank and pvp_rank_batch both accept the
+// override and route it through resolveCPCap with identical
+// semantics. Their jsonschema tags MUST carry the same description
+// so MCP clients don't see drift between two tools that behave
+// identically.
+func TestCPCapJSONSchemaTagsMatch(t *testing.T) {
+	t.Parallel()
+
+	const canonical = `"override (0 = league default); optimal level re-searched under the override"`
+
+	for _, path := range []string{
+		"internal/tools/rank.go",
+		"internal/tools/rank_batch.go",
+	} {
+		src := readRepoFile(t, path)
+		if !strings.Contains(src, canonical) {
+			t.Errorf("%s missing canonical cp_cap jsonschema %s (drift between sibling tool schemas)",
+				path, canonical)
+		}
+	}
+}
+
 // TestReportDataIssueURLMatchesLiveRepo pins the round-2 fix for
 // pvp_report_data_issue: the tool's outbound URLs must target the
 // live GitHub repository name, not the Go module path. CLAUDE.md
