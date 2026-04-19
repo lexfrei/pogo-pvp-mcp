@@ -25,7 +25,10 @@ type MetaParams struct {
 }
 
 // MetaEntry mirrors one rankings row trimmed to the fields exposed to
-// MCP clients. Rank is 1-based.
+// MCP clients. Rank is 1-based. Role is the best-fit classification
+// (lead / switch / closer / flex) based on where the species appears
+// in pvpoke's per-role rankings; omitted when the role fetch failed
+// or the species is not present in any of them.
 type MetaEntry struct {
 	Rank        int      `json:"rank"`
 	SpeciesID   string   `json:"species"`
@@ -37,6 +40,7 @@ type MetaEntry struct {
 	Atk         float64  `json:"atk"`
 	Def         float64  `json:"def"`
 	HP          int      `json:"hp"`
+	Role        string   `json:"role,omitempty"`
 }
 
 // MetaResult is the JSON output contract for pvp_meta. Cup echoes
@@ -111,12 +115,114 @@ func (tool *MetaTool) handle(
 
 	topN = min(topN, len(entries))
 
+	metaEntries := buildMetaEntries(entries[:topN])
+	assignRoles(ctx, tool.manager, cpCap, params.Cup, metaEntries)
+
 	return nil, MetaResult{
 		League:  params.League,
 		Cup:     resolveCupLabel(params.Cup),
 		CPCap:   cpCap,
-		Entries: buildMetaEntries(entries[:topN]),
+		Entries: metaEntries,
 	}, nil
+}
+
+// roleRankGapThreshold is the number of positions by which the best
+// per-role rank must beat the second-best for the tool to assign a
+// concrete role. Below the threshold, the species is flagged "flex".
+// Tuned at 5 on plan guidance; revisit after collecting real data.
+const roleRankGapThreshold = 5
+
+// assignRoles populates MetaEntry.Role for every top-N entry by
+// comparing each species' position across the three per-role
+// rankings (leads / switches / closers). Best-effort: a fetch error
+// for any role leaves the entries with an empty role (omitted).
+func assignRoles(
+	ctx context.Context, manager *rankings.Manager, cpCap int, cup string,
+	entries []MetaEntry,
+) {
+	leads := indexRole(ctx, manager, cpCap, cup, rankings.RoleLeads)
+	switches := indexRole(ctx, manager, cpCap, cup, rankings.RoleSwitches)
+	closers := indexRole(ctx, manager, cpCap, cup, rankings.RoleClosers)
+
+	for i := range entries {
+		entries[i].Role = classifyRole(entries[i].SpeciesID, leads, switches, closers)
+	}
+}
+
+// indexRole fetches one per-role rankings slice and returns it as a
+// speciesID → rank (1-based) map. On fetch failure returns nil so
+// the classifier falls through to the missing-position path.
+func indexRole(
+	ctx context.Context, manager *rankings.Manager, cpCap int, cup string, role rankings.Role,
+) map[string]int {
+	entries, err := manager.GetRole(ctx, cpCap, cup, role)
+	if err != nil {
+		return nil
+	}
+
+	index := make(map[string]int, len(entries))
+	for i := range entries {
+		index[entries[i].SpeciesID] = i + 1
+	}
+
+	return index
+}
+
+// missingRank is the sentinel rank assigned to a species absent from
+// a role's ranking slice — large enough that any real rank wins,
+// small enough to not overflow in arithmetic.
+const missingRank = 1 << 20
+
+// classifyRole picks the best-fitting role for a species. The
+// species' rank in each of the three per-role rankings is inspected;
+// the smallest rank wins if it beats every other role's rank by at
+// least roleRankGapThreshold positions, otherwise the species gets
+// the "flex" label. Absent from every role map → empty string so
+// the output omits the field.
+func classifyRole(species string, leads, switches, closers map[string]int) string {
+	candidates := [3]struct {
+		name string
+		rank int
+	}{
+		{"lead", rankFromIndex(leads, species)},
+		{"switch", rankFromIndex(switches, species)},
+		{"closer", rankFromIndex(closers, species)},
+	}
+
+	if candidates[0].rank == missingRank &&
+		candidates[1].rank == missingRank &&
+		candidates[2].rank == missingRank {
+		return ""
+	}
+
+	best, runnerUp := 0, 1
+	if candidates[runnerUp].rank < candidates[best].rank {
+		best, runnerUp = runnerUp, best
+	}
+
+	for i := 2; i < len(candidates); i++ {
+		if candidates[i].rank < candidates[best].rank {
+			runnerUp, best = best, i
+		} else if candidates[i].rank < candidates[runnerUp].rank {
+			runnerUp = i
+		}
+	}
+
+	if candidates[runnerUp].rank-candidates[best].rank >= roleRankGapThreshold {
+		return candidates[best].name
+	}
+
+	return "flex"
+}
+
+// rankFromIndex returns the species' position in the index (1-based)
+// or missingRank when absent.
+func rankFromIndex(index map[string]int, species string) int {
+	if rank, ok := index[species]; ok {
+		return rank
+	}
+
+	return missingRank
 }
 
 // resolveCupLabel mirrors rankings.resolveCup at the tool boundary:

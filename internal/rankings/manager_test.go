@@ -292,8 +292,9 @@ func TestManager_StaleCacheTriggersRefetch(t *testing.T) {
 
 	// Back-date the cache file past the 24h TTL and use a fresh
 	// manager so the in-memory cache does not short-circuit. The
-	// per-cup subdirectory is created by the manager on first persist.
-	path := filepath.Join(dir, "all", "rankings-1500.json")
+	// per-cup/role subdirectory is created by the manager on first
+	// persist — Get implicitly targets the "overall" role.
+	path := filepath.Join(dir, "all", "overall", "rankings-1500.json")
 	old := time.Now().Add(-72 * time.Hour)
 
 	err = os.Chtimes(path, old, old)
