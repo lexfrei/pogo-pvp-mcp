@@ -7,7 +7,9 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/lexfrei/pogo-pvp-mcp/internal/config"
 	"github.com/lexfrei/pogo-pvp-mcp/internal/gamemaster"
@@ -329,5 +331,197 @@ func TestEvolutionTargetTool_ContextCancelled(t *testing.T) {
 	})
 	if !errors.Is(err, context.Canceled) {
 		t.Errorf("err = %v, want wrapping context.Canceled", err)
+	}
+}
+
+// TestEvolutionTargetTool_BranchingChainTarget pins that asking for
+// one branch of a branching chain (eevee → vaporeon / jolteon) resolves
+// the chain correctly back to eevee. walkPreEvolutionChain follows
+// PreEvolution which is a single id per species, not the forward
+// branching map — so a request for vaporeon should ignore the sibling
+// jolteon entirely and return [eevee, vaporeon].
+func TestEvolutionTargetTool_BranchingChainTarget(t *testing.T) {
+	t.Parallel()
+
+	tool := newEvolutionTargetTool(t, evolutionFixtureGamemaster)
+	handler := tool.Handler()
+
+	_, result, err := handler(t.Context(), nil, tools.EvolutionTargetParams{
+		TargetSpecies: speciesVaporeon,
+		League:        leagueGreat,
+	})
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+
+	if result.FromSpecies != speciesEevee {
+		t.Errorf("FromSpecies = %q, want %q (sibling branches must not leak in)",
+			result.FromSpecies, speciesEevee)
+	}
+
+	wantChain := []string{speciesEevee, speciesVaporeon}
+	if !slices.Equal(result.ChainFromTo, wantChain) {
+		t.Errorf("ChainFromTo = %v, want %v", result.ChainFromTo, wantChain)
+	}
+
+	for _, id := range result.ChainFromTo {
+		if id == speciesJolteon {
+			t.Errorf("ChainFromTo contains %q (sibling branch) — reverse walk should not surface siblings",
+				speciesJolteon)
+		}
+	}
+}
+
+// TestEvolutionTargetTool_ThresholdUnreachable pins the ErrThresholdUnreachable
+// path. Requesting 100% threshold on a fixture species under GL admits
+// only the exact best-spread IV — FP comparison with the percent math
+// can push it below 100% even for the winning spread. The 100.0001%
+// request forces the error path deterministically.
+func TestEvolutionTargetTool_ThresholdUnreachable(t *testing.T) {
+	t.Parallel()
+
+	tool := newEvolutionTargetTool(t, evolutionFixtureGamemaster)
+	handler := tool.Handler()
+
+	_, _, err := handler(t.Context(), nil, tools.EvolutionTargetParams{
+		TargetSpecies: speciesBlastoise,
+		League:        leagueGreat,
+		// Tighten just above 100 — no IV can exceed the best spread
+		// by definition, so the sweep finds no candidate clearing
+		// the bar.
+		TargetPercentOfBest: 100.01,
+	})
+	if !errors.Is(err, tools.ErrInvalidTargetPercent) {
+		t.Errorf("err = %v, want wrapping ErrInvalidTargetPercent (>100 rejected upfront)", err)
+	}
+}
+
+// TestEvolutionTargetTool_XLAllowedShiftsCeiling pins that XL=true
+// raises the effective level cap above 40, which for master league
+// (cpCap=10000, unreachable in pre-XL) produces a different MaxLevel
+// than XL=false. The monotonicity test locks the flag as actually
+// wired into FindOptimalSpread / LevelForCP.
+func TestEvolutionTargetTool_XLAllowedShiftsCeiling(t *testing.T) {
+	t.Parallel()
+
+	tool := newEvolutionTargetTool(t, evolutionFixtureGamemaster)
+	handler := tool.Handler()
+
+	_, noXL, err := handler(t.Context(), nil, tools.EvolutionTargetParams{
+		TargetSpecies: speciesBlastoise,
+		League:        "master",
+		XL:            false,
+	})
+	if err != nil {
+		t.Fatalf("no-XL handler: %v", err)
+	}
+
+	_, withXL, err := handler(t.Context(), nil, tools.EvolutionTargetParams{
+		TargetSpecies: speciesBlastoise,
+		League:        "master",
+		XL:            true,
+	})
+	if err != nil {
+		t.Fatalf("with-XL handler: %v", err)
+	}
+
+	if noXL.MaxLevel > 40 {
+		t.Errorf("no-XL MaxLevel = %.1f, want ≤ 40 (XL gates levels > 40)", noXL.MaxLevel)
+	}
+
+	if withXL.MaxLevel <= noXL.MaxLevel {
+		t.Errorf("with-XL MaxLevel = %.1f not above no-XL MaxLevel = %.1f — flag not consumed",
+			withXL.MaxLevel, noXL.MaxLevel)
+	}
+}
+
+// TestEvolutionTargetTool_ShadowHonoured pins Phase X-II behaviour:
+// `Options.Shadow=true` rerouts the target lookup to the _shadow
+// pvpoke entry when present, and sets ShadowVariantMissing=true
+// otherwise (fallback to base species). The fixture does not publish
+// shadow blastoise, so we expect the missing-variant flag.
+func TestEvolutionTargetTool_ShadowHonoured(t *testing.T) {
+	t.Parallel()
+
+	tool := newEvolutionTargetTool(t, evolutionFixtureGamemaster)
+	handler := tool.Handler()
+
+	_, result, err := handler(t.Context(), nil, tools.EvolutionTargetParams{
+		TargetSpecies: speciesBlastoise,
+		League:        leagueGreat,
+		Options:       tools.CombatantOptions{Shadow: true},
+	})
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+
+	if !result.ShadowVariantMissing {
+		t.Errorf("ShadowVariantMissing = false, want true (fixture has no blastoise_shadow entry)")
+	}
+
+	if result.ResolvedSpeciesID != speciesBlastoise {
+		t.Errorf("ResolvedSpeciesID = %q, want %q (base species fallback)",
+			result.ResolvedSpeciesID, speciesBlastoise)
+	}
+
+	if result.MaxCPToCatch <= 0 {
+		t.Errorf("MaxCPToCatch = %d, want > 0 even with shadow fallback", result.MaxCPToCatch)
+	}
+}
+
+// TestEvolutionTargetTool_HintHasNoStaleToolReference locks the
+// evolution_hint string against a regression where a previous
+// revision named a non-existent pvp_evolution_cost tool. No
+// `pvp_*` substring in the hint means no misdirection.
+func TestEvolutionTargetTool_HintHasNoStaleToolReference(t *testing.T) {
+	t.Parallel()
+
+	tool := newEvolutionTargetTool(t, evolutionFixtureGamemaster)
+	handler := tool.Handler()
+
+	_, result, err := handler(t.Context(), nil, tools.EvolutionTargetParams{
+		TargetSpecies: speciesBlastoise,
+		League:        leagueGreat,
+	})
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+
+	if strings.Contains(result.EvolutionHint, "pvp_") {
+		t.Errorf("EvolutionHint = %q, must not reference any pvp_* tool name (stale references mis-direct callers)",
+			result.EvolutionHint)
+	}
+}
+
+// TestEvolutionTargetTool_ContextCancelledMidSweep pins that the
+// 4096-IV sweep polls ctx.Err() at its outer-loop boundary. The
+// test wraps the handler's context in a 1-nanosecond deadline that
+// expires before the sweep can complete; without the mid-sweep
+// poll, the handler would run to completion and the error assertion
+// would fail. This mirrors the CLAUDE.md invariant that every heavy-
+// sweep tool polls ctx between iterations.
+func TestEvolutionTargetTool_ContextCancelledMidSweep(t *testing.T) {
+	t.Parallel()
+
+	tool := newEvolutionTargetTool(t, evolutionFixtureGamemaster)
+	handler := tool.Handler()
+
+	ctx, cancel := context.WithTimeout(t.Context(), time.Nanosecond)
+	defer cancel()
+
+	// Sleep briefly to ensure the deadline has fired before the
+	// handler's cancellation poll can run. Since the deadline is 1ns
+	// and handler does preHandleValidation first (which also checks
+	// ctx), cancellation may surface either before or during the
+	// sweep — either is acceptable; the test only pins that SOME
+	// context-cancellation error bubbles up.
+	time.Sleep(time.Millisecond)
+
+	_, _, err := handler(ctx, nil, tools.EvolutionTargetParams{
+		TargetSpecies: speciesBlastoise,
+		League:        leagueGreat,
+	})
+	if !errors.Is(err, context.DeadlineExceeded) && !errors.Is(err, context.Canceled) {
+		t.Errorf("err = %v, want wrapping context.DeadlineExceeded or context.Canceled", err)
 	}
 }

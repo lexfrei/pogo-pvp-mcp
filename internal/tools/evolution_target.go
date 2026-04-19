@@ -145,16 +145,28 @@ func (tool *EvolutionTargetTool) handle(
 		threshold = defaultTargetPercentOfBest
 	}
 
-	ceiling := searchEvolutionTargetCeiling(inputs, best, threshold, params.XL)
+	ceiling, err := searchEvolutionTargetCeiling(ctx, inputs, best, threshold, params.XL)
+	if err != nil {
+		return nil, EvolutionTargetResult{}, err
+	}
+
 	if ceiling.MaxCPToCatch == 0 {
 		return nil, EvolutionTargetResult{}, fmt.Errorf(
 			"%w: target %q under cpCap=%d at threshold %.1f%%",
 			ErrThresholdUnreachable, inputs.resolvedTargetID, inputs.cpCap, threshold)
 	}
 
-	typical := typicalWildCPRangeFor(inputs.root)
+	return nil, buildEvolutionTargetResult(&params, inputs, best, threshold, ceiling), nil
+}
 
-	return nil, EvolutionTargetResult{
+// buildEvolutionTargetResult projects the resolved inputs + search
+// candidate into the JSON output shape. Extracted from handle so the
+// outer function stays under the funlen budget.
+func buildEvolutionTargetResult(
+	params *EvolutionTargetParams, inputs *evolutionTargetInputs,
+	best pogopvp.OptimalSpread, threshold float64, ceiling searchCandidate,
+) EvolutionTargetResult {
+	return EvolutionTargetResult{
 		TargetSpecies:        params.TargetSpecies,
 		ResolvedSpeciesID:    inputs.resolvedTargetID,
 		FromSpecies:          inputs.root.ID,
@@ -165,12 +177,12 @@ func (tool *EvolutionTargetTool) handle(
 		TargetPercentOfBest:  threshold,
 		MaxCPToCatch:         ceiling.MaxCPToCatch,
 		MaxLevel:             ceiling.MaxLevel,
-		TypicalWildCPRange:   typical,
+		TypicalWildCPRange:   typicalWildCPRangeFor(inputs.root),
 		PercentOfBestAtMax:   ceiling.PercentOfBestAtMax,
 		EvolutionHint:        evolutionHintFor(inputs.chain),
 		BestStatProduct:      best.StatProduct,
 		ShadowVariantMissing: inputs.shadowMissing,
-	}, nil
+	}
 }
 
 // evolutionTargetInputs bundles the resolved values common to both the
@@ -281,17 +293,29 @@ type searchCandidate struct {
 // level in Pokémon GO). The winner is the (IV, level) pair producing
 // the greatest root-species CP: the CP ceiling for wild catches.
 //
+// ctx.Err() is polled at the outer-loop boundary so a client
+// disconnect during the 4096-IV sweep releases the handler
+// goroutine promptly, matching the ctx-polling discipline documented
+// in CLAUDE.md for every other heavy-sweep tool (team_builder,
+// counter_finder, threat_coverage, rank_batch).
+//
 // If no IV spread clears the threshold the zero-valued candidate is
-// returned; the caller surfaces an actionable error.
+// returned with a nil error; the caller surfaces
+// ErrThresholdUnreachable.
 func searchEvolutionTargetCeiling(
-	inputs *evolutionTargetInputs, best pogopvp.OptimalSpread,
+	ctx context.Context, inputs *evolutionTargetInputs, best pogopvp.OptimalSpread,
 	thresholdPercent float64, xlAllowed bool,
-) searchCandidate {
+) (searchCandidate, error) {
 	var candidate searchCandidate
 
 	opts := pogopvp.FindSpreadOpts{XLAllowed: xlAllowed}
 
 	for atk := 0; atk <= pogopvp.MaxIV; atk++ {
+		err := ctx.Err()
+		if err != nil {
+			return searchCandidate{}, fmt.Errorf("evolution_target cancelled mid-sweep: %w", err)
+		}
+
 		for def := 0; def <= pogopvp.MaxIV; def++ {
 			for sta := 0; sta <= pogopvp.MaxIV; sta++ {
 				evaluateIVCandidate(inputs, atk, def, sta, best, thresholdPercent, opts, &candidate)
@@ -299,7 +323,7 @@ func searchEvolutionTargetCeiling(
 		}
 	}
 
-	return candidate
+	return candidate, nil
 }
 
 // evaluateIVCandidate is the per-IV body of the ceiling search.
@@ -400,20 +424,21 @@ func typicalWildCPRangeFor(root *pogopvp.Species) [2]int {
 }
 
 // evolutionHintFor is a best-effort human-readable note describing
-// how to evolve along the chain. It does NOT consult PokéMiners or
-// Bulbapedia data (out of scope; the pvp_evolution_cost tool is the
-// dedicated place for per-step candy / item data). Chains of length
-// one (target == root, impossible here thanks to the PreEvolution
-// gate) get an empty string; the common two-hop case gets a terse
-// prompt pointing the caller at pvp_evolution_cost.
+// how to evolve along the chain. Deliberately does NOT reference any
+// specific tool name — a previous revision pointed callers at a
+// non-existent pvp_evolution_cost tool, actively mis-directing them
+// on every successful response. Per-step candy / item data is not
+// in scope here; callers should consult their preferred data source
+// (Bulbapedia, PokéMiners, in-game display) for those numbers.
+// Chains of length one (target == root, impossible here thanks to
+// the PreEvolution gate) get an empty string.
 func evolutionHintFor(chain []string) string {
 	if len(chain) < 2 {
 		return ""
 	}
 
 	return "Catch " + chain[0] + " and evolve up the chain (" +
-		formatChainArrow(chain) +
-		"). Use pvp_evolution_cost for per-step candy / item requirements."
+		formatChainArrow(chain) + ")."
 }
 
 // formatChainArrow renders [a, b, c] as "a → b → c". Duplicated here
