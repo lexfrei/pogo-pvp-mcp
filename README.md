@@ -4,7 +4,7 @@ MCP server that will expose a Pokémon GO PvP battle simulator and ranker to LLM
 
 **Status**: approaching v0.1. Ten MCP tools plus a `diff-gm` CLI helper are implemented:
 
-- `pvp_rank` — rank one Pokémon in a league/cup by IV and level, with percent-of-best vs the species' global stat-product optimum, a pvpoke-recommended `optimal_moveset` (with per-move `has_legacy` flag), a `non_legacy_moveset` alternative (populated only when the optimal build contains a legacy move, with `rating_delta` vs the optimal build), and a `comparison_to_hundo` block showing the best-case 15/15/15 spread.
+- `pvp_rank` — rank one Pokémon in a league/cup by IV and level, with percent-of-best vs the species' global stat-product optimum, a pvpoke-recommended `optimal_moveset` carrying an aggregate `has_legacy` boolean, a `non_legacy_moveset` alternative (populated only when the optimal build contains at least one legacy move, with `rating_delta` vs the optimal build), and a `comparison_to_hundo` block showing the best-case 15/15/15 spread.
 - `pvp_matchup` — 1v1 simulation returning winner, turns, HP / energy / shields used, charged-move firing counts, and the resolved moveset used on each side (so omitted `fast_move` / `charged_moves` get auto-filled from the cup/league recommended build).
 - `pvp_cp_limits` — given species + IVs, return the highest level and CP reachable while staying under each PvP league's CP cap.
 - `pvp_meta` — top-N species from pvpoke's per-(cup, league) rankings. Each entry carries the recommended moveset as a `[]MoveRef{id, legacy}` slice so per-move legacy status is explicit, plus display stats and a role classification (`lead` / `switch` / `closer` / `flex`) from the per-role pvpoke rankings.

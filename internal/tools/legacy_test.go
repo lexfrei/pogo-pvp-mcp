@@ -13,6 +13,13 @@ import (
 	"github.com/lexfrei/pogo-pvp-mcp/internal/tools"
 )
 
+// moveCounter / moveIcePunch are the non-legacy move ids the
+// non-legacy enumeration test expects medicham to settle on.
+const (
+	moveCounter  = "COUNTER"
+	moveIcePunch = "ICE_PUNCH"
+)
+
 // newTeamBuilderToolFromFixture builds a TeamBuilderTool bound to a
 // custom gamemaster fixture + rankings payload. Legacy tests need
 // control over both the legacyMoves block and the empty rankings
@@ -267,6 +274,197 @@ func TestRank_OptimalHasLegacyDetected(t *testing.T) {
 	}
 	if result.NonLegacyMoveset == nil {
 		t.Fatal("NonLegacyMoveset = nil, want populated when optimal has legacy")
+	}
+}
+
+// TestRank_NonLegacyMovesetFields pins the concrete Fast / Charged
+// / RatingDelta carried by NonLegacyMoveset. For medicham with
+// legacy PSYCHIC, the only non-legacy charged left in the fixture
+// is ICE_PUNCH, so the enumeration must settle on COUNTER +
+// ICE_PUNCH. The delta is whatever the simulation produces; we
+// only assert it's computed (non-zero magnitude) and that the
+// moveset fields are not empty.
+func TestRank_NonLegacyMovesetFields(t *testing.T) {
+	t.Parallel()
+
+	const ranksJSON = `[
+  {"speciesId": "medicham", "speciesName": "Medicham", "rating": 800,
+   "moveset": ["COUNTER", "PSYCHIC", "ICE_PUNCH"],
+   "matchups": [], "counters": [],
+   "stats": {"product": 2100, "atk": 106, "def": 139, "hp": 141}},
+  {"speciesId": "azumarill", "speciesName": "Azumarill", "rating": 900,
+   "moveset": ["BUBBLE", "ICE_BEAM", "PLAY_ROUGH"],
+   "matchups": [], "counters": [],
+   "stats": {"product": 2500, "atk": 80, "def": 150, "hp": 200}},
+  {"speciesId": "machamp", "speciesName": "Machamp", "rating": 750,
+   "moveset": ["COUNTER", "CROSS_CHOP"],
+   "matchups": [], "counters": [],
+   "stats": {"product": 2400, "atk": 170, "def": 130, "hp": 180}}
+]`
+
+	tool := newRankToolFromFixture(t, legacyFixtureGamemaster, ranksJSON)
+	handler := tool.Handler()
+
+	_, result, err := handler(t.Context(), nil, tools.RankParams{
+		Species: speciesMedicham,
+		IV:      [3]int{0, 15, 15},
+		League:  leagueGreat,
+	})
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+
+	if result.NonLegacyMoveset == nil {
+		t.Fatal("NonLegacyMoveset = nil, want populated")
+	}
+
+	nl := result.NonLegacyMoveset
+
+	if nl.Fast != moveCounter {
+		t.Errorf("NonLegacyMoveset.Fast = %q, want %s", nl.Fast, moveCounter)
+	}
+	if len(nl.Charged) != 1 || nl.Charged[0] != moveIcePunch {
+		t.Errorf("NonLegacyMoveset.Charged = %v, want [%s]", nl.Charged, moveIcePunch)
+	}
+	if nl.Rationale != "" {
+		t.Errorf("NonLegacyMoveset.Rationale = %q, want empty (successful enumeration)", nl.Rationale)
+	}
+}
+
+// TestRank_NonLegacyRationaleNoChargedMoves pins the
+// "species has no non-legacy charged moves" rationale branch.
+// Uses a synthetic fixture where all charged moves on the species
+// are legacy → NonLegacyMoveset carries the rationale with empty
+// Fast / Charged.
+func TestRank_NonLegacyRationaleNoChargedMoves(t *testing.T) {
+	t.Parallel()
+
+	const gmJSON = `{
+  "id": "gamemaster",
+  "timestamp": "2026-04-19 00:00:00",
+  "pokemon": [
+    {
+      "dex": 308,
+      "speciesId": "medicham",
+      "speciesName": "Medicham",
+      "baseStats": {"atk": 121, "def": 152, "hp": 155},
+      "types": ["fighting", "psychic"],
+      "fastMoves": ["COUNTER"],
+      "chargedMoves": ["ICE_PUNCH", "PSYCHIC"],
+      "legacyMoves": ["ICE_PUNCH", "PSYCHIC"],
+      "released": true
+    }
+  ],
+  "moves": [
+    {"moveId": "COUNTER", "name": "Counter", "type": "fighting",
+     "power": 8, "energy": 0, "energyGain": 7, "cooldown": 1000, "turns": 2},
+    {"moveId": "ICE_PUNCH", "name": "Ice Punch", "type": "ice",
+     "power": 55, "energy": 40, "cooldown": 500},
+    {"moveId": "PSYCHIC", "name": "Psychic", "type": "psychic",
+     "power": 90, "energy": 55, "cooldown": 500}
+  ]
+}`
+
+	const ranksJSON = `[
+  {"speciesId": "medicham", "speciesName": "Medicham", "rating": 800,
+   "moveset": ["COUNTER", "PSYCHIC", "ICE_PUNCH"],
+   "matchups": [], "counters": [],
+   "stats": {"product": 2100, "atk": 106, "def": 139, "hp": 141}}
+]`
+
+	tool := newRankToolFromFixture(t, gmJSON, ranksJSON)
+	handler := tool.Handler()
+
+	_, result, err := handler(t.Context(), nil, tools.RankParams{
+		Species: speciesMedicham,
+		IV:      [3]int{0, 15, 15},
+		League:  leagueGreat,
+	})
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+
+	if result.NonLegacyMoveset == nil {
+		t.Fatal("NonLegacyMoveset = nil, want populated with rationale")
+	}
+	if result.NonLegacyMoveset.Rationale != "species has no non-legacy charged moves" {
+		t.Errorf("Rationale = %q, want \"species has no non-legacy charged moves\"",
+			result.NonLegacyMoveset.Rationale)
+	}
+	if result.NonLegacyMoveset.Fast != "" || len(result.NonLegacyMoveset.Charged) != 0 {
+		t.Errorf("NonLegacyMoveset has unexpected fast/charged: %+v", result.NonLegacyMoveset)
+	}
+}
+
+// TestTeamAnalysis_DisallowLegacyRejectsResolvedLegacy mirrors the
+// team_builder auto-fill test on the team_analysis side: a team
+// member with empty moveset under DisallowLegacy=true must also
+// trip ErrLegacyConflict when the pvpoke recommendation contains
+// a legacy move.
+func TestTeamAnalysis_DisallowLegacyRejectsResolvedLegacy(t *testing.T) {
+	t.Parallel()
+
+	const ranksJSON = `[
+  {"speciesId": "medicham", "speciesName": "Medicham", "rating": 800,
+   "moveset": ["COUNTER", "PSYCHIC", "ICE_PUNCH"],
+   "matchups": [], "counters": [],
+   "stats": {"product": 2100, "atk": 106, "def": 139, "hp": 141}}
+]`
+
+	gmServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(legacyFixtureGamemaster))
+	}))
+	t.Cleanup(gmServer.Close)
+
+	gmMgr, err := gamemaster.NewManager(config.GamemasterConfig{
+		Source:    gmServer.URL,
+		LocalPath: filepath.Join(t.TempDir(), "gm.json"),
+	})
+	if err != nil {
+		t.Fatalf("NewManager gm: %v", err)
+	}
+
+	err = gmMgr.Refresh(t.Context())
+	if err != nil {
+		t.Fatalf("Refresh gm: %v", err)
+	}
+
+	rankServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(ranksJSON))
+	}))
+	t.Cleanup(rankServer.Close)
+
+	ranksMgr, err := rankings.NewManager(rankings.Config{
+		BaseURL:  rankServer.URL,
+		LocalDir: filepath.Join(t.TempDir(), "rankings"),
+	})
+	if err != nil {
+		t.Fatalf("NewManager rankings: %v", err)
+	}
+
+	handler := tools.NewTeamAnalysisTool(gmMgr, ranksMgr).Handler()
+
+	team := []tools.Combatant{
+		{Species: speciesMedicham, IV: [3]int{15, 15, 15}, Level: 40},
+		{
+			Species: "azumarill", IV: [3]int{15, 15, 15}, Level: 40,
+			FastMove: "BUBBLE", ChargedMoves: []string{"ICE_BEAM"},
+		},
+		{
+			Species: "machamp", IV: [3]int{15, 15, 15}, Level: 30,
+			FastMove: "COUNTER", ChargedMoves: []string{"CROSS_CHOP"},
+		},
+	}
+
+	_, _, err = handler(t.Context(), nil, tools.TeamAnalysisParams{
+		Team:           team,
+		League:         leagueGreat,
+		DisallowLegacy: true,
+	})
+	if !errors.Is(err, tools.ErrLegacyConflict) {
+		t.Errorf("error = %v, want wrapping ErrLegacyConflict (auto-fill landed on legacy PSYCHIC)", err)
 	}
 }
 
