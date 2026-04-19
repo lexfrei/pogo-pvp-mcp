@@ -145,8 +145,8 @@ func TestSecondMoveCost_1kmBuddy(t *testing.T) {
 // on both currencies. medicham_shadow is the same base (3km buddy,
 // 50,000 stardust) so the response must multiply by 1.2 →
 // 60,000 stardust + 60 candy. (Niantic-documented; symmetric with
-// the purified 0.8× discount. Round 2 review caught an earlier
-// 3× misread.)
+// the purified 0.9× discount — Bulbapedia authoritative, earlier
+// review drafts cited 0.8× in error.)
 func TestSecondMoveCost_ShadowMultiplier(t *testing.T) {
 	t.Parallel()
 
@@ -154,7 +154,8 @@ func TestSecondMoveCost_ShadowMultiplier(t *testing.T) {
 	handler := tool.Handler()
 
 	_, result, err := handler(t.Context(), nil, tools.SecondMoveCostParams{
-		Species: "medicham_shadow",
+		Species: speciesMedicham,
+		Options: tools.CombatantOptions{Shadow: true},
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -179,6 +180,114 @@ func TestSecondMoveCost_ShadowMultiplier(t *testing.T) {
 	if strings.Contains(result.Note, "re-query the purified species id") {
 		t.Errorf("Note still contains stale \"re-query the purified species id\" advice: %q",
 			result.Note)
+	}
+}
+
+// TestSecondMoveCost_PurifiedMultiplier pins the ×0.9 purified
+// factor on both currencies (Bulbapedia authoritative).
+// Medicham 3km buddy: 50000 stardust × 0.9 = 45000;
+// 50 candy × 0.9 = 45.
+func TestSecondMoveCost_PurifiedMultiplier(t *testing.T) {
+	t.Parallel()
+
+	tool := newSecondMoveCostTool(t)
+	handler := tool.Handler()
+
+	_, result, err := handler(t.Context(), nil, tools.SecondMoveCostParams{
+		Species: speciesMedicham,
+		Options: tools.CombatantOptions{Purified: true},
+	})
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+
+	if result.CostMultiplier != 0.9 {
+		t.Errorf("CostMultiplier = %f, want 0.9", result.CostMultiplier)
+	}
+
+	if result.StardustCost != 45000 {
+		t.Errorf("StardustCost = %d, want 45000 (50000 × 0.9)", result.StardustCost)
+	}
+
+	if result.CandyCost != 45 {
+		t.Errorf("CandyCost = %d, want 45 (50 × 0.9)", result.CandyCost)
+	}
+
+	if !strings.Contains(result.Note, "Purified") {
+		t.Errorf("Note missing purified disclaimer; got %q", result.Note)
+	}
+}
+
+// TestSecondMoveCost_ShadowPurifiedStacking pins the
+// shadow × purified = 1.08 branch in scaleCost. Not a real
+// in-game state (shadow must be purified to stop being shadow) but
+// the tool must honour the flags the caller sent without crashing.
+// Medicham: 50000 × 1.08 = 54000; 50 × 1.08 = 54.
+func TestSecondMoveCost_ShadowPurifiedStacking(t *testing.T) {
+	t.Parallel()
+
+	tool := newSecondMoveCostTool(t)
+	handler := tool.Handler()
+
+	_, result, err := handler(t.Context(), nil, tools.SecondMoveCostParams{
+		Species: speciesMedicham,
+		Options: tools.CombatantOptions{Shadow: true, Purified: true},
+	})
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+
+	// Float comparison via delta to tolerate 1.2*0.9 = 1.08 IEEE drift.
+	const want = 1.08
+	if result.CostMultiplier < want-1e-9 || result.CostMultiplier > want+1e-9 {
+		t.Errorf("CostMultiplier = %f, want 1.08", result.CostMultiplier)
+	}
+
+	if result.StardustCost != 54000 {
+		t.Errorf("StardustCost = %d, want 54000 (50000 × 1.08)", result.StardustCost)
+	}
+
+	if result.CandyCost != 54 {
+		t.Errorf("CandyCost = %d, want 54 (50 × 1.08)", result.CandyCost)
+	}
+}
+
+// TestSecondMoveCost_LuckyIsNoOp pins that Options.Lucky does not
+// affect second-move cost (Niantic's 50% discount is powerup-only).
+func TestSecondMoveCost_LuckyIsNoOp(t *testing.T) {
+	t.Parallel()
+
+	tool := newSecondMoveCostTool(t)
+	handler := tool.Handler()
+
+	_, plain, err := handler(t.Context(), nil, tools.SecondMoveCostParams{
+		Species: speciesMedicham,
+	})
+	if err != nil {
+		t.Fatalf("plain: %v", err)
+	}
+
+	_, lucky, err := handler(t.Context(), nil, tools.SecondMoveCostParams{
+		Species: speciesMedicham,
+		Options: tools.CombatantOptions{Lucky: true},
+	})
+	if err != nil {
+		t.Fatalf("lucky: %v", err)
+	}
+
+	if plain.StardustCost != lucky.StardustCost {
+		t.Errorf("lucky changed stardust %d → %d; lucky must not affect second-move cost",
+			plain.StardustCost, lucky.StardustCost)
+	}
+
+	if plain.CandyCost != lucky.CandyCost {
+		t.Errorf("lucky changed candy %d → %d; lucky must not affect second-move cost",
+			plain.CandyCost, lucky.CandyCost)
+	}
+
+	if lucky.CostMultiplier != 1.0 {
+		t.Errorf("CostMultiplier = %f, want 1.0 (lucky is no-op on cost)",
+			lucky.CostMultiplier)
 	}
 }
 
@@ -222,6 +331,12 @@ func TestSecondMoveCost_MissingBuddyDistance(t *testing.T) {
 // earlier iteration let the description say "3× both currencies"
 // after the code had already been corrected to 1.2× — locking this
 // substring prevents a regression where code and description drift.
+//
+// Phase X-I round-3 review also locks the purified phrasing: the
+// pre-refactor description claimed "pvpoke does not expose a purified
+// species id and this tool does not model it", which contradicts the
+// post-refactor Options.Purified=true × 0.9× support. The "does not
+// model" substring must be gone; the 0.9× phrasing must be present.
 func TestSecondMoveCost_ToolDescriptionSanity(t *testing.T) {
 	t.Parallel()
 
@@ -234,6 +349,18 @@ func TestSecondMoveCost_ToolDescriptionSanity(t *testing.T) {
 
 	if !strings.Contains(desc, "1.2") {
 		t.Errorf("description missing the 1.2× shadow multiplier: %q", desc)
+	}
+
+	if strings.Contains(desc, "does not model") {
+		t.Errorf("description still claims purified is not modelled (pre-Phase-X drift): %q", desc)
+	}
+
+	if !strings.Contains(desc, "0.9") {
+		t.Errorf("description missing the 0.9× purified multiplier (Phase X support): %q", desc)
+	}
+
+	if !strings.Contains(desc, "purified") {
+		t.Errorf("description does not mention purified at all: %q", desc)
 	}
 }
 
@@ -383,7 +510,8 @@ func TestSecondMoveCost_ShadowWithMissingBuddyDistance(t *testing.T) {
 	handler := tool.Handler()
 
 	_, result, err := handler(t.Context(), nil, tools.SecondMoveCostParams{
-		Species: "mewtwo_shadow",
+		Species: "mewtwo",
+		Options: tools.CombatantOptions{Shadow: true},
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)

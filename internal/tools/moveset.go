@@ -93,6 +93,12 @@ func ResolveMoveset(
 // caller explicitly rejected. The per-species lookup needs the
 // gamemaster snapshot; pass nil when the caller is not enforcing
 // the gate.
+//
+// Shadow-aware: when spec.Options.Shadow is true the rankings and
+// legacy-move lookup use the resolved species id (e.g.
+// "medicham_shadow") so pvpoke's shadow-specific recommended
+// moveset and LegacyMoves list drive the result — not the base
+// species' published build.
 func applyMovesetDefaults(
 	ctx context.Context, ranks *rankings.Manager,
 	spec *Combatant, cpCap int, cup string,
@@ -102,12 +108,14 @@ func applyMovesetDefaults(
 		return nil
 	}
 
-	fast, charged, err := ResolveMoveset(ctx, ranks, spec.Species, cpCap, cup)
+	lookupID := resolvedSpeciesIDForMoveset(snapshot, spec)
+
+	fast, charged, err := ResolveMoveset(ctx, ranks, lookupID, cpCap, cup)
 	if err != nil {
 		return err
 	}
 
-	err = rejectResolvedLegacy(snapshot, spec.Species, fast, charged, disallowLegacy)
+	err = rejectResolvedLegacy(snapshot, lookupID, fast, charged, disallowLegacy)
 	if err != nil {
 		return err
 	}
@@ -116,4 +124,23 @@ func applyMovesetDefaults(
 	spec.ChargedMoves = charged
 
 	return nil
+}
+
+// resolvedSpeciesIDForMoveset returns the pvpoke gamemaster id that
+// should drive rankings / legacy lookups for this spec: shadow
+// variants resolve to the "_shadow" entry when published, falling
+// back to the base id if not. Without a snapshot (rare — most
+// callers always pass one) we can't check pvpoke's shadow map, so
+// we return spec.Species unchanged.
+func resolvedSpeciesIDForMoveset(snapshot *pogopvp.Gamemaster, spec *Combatant) string {
+	if snapshot == nil || !spec.Options.Shadow {
+		return spec.Species
+	}
+
+	_, resolvedID, _, ok := resolveSpeciesLookup(snapshot, spec.Species, spec.Options)
+	if !ok {
+		return spec.Species
+	}
+
+	return resolvedID
 }

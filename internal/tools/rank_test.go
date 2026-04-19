@@ -66,7 +66,7 @@ func TestRankTool_KnownSpecies(t *testing.T) {
 	handler := tools.NewRankTool(mgr, nil).Handler()
 
 	_, result, err := handler(t.Context(), nil, tools.RankParams{
-		Species: "medicham",
+		Species: speciesMedicham,
 		IV:      [3]int{0, 15, 15},
 		League:  "great",
 	})
@@ -74,7 +74,7 @@ func TestRankTool_KnownSpecies(t *testing.T) {
 		t.Fatalf("handler: %v", err)
 	}
 
-	if result.Species != "medicham" {
+	if result.Species != speciesMedicham {
 		t.Errorf("Species = %q, want medicham", result.Species)
 	}
 	if result.CP <= 0 || result.CP > 1500 {
