@@ -412,6 +412,33 @@ func TestManager_GetCupCapNotFound(t *testing.T) {
 	}
 }
 
+// TestManager_GetCupIDInjection pins the cup validator: cup values
+// containing path separators or parent-directory components must be
+// rejected with ErrInvalidCup before any filesystem or HTTP side
+// effect. Defence-in-depth for LLM-supplied cup ids — most would
+// surface as upstream 404s anyway, but a `..`-containing cup could
+// escape the configured cache directory on MkdirAll.
+func TestManager_GetCupIDInjection(t *testing.T) {
+	t.Parallel()
+
+	mgr, err := rankings.NewManager(rankings.Config{
+		BaseURL:  "http://example.invalid",
+		LocalDir: filepath.Join(t.TempDir(), "rankings"),
+	})
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+
+	cases := []string{"../foo", "foo/bar", `foo\bar`, "..", "a/../../etc"}
+
+	for _, cup := range cases {
+		_, err := mgr.Get(t.Context(), 1500, cup)
+		if !errors.Is(err, rankings.ErrInvalidCup) {
+			t.Errorf("cup=%q: error = %v, want wrapping ErrInvalidCup", cup, err)
+		}
+	}
+}
+
 func TestManager_UpstreamError(t *testing.T) {
 	t.Parallel()
 

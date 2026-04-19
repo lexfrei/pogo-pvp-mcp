@@ -19,6 +19,13 @@ var ErrTeamSizeMismatch = errors.New("team must have exactly 3 members")
 // nor of length 2 with values in [0, MaxShields].
 var ErrInvalidShields = errors.New("invalid shields")
 
+// ErrMovesetTooShort is returned when a rankings entry for a meta
+// species carries fewer than 2 moveset slots (fast + ≥1 charged).
+// Distinct from ErrUnknownMove so callers debugging the
+// SkippedMetaSpecies list can tell a malformed-rankings race apart
+// from a real gamemaster/rankings id mismatch.
+var ErrMovesetTooShort = errors.New("moveset too short")
+
 // TeamSize is the fixed number of combatants in a PvP team.
 const TeamSize = 3
 
@@ -344,7 +351,8 @@ func buildMetaCombatants(
 		combatant, err := buildOneMetaCombatant(snapshot, &entries[i], cpCap, shields)
 		if err != nil {
 			if errors.Is(err, ErrUnknownSpecies) || errors.Is(err, ErrUnknownMove) ||
-				errors.Is(err, ErrMoveCategoryMismatch) {
+				errors.Is(err, ErrMoveCategoryMismatch) ||
+				errors.Is(err, ErrMovesetTooShort) {
 				skipped = append(skipped, entries[i].SpeciesID)
 
 				continue
@@ -372,7 +380,7 @@ func buildOneMetaCombatant(
 	if len(entry.Moveset) < 2 {
 		return pogopvp.Combatant{}, fmt.Errorf(
 			"%w: moveset has %d entries, need at least 2 (fast + 1 charged)",
-			ErrUnknownMove, len(entry.Moveset))
+			ErrMovesetTooShort, len(entry.Moveset))
 	}
 
 	// pvpoke rankings are generated with levelCap=50 (XL-candy era).

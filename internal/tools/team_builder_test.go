@@ -460,6 +460,51 @@ func TestTeamBuilderTool_AllParetoScenarioCoverage(t *testing.T) {
 	}
 }
 
+// TestTeamBuilderTool_ShieldsDoNotAffectScoring pins the Phase-D
+// semantic: the per-scenario rating matrix is always computed over
+// [0, 1, 2] shield scenarios regardless of the caller's Shields
+// slice, so scoring results must be identical across single-
+// scenario Shields overrides. Only OptimizeFor picks the reporting
+// axis. If someone later re-wires Shields into the scoring
+// pipeline this test starts failing.
+func TestTeamBuilderTool_ShieldsDoNotAffectScoring(t *testing.T) {
+	t.Parallel()
+
+	tool := newTeamBuilderTool(t)
+	handler := tool.Handler()
+
+	pool := []tools.Combatant{
+		baseCombatant("a"),
+		baseCombatant("b"),
+		baseCombatant("c"),
+	}
+
+	_, withZero, err := handler(t.Context(), nil, tools.TeamBuilderParams{
+		Pool: pool, League: leagueGreat, Shields: []int{0},
+	})
+	if err != nil {
+		t.Fatalf("[0]: %v", err)
+	}
+
+	_, withTwo, err := handler(t.Context(), nil, tools.TeamBuilderParams{
+		Pool: pool, League: leagueGreat, Shields: []int{2},
+	})
+	if err != nil {
+		t.Fatalf("[2]: %v", err)
+	}
+
+	if len(withZero.Teams) != 1 || len(withTwo.Teams) != 1 {
+		t.Fatalf("expected one team each, got %d / %d",
+			len(withZero.Teams), len(withTwo.Teams))
+	}
+
+	if withZero.Teams[0].TeamScore != withTwo.Teams[0].TeamScore {
+		t.Errorf("TeamScore changed with Shields=[0] (%.2f) vs [2] (%.2f) — "+
+			"Shields must not drive scoring post-Phase-D",
+			withZero.Teams[0].TeamScore, withTwo.Teams[0].TeamScore)
+	}
+}
+
 func TestTeamBuilderTool_NegativeMaxResults(t *testing.T) {
 	t.Parallel()
 

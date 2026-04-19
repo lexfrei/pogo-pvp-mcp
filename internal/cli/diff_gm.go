@@ -70,7 +70,7 @@ func newDiffGMCommand() *cobra.Command {
 func runDiffGM(ctx context.Context, flags *diffGMFlags) error {
 	rt := runtimeFrom(ctx)
 
-	local, err := loadLocalGamemaster(rt.Config.Gamemaster.LocalPath)
+	local, err := loadLocalCache(rt.Config.Gamemaster.LocalPath)
 	if err != nil {
 		return fmt.Errorf("load local gamemaster: %w", err)
 	}
@@ -90,11 +90,13 @@ func runDiffGM(ctx context.Context, flags *diffGMFlags) error {
 	return nil
 }
 
-// loadLocalGamemaster reads the cache file and parses it. A missing
-// file is treated as "empty baseline" — useful for the first-ever
-// diff against a fresh clone — so the full remote content shows up
-// as adds.
-func loadLocalGamemaster(path string) (*pogopvp.Gamemaster, error) {
+// loadLocalCache reads the implicit cache file and parses it. A
+// missing file is treated as "empty baseline" — useful for the
+// first-ever diff against a fresh clone — so the full remote
+// content shows up as adds. Use this ONLY for the implicit cache
+// path resolved from config; explicit --against paths must surface
+// missing-file errors loudly (see [loadGamemasterFile]).
+func loadLocalCache(path string) (*pogopvp.Gamemaster, error) {
 	if path == "" {
 		return nil, nil //nolint:nilnil // empty cache path means "no baseline yet"
 	}
@@ -109,12 +111,23 @@ func loadLocalGamemaster(path string) (*pogopvp.Gamemaster, error) {
 	}
 	defer file.Close()
 
-	gm, err := pogopvp.ParseGamemaster(file)
-	if err != nil {
-		return nil, fmt.Errorf("parse %s: %w", path, err)
-	}
+	return parseFromReader(file)
+}
 
-	return gm, nil
+// loadGamemasterFile reads an explicit gamemaster file (i.e. the
+// --against override) and parses it. A missing file propagates the
+// os.ErrNotExist error rather than silently becoming an empty
+// baseline — an explicit path that does not resolve is a user
+// typo and must be surfaced, not converted into a "every species
+// removed" report.
+func loadGamemasterFile(path string) (*pogopvp.Gamemaster, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, fmt.Errorf("open %s: %w", path, err)
+	}
+	defer file.Close()
+
+	return parseFromReader(file)
 }
 
 // loadRemoteGamemaster chooses the HTTP source or an on-disk
@@ -125,7 +138,7 @@ func loadRemoteGamemaster(
 	ctx context.Context, source, against string,
 ) (*pogopvp.Gamemaster, error) {
 	if against != "" {
-		return loadLocalGamemaster(against)
+		return loadGamemasterFile(against)
 	}
 
 	return fetchUpstreamGamemaster(ctx, source)

@@ -15,6 +15,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
@@ -32,6 +33,14 @@ var ErrUnsupportedCap = errors.New("unsupported cp cap")
 // or the cup exists but does not have rankings for that CP cap (e.g.
 // Spring Cup is published only for 1500).
 var ErrUnknownCup = errors.New("unknown cup or (cup, cap) combination")
+
+// ErrInvalidCup is returned by Get / GetRole when the caller-supplied
+// cup id contains characters that could escape the cache directory
+// or the upstream URL structure (path separators, parent-directory
+// components). pvpoke cup ids are short, alphanumeric + digits, never
+// contain `/`, `\`, or `..`; we reject anything else before hitting
+// the filesystem or network.
+var ErrInvalidCup = errors.New("invalid cup id")
 
 // ErrUpstreamStatus wraps non-200 upstream responses other than 404.
 var ErrUpstreamStatus = errors.New("rankings upstream returned non-200 status")
@@ -179,6 +188,11 @@ func (m *Manager) GetRole(
 		return nil, fmt.Errorf("%w: %d not in {500, 1500, 2500, 10000}", ErrUnsupportedCap, cpCap)
 	}
 
+	err := validateCupID(cup)
+	if err != nil {
+		return nil, err
+	}
+
 	if role == "" {
 		role = RoleOverall
 	}
@@ -201,7 +215,7 @@ func (m *Manager) GetRole(
 		return entries, nil
 	}
 
-	entries, err := m.loadLocal(key)
+	entries, err = m.loadLocal(key)
 	if err == nil {
 		m.storeInMemory(key, entries)
 
@@ -226,6 +240,25 @@ func resolveCup(cup string) string {
 	}
 
 	return cup
+}
+
+// validateCupID rejects cup ids that could escape the cache
+// directory or the upstream URL layout. pvpoke cup ids are short
+// alphanumeric tokens (lowercase letters + digits, e.g. "spring",
+// "naic2026", "laic2025remix") and never contain path separators
+// or parent-directory components. An empty cup is accepted —
+// resolveCup rewrites it to the default "all" segment.
+func validateCupID(cup string) error {
+	if cup == "" {
+		return nil
+	}
+
+	if strings.ContainsAny(cup, `/\`) || strings.Contains(cup, "..") {
+		return fmt.Errorf("%w: %q contains path separators or parent-dir components",
+			ErrInvalidCup, cup)
+	}
+
+	return nil
 }
 
 // lookup returns the cached entries under a shared read lock; the

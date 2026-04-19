@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"slices"
 	"testing"
 
 	"github.com/lexfrei/pogo-pvp-mcp/internal/config"
@@ -266,6 +267,83 @@ func TestTeamAnalysisTool_ChargedMovesEmptyIsJSONArray(t *testing.T) {
 	}
 	if value == nil {
 		t.Errorf("charged_moves = null, want [] (empty array); raw=%s", payload)
+	}
+}
+
+// TestTeamAnalysisTool_MovesetTooShortSkippedCleanly pins the
+// round-2 classifier fix: rankings entries with fewer than two
+// moveset slots (malformed upstream payload) must surface as
+// ErrMovesetTooShort and end up in SkippedMetaSpecies, NOT as
+// ErrUnknownMove (which used to mask the problem as a gamemaster /
+// rankings id mismatch). Validated by feeding a rankings fixture
+// where a single entry has only the fast move and asserting the
+// species lands in the skipped list but the handler itself succeeds.
+func TestTeamAnalysisTool_MovesetTooShortSkippedCleanly(t *testing.T) {
+	t.Parallel()
+
+	// Rankings fixture: one entry with a full moveset, one with a
+	// 1-element moveset (fast only) → the short one must be skipped.
+	const rankingsPayload = `[
+  {"speciesId": "a", "speciesName": "A", "rating": 900, "score": 95,
+   "moveset": ["FAST1", "CH1"], "matchups": [], "counters": [],
+   "stats": {"product": 2500, "atk": 110, "def": 120, "hp": 160}},
+  {"speciesId": "b", "speciesName": "B", "rating": 880, "score": 93,
+   "moveset": ["FAST1"], "matchups": [], "counters": [],
+   "stats": {"product": 2400, "atk": 108, "def": 125, "hp": 150}}
+]`
+
+	gmServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(teamAnalysisFixtureGamemaster))
+	}))
+	t.Cleanup(gmServer.Close)
+
+	gmMgr, err := gamemaster.NewManager(config.GamemasterConfig{
+		Source:    gmServer.URL,
+		LocalPath: filepath.Join(t.TempDir(), "gm.json"),
+	})
+	if err != nil {
+		t.Fatalf("NewManager gm: %v", err)
+	}
+
+	err = gmMgr.Refresh(t.Context())
+	if err != nil {
+		t.Fatalf("Refresh gm: %v", err)
+	}
+
+	rankServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(rankingsPayload))
+	}))
+	t.Cleanup(rankServer.Close)
+
+	ranksMgr, err := rankings.NewManager(rankings.Config{
+		BaseURL:  rankServer.URL,
+		LocalDir: filepath.Join(t.TempDir(), "rankings"),
+	})
+	if err != nil {
+		t.Fatalf("NewManager rankings: %v", err)
+	}
+
+	tool := tools.NewTeamAnalysisTool(gmMgr, ranksMgr)
+	handler := tool.Handler()
+
+	valid := tools.Combatant{
+		Species: "a", IV: [3]int{15, 15, 15}, Level: 40,
+		FastMove: "FAST1", ChargedMoves: []string{"CH1"},
+	}
+
+	_, result, err := handler(t.Context(), nil, tools.TeamAnalysisParams{
+		Team:   []tools.Combatant{valid, valid, valid},
+		League: leagueGreat,
+	})
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+
+	if !slices.Contains(result.SkippedMetaSpecies, "b") {
+		t.Errorf("SkippedMetaSpecies = %v, want to contain \"b\" (short moveset should be skipped)",
+			result.SkippedMetaSpecies)
 	}
 }
 

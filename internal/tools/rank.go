@@ -303,12 +303,17 @@ func buildRankResult(inputs rankInputs) (RankResult, error) {
 
 // computeHundo searches the best 15/15/15 spread under the same cap
 // as the requested IV and packages it for the RankResult. Returns
-// nil for master league (every spread saturates at MaxLevel so the
-// comparison is uninformative). A search error (e.g. cap so low even
-// hundo can't fit) drops the field; that's acceptable because the
-// main spread already surfaced its own error above this point.
+// nil when the resolved cap is at or above masterLeagueCap — every
+// spread saturates at MaxLevel there, so the comparison is
+// uninformative. The guard keys on the resolved cpCap rather than
+// the league string so callers that pass `league:"great",
+// cp_cap:10000` still skip the empty comparison.
+//
+// A search error (e.g. cap so low even hundo can't fit) drops the
+// field; that's acceptable because the main spread already surfaced
+// its own error above this point.
 func computeHundo(inputs rankInputs) *HundoComparison {
-	if inputs.league == "master" {
+	if inputs.cpCap >= masterLeagueCap {
 		return nil
 	}
 

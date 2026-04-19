@@ -543,7 +543,7 @@ func enumerateFromAnchor(
 
 // buildParetoFrontier returns up to four teams: one best-in-class per
 // shield scenario plus a best-overall (averaged across all three
-// scenarios). Duplicates across scenarios are schlopped — a single
+// scenarios). Duplicates across scenarios are dropped — a single
 // team wins in e.g. both 0s and 1s and only appears once, labelled
 // with the best scenario label it won.
 func buildParetoFrontier(
@@ -611,7 +611,10 @@ func updateOverallBest(
 	i, jIdx, kIdx int,
 	bestOverall *TeamBuilderTeam, foundOverall *bool,
 ) {
-	overallScore := averageScenarioScore(matrix, i, jIdx, kIdx)
+	overallScore, ok := averageScenarioScore(matrix, i, jIdx, kIdx)
+	if !ok {
+		return
+	}
 
 	if !*foundOverall || overallScore > bestOverall.TeamScore {
 		*bestOverall = newTeam(pool, i, jIdx, kIdx, overallScore, "best overall")
@@ -680,10 +683,13 @@ func newTeam(
 // ok signal from scoreTripleFromMatrix to distinguish a legitimate
 // zero (full defender blowout on every matchup in the scenario)
 // from "no valid sample" (every sim failed): only the former
-// contributes to the mean.
+// contributes to the mean. The second return value propagates the
+// no-valid-sample signal to the caller so `updateOverallBest` does
+// not promote a phantom 0-score team to "best overall" when every
+// scenario came back as all-failures.
 func averageScenarioScore(
 	matrix [][][scenarioCount]ratingMatrixEntry, iIdx, jIdx, kIdx int,
-) float64 {
+) (float64, bool) {
 	var (
 		total   float64
 		counted int
@@ -700,10 +706,10 @@ func averageScenarioScore(
 	}
 
 	if counted == 0 {
-		return 0
+		return 0, false
 	}
 
-	return total / float64(counted)
+	return total / float64(counted), true
 }
 
 // ratingMatrixEntry pairs the rating with a flag that distinguishes a
@@ -788,8 +794,10 @@ func scoreTripleFromMatrix(
 		counted int
 	)
 
+	members := [3]int{iIdx, jIdx, kIdx}
+
 	for opp := range matrix[iIdx] {
-		for _, member := range []int{iIdx, jIdx, kIdx} {
+		for _, member := range members {
 			entry := matrix[member][opp][scenarioIdx]
 			if !entry.OK {
 				continue

@@ -235,6 +235,49 @@ func TestNewRootCommand_DiffGMDetectsDrift(t *testing.T) {
 	}
 }
 
+// TestNewRootCommand_DiffGMAgainstMissingFileErrors pins the round-2
+// review fix: `diff-gm --against /typo/path` must surface the
+// file-not-found error rather than silently treating the missing
+// file as an empty baseline (which would print every local species
+// as "removed" and exit via ErrDiffDirty, masquerading as a
+// catastrophic upstream purge).
+func TestNewRootCommand_DiffGMAgainstMissingFileErrors(t *testing.T) {
+	cachePath := filepath.Join(t.TempDir(), "gamemaster.json")
+
+	err := os.WriteFile(cachePath, []byte(cliFixtureGamemaster), 0o600)
+	if err != nil {
+		t.Fatalf("seed cache: %v", err)
+	}
+
+	// POGO_PVP_GAMEMASTER_SOURCE is required by config validation
+	// even though the --against branch never touches the network.
+	t.Setenv("POGO_PVP_GAMEMASTER_SOURCE", "https://example.invalid")
+	t.Setenv("POGO_PVP_GAMEMASTER_LOCAL_PATH", cachePath)
+
+	var stdout, stderr bytes.Buffer
+
+	root := cli.NewRootCommand(&stdout, &stderr)
+	root.SetArgs([]string{"diff-gm", "--against", "/definitely/not/here.json"})
+
+	err = root.Execute()
+	if err == nil {
+		t.Fatal("Execute returned nil, want a file-not-found error")
+	}
+
+	if errors.Is(err, cli.ErrDiffDirty) {
+		t.Errorf("Execute wrapped ErrDiffDirty, want a distinct missing-file error — "+
+			"regression: --against treated missing files as empty baseline. err=%v", err)
+	}
+
+	if !errors.Is(err, os.ErrNotExist) {
+		lowered := strings.ToLower(err.Error())
+		if !strings.Contains(lowered, "no such file") &&
+			!strings.Contains(lowered, "not exist") {
+			t.Errorf("Execute = %v, want to wrap os.ErrNotExist (or contain 'not exist')", err)
+		}
+	}
+}
+
 // TestNewRootCommand_DiffGMRespectsContextDeadline proves diff-gm
 // does not hang on a slow / unresponsive upstream: the HTTP request
 // is built with NewRequestWithContext, so a context deadline from

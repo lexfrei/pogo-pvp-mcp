@@ -62,6 +62,36 @@ func TestScoreTripleFromMatrix_AllFailuresReturnsFalse(t *testing.T) {
 	}
 }
 
+// TestAverageScenarioScore_AllFailuresReturnsFalse pins the round-2
+// review fix: when every shield scenario for a triple returns
+// ok=false from scoreTripleFromMatrix, averageScenarioScore must
+// propagate that signal (ok=false) to its caller so updateOverallBest
+// does not promote a phantom 0-score team to "best overall". Before
+// the fix the function returned bare float64 and dropped the signal
+// at the boundary.
+func TestAverageScenarioScore_AllFailuresReturnsFalse(t *testing.T) {
+	t.Parallel()
+
+	const poolSize = 3
+
+	matrix := make([][][scenarioCount]ratingMatrixEntry, poolSize)
+	for i := range matrix {
+		matrix[i] = make([][scenarioCount]ratingMatrixEntry, 1)
+		for scenario := range scenarioCount {
+			matrix[i][0][scenario] = ratingMatrixEntry{Rating: 0, OK: false}
+		}
+	}
+
+	score, ok := averageScenarioScore(matrix, 0, 1, 2)
+
+	if ok {
+		t.Errorf("ok = true, want false when every scenario is all-failures")
+	}
+	if score != 0 {
+		t.Errorf("score = %f, want 0 on all-failure path", score)
+	}
+}
+
 // TestScoreTripleFromMatrix_ZeroRatingIsValid pins the other side of
 // the same invariant: a legitimate 0 rating (everyone lost with
 // defender at full HP) must be reported with ok=true so downstream
