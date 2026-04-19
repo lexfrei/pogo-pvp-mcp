@@ -37,3 +37,6 @@ temp/
 
 # Personal notes
 TODO.md
+
+# Claude Code session state (scheduled tasks, local hooks)
+/.claude/
