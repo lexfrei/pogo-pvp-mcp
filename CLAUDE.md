@@ -64,6 +64,7 @@ The MCP server is a thin wrapper around the engine. The hot shape: an MCP tool h
 8. `pvp_move_info` — read-only gamemaster lookup: type/power/energy/duration plus the reverse index of every species on which this move is flagged legacy.
 9. `pvp_type_matchup` — wraps `pogopvp.TypeEffectiveness` with a human-readable calculation breakdown; validates the 18 canonical pvpoke types and rejects unknowns with `ErrUnknownType`.
 10. `pvp_level_from_cp` — thin wrapper over `pogopvp.LevelForCP`: given species + IVs + observed CP, return the highest 0.5-grid level that fits under the target plus the resolved stats. `Exact` distinguishes round-trip hits from CP-cap-style approximations.
+11. `pvp_counter_finder` — score a pool (or the top-N meta by default) against a target combatant; returns the top-N counters sorted by averaged battle rating plus per-shield-scenario breakdown. Honours the same `disallow_legacy` gate as the team tools.
 
 ### Non-obvious invariants (you will break these)
 

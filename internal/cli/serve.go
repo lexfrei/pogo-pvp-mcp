@@ -275,10 +275,10 @@ func runRefreshLoop(
 	}
 }
 
-// buildMCPServer constructs the mcp.Server with all ten currently
+// buildMCPServer constructs the mcp.Server with all eleven currently
 // implemented tools registered (pvp_rank, pvp_matchup, pvp_cp_limits,
 // pvp_meta, pvp_team_analysis, pvp_team_builder, pvp_species_info,
-// pvp_move_info, pvp_type_matchup, pvp_level_from_cp).
+// pvp_move_info, pvp_type_matchup, pvp_level_from_cp, pvp_counter_finder).
 func buildMCPServer(gamemasterMgr *gamemaster.Manager, ranks *rankings.Manager) *mcp.Server {
 	server := mcp.NewServer(&mcp.Implementation{
 		Name:    serverName,
@@ -314,6 +314,9 @@ func buildMCPServer(gamemasterMgr *gamemaster.Manager, ranks *rankings.Manager) 
 
 	levelFromCPTool := tools.NewLevelFromCPTool(gamemasterMgr)
 	mcp.AddTool(server, levelFromCPTool.Tool(), levelFromCPTool.Handler())
+
+	counterFinderTool := tools.NewCounterFinderTool(gamemasterMgr, ranks)
+	mcp.AddTool(server, counterFinderTool.Tool(), counterFinderTool.Handler())
 
 	return server
 }
