@@ -220,6 +220,11 @@ func validatePowerupRange(fromLevel, toLevel float64) (int, int, error) {
 func doubleLevelOnHalfGrid(level float64, label string) (int, error) {
 	const halfGridTolerance = 1e-9 // float64 quantisation slack on the 0.5 grid
 
+	if math.IsNaN(level) || math.IsInf(level, 0) {
+		return 0, fmt.Errorf("%w: %s=%v is not a finite number",
+			ErrInvalidLevel, label, level)
+	}
+
 	doubled := math.Round(level * 2)
 
 	if math.Abs(level*2-doubled) > halfGridTolerance {

@@ -1,7 +1,10 @@
 package tools_test
 
 import (
+	"encoding/json"
 	"errors"
+	"math"
+	"slices"
 	"strings"
 	"testing"
 
@@ -254,6 +257,86 @@ func TestPowerupCost_NoteExplainsCandyOmission(t *testing.T) {
 
 	if !strings.Contains(strings.ToLower(result.Note), "candy") {
 		t.Errorf("Note missing candy disclaimer; got %q", result.Note)
+	}
+}
+
+// TestPowerupCost_JSONShape locks the wire shape of the result. A
+// regression where someone re-adds a CandyCost field or bogus
+// availability flags will break this test — the README and
+// CLAUDE.md both claim the shape, and round-1 review caught
+// copy-paste drift that advertised flags the code never emitted.
+func TestPowerupCost_JSONShape(t *testing.T) {
+	t.Parallel()
+
+	tool := tools.NewPowerupCostTool()
+	handler := tool.Handler()
+
+	_, result, err := handler(t.Context(), nil, tools.PowerupCostParams{
+		FromLevel: 1.0,
+		ToLevel:   2.0,
+	})
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+
+	payload, err := json.Marshal(result)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+
+	decoded := map[string]any{}
+
+	err = json.Unmarshal(payload, &decoded)
+	if err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	wantKeys := []string{"from_level", "to_level", "steps", "stardust_cost", "note"}
+
+	gotKeys := make([]string, 0, len(decoded))
+	for k := range decoded {
+		gotKeys = append(gotKeys, k)
+	}
+
+	slices.Sort(wantKeys)
+	slices.Sort(gotKeys)
+
+	if !slices.Equal(gotKeys, wantKeys) {
+		t.Errorf("JSON keys = %v, want %v", gotKeys, wantKeys)
+	}
+}
+
+// TestPowerupCost_NaNRejected pins the NaN / Inf defensive guard.
+// Without it, a caller passing a non-finite float would pass the
+// 0.5-grid tolerance check vacuously (NaN comparisons are false)
+// and drift into undefined int-conversion territory.
+func TestPowerupCost_NaNRejected(t *testing.T) {
+	t.Parallel()
+
+	tool := tools.NewPowerupCostTool()
+	handler := tool.Handler()
+
+	cases := []struct {
+		name  string
+		level float64
+	}{
+		{"NaN", math.NaN()},
+		{"+Inf", math.Inf(1)},
+		{"-Inf", math.Inf(-1)},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			_, _, err := handler(t.Context(), nil, tools.PowerupCostParams{
+				FromLevel: tc.level,
+				ToLevel:   40.0,
+			})
+			if !errors.Is(err, tools.ErrInvalidLevel) {
+				t.Errorf("error = %v, want wrapping ErrInvalidLevel for %s", err, tc.name)
+			}
+		})
 	}
 }
 
