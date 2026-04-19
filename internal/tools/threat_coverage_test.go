@@ -126,7 +126,6 @@ func TestThreatCoverage_HappyPath(t *testing.T) {
 	if result.League != leagueGreat {
 		t.Errorf("League = %q, want %q", result.League, leagueGreat)
 	}
-	const cupAllLabel = "all"
 	if result.Cup != cupAllLabel {
 		t.Errorf("Cup = %q, want %q (default)", result.Cup, cupAllLabel)
 	}

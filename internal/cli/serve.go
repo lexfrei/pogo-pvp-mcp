@@ -275,12 +275,12 @@ func runRefreshLoop(
 	}
 }
 
-// buildMCPServer constructs the mcp.Server with all sixteen currently
+// buildMCPServer constructs the mcp.Server with all seventeen currently
 // implemented tools registered (pvp_rank, pvp_matchup, pvp_cp_limits,
 // pvp_meta, pvp_team_analysis, pvp_team_builder, pvp_species_info,
 // pvp_move_info, pvp_type_matchup, pvp_level_from_cp, pvp_counter_finder,
 // pvp_evolution_preview, pvp_rank_batch, pvp_threat_coverage, pvp_weather_boost,
-// pvp_encounter_cp_range).
+// pvp_encounter_cp_range, pvp_cup_rules).
 func buildMCPServer(gamemasterMgr *gamemaster.Manager, ranks *rankings.Manager) *mcp.Server {
 	server := mcp.NewServer(&mcp.Implementation{
 		Name:    serverName,
@@ -352,6 +352,9 @@ func registerInfoAndLookupTools(
 
 	encounterCPRangeTool := tools.NewEncounterCPRangeTool(gamemasterMgr)
 	mcp.AddTool(server, encounterCPRangeTool.Tool(), encounterCPRangeTool.Handler())
+
+	cupRulesTool := tools.NewCupRulesTool(gamemasterMgr)
+	mcp.AddTool(server, cupRulesTool.Tool(), cupRulesTool.Handler())
 }
 
 // buildRankingsManager constructs the shared rankings manager using
