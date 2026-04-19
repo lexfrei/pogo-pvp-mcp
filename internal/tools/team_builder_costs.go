@@ -42,21 +42,31 @@ func mustNewIV(atk, def, sta int) pogopvp.IV {
 // highest 0.5-grid level at which a 15/15/15 spread fits under
 // cpCap — i.e. the deepest climb a trainer would actually execute
 // for this league. For master league (cap 10000, effectively
-// uncapped) the default is MaxLevel (L50) since every IV reaches
-// it.
+// uncapped) the default is maxPowerupLevel (L50) — clamped to the
+// powerup table's upper bound rather than pogopvp.MaxLevel (L51),
+// which the engine uses for best-buddy boosting but the powerup
+// stardust table does not cover.
 func resolveTargetLevelForSpecies(cpCap int, base pogopvp.BaseStats, explicit float64) (float64, error) {
 	if explicit > 0 {
 		return explicit, nil
 	}
 
 	if cpCap >= masterLeagueCap {
-		return pogopvp.MaxLevel, nil
+		return maxPowerupLevel, nil
 	}
 
 	spread, err := pogopvp.LevelForCP(base, teamBuilderHundoIVs, cpCap,
 		pogopvp.FindSpreadOpts{XLAllowed: true})
 	if err != nil {
 		return 0, fmt.Errorf("target level for cap %d: %w", cpCap, err)
+	}
+
+	// LevelForCP may return a level slightly above maxPowerupLevel
+	// on a highly-permissive cap; clamp to the powerup table's
+	// upper bound so populatePowerupPortion does not skip pricing
+	// for a notionally-valid climb.
+	if spread.Level > maxPowerupLevel {
+		return maxPowerupLevel, nil
 	}
 
 	return spread.Level, nil
@@ -133,12 +143,26 @@ func computeMemberCost(
 }
 
 // populatePowerupPortion computes the stardust climb cost from the
-// member's current level to the target level. If the member is
-// already at or above the target, the powerup fields stay zero and
-// the AlreadyAtOrAboveTarget flag is raised + surfaced in
-// breakdown.Flags for discoverability.
+// member's current level to the target level. Three fall-through
+// conditions skip the climb without raising an error:
+//
+//   - target_level_unresolved: targetLevel is zero or negative
+//     (resolveTargetLevelForSpecies could not compute one, e.g.
+//     species missing from the snapshot). Distinguished from
+//     already-at-target because it signals a data problem, not a
+//     cost-zero outcome.
+//   - already_at_or_above_target: spec.Level >= targetLevel.
+//   - powerup_pricing_skipped: targetLevel or spec.Level is
+//     off-grid or out of [1.0, 50.0]; validatePowerupRange
+//     details the exact reason in the flag suffix.
 func populatePowerupPortion(breakdown *MemberCostBreakdown, spec *Combatant, targetLevel float64) {
-	if spec.Level >= targetLevel || targetLevel <= pogopvp.MinLevel {
+	if targetLevel <= 0 {
+		breakdown.Flags = append(breakdown.Flags, "target_level_unresolved")
+
+		return
+	}
+
+	if spec.Level >= targetLevel {
 		breakdown.AlreadyAtOrAboveTarget = true
 		breakdown.Flags = append(breakdown.Flags, "already_at_or_above_target")
 
@@ -260,4 +284,28 @@ func attachCostBreakdowns(
 		teams[i].CostBreakdowns = computeTeamBreakdowns(
 			snapshot, pool, teams[i].PoolIndices, cpCap, explicitTarget)
 	}
+}
+
+// validateTargetLevel rejects a caller-supplied target_level that
+// does not land on the 0.5 grid or falls outside [1.0, 50.0]. A
+// zero input means "use per-species default" and is valid; a
+// negative input is rejected. Returning a dedicated sentinel lets
+// the client distinguish this class of bad input from the other
+// pre-simulation errors (ErrMemberInvalidForLeague, etc.).
+func validateTargetLevel(target float64) error {
+	if target == 0 {
+		return nil
+	}
+
+	_, err := doubleLevelOnHalfGrid(target, "target_level")
+	if err != nil {
+		return fmt.Errorf("%w: %w", ErrInvalidTargetLevel, err)
+	}
+
+	if target > maxPowerupLevel {
+		return fmt.Errorf("%w: target_level=%.1f above L%.1f",
+			ErrInvalidTargetLevel, target, maxPowerupLevel)
+	}
+
+	return nil
 }

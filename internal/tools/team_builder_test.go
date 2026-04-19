@@ -728,19 +728,21 @@ func TestTeamBuilderTool_CostBreakdownPresent(t *testing.T) {
 }
 
 // TestTeamBuilderTool_AlreadyAtTargetClamp pins the zero-cost
-// clamp: a pool member at the league's target level already
-// should see PowerupStardustCost=0 and the
-// already_at_or_above_target flag.
+// clamp: a pool member at or above the target level should see
+// PowerupStardustCost=0 and the already_at_or_above_target flag.
+// Uses Level: 20.0 with TargetLevel: 10.0 (non-minimum target) so
+// the MinLevel short-circuit cannot accidentally satisfy the
+// assertion — round-1 review caught the earlier Level=1.0 +
+// target=1.0 test being vacuously true via the targetLevel <= 1
+// branch.
 func TestTeamBuilderTool_AlreadyAtTargetClamp(t *testing.T) {
 	t.Parallel()
 
 	tool := newTeamBuilderTool(t)
 	handler := tool.Handler()
 
-	// Level 1 members with a tiny explicit target at level 1
-	// (so every member is already at target).
 	member := tools.Combatant{
-		IV: [3]int{15, 15, 15}, Level: 1.0,
+		IV: [3]int{15, 15, 15}, Level: 20.0,
 		FastMove: "FAST1", ChargedMoves: []string{"CH1"},
 	}
 
@@ -752,7 +754,7 @@ func TestTeamBuilderTool_AlreadyAtTargetClamp(t *testing.T) {
 	_, result, err := handler(t.Context(), nil, tools.TeamBuilderParams{
 		Pool:        []tools.Combatant{ma, mb, mc},
 		League:      leagueGreat,
-		TargetLevel: 1.0,
+		TargetLevel: 10.0,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -764,7 +766,7 @@ func TestTeamBuilderTool_AlreadyAtTargetClamp(t *testing.T) {
 
 	for i, breakdown := range result.Teams[0].CostBreakdowns {
 		if breakdown.PowerupStardustCost != 0 {
-			t.Errorf("team[%d] PowerupStardustCost = %d, want 0 (already at target)",
+			t.Errorf("team[%d] PowerupStardustCost = %d, want 0 (already above target)",
 				i, breakdown.PowerupStardustCost)
 		}
 
@@ -775,10 +777,10 @@ func TestTeamBuilderTool_AlreadyAtTargetClamp(t *testing.T) {
 }
 
 // TestTeamBuilderTool_PowerupStardustClimb pins the actual stardust
-// number on a non-trivial climb: L1.0 → L2.0 is 4 half-steps of
-// the L1-L2.5 bucket at 200 each = 800 stardust baseline. The
-// breakdown must carry this value unscaled (no Options flags in
-// this test).
+// number on a non-trivial climb: L1.0 → L2.0 is 2 half-steps
+// (L1.0→L1.5 and L1.5→L2.0) inside the 200-stardust bucket for a
+// total of 400 stardust baseline. The breakdown must carry this
+// value unscaled (no Options flags in this test).
 func TestTeamBuilderTool_PowerupStardustClimb(t *testing.T) {
 	t.Parallel()
 
@@ -941,5 +943,107 @@ func TestTeamBuilderTool_InvalidMemberForLeague(t *testing.T) {
 	})
 	if !errors.Is(err, tools.ErrMemberInvalidForLeague) {
 		t.Errorf("error = %v, want wrapping ErrMemberInvalidForLeague", err)
+	}
+}
+
+// TestTeamBuilderTool_MasterLeagueCostBreakdown pins the round-1
+// fix for the master-league silent-zero bug: resolveTargetLevelFor
+// Species used to return pogopvp.MaxLevel (L51) for master, which
+// exceeds maxPowerupLevel (L50) and tripped populatePowerupPortion's
+// pricing-skipped fallback. Now clamped to L50. A full L1→L50
+// climb at baseline sums to 520,000 stardust; the team_builder
+// master-league default must reproduce that number for a member
+// at Level 1.
+func TestTeamBuilderTool_MasterLeagueCostBreakdown(t *testing.T) {
+	t.Parallel()
+
+	tool := newTeamBuilderTool(t)
+	handler := tool.Handler()
+
+	member := tools.Combatant{
+		IV: [3]int{15, 15, 15}, Level: 1.0,
+		FastMove: "FAST1", ChargedMoves: []string{"CH1"},
+	}
+
+	ma, mb, mc := member, member, member
+	ma.Species = "a"
+	mb.Species = "b"
+	mc.Species = "c"
+
+	_, result, err := handler(t.Context(), nil, tools.TeamBuilderParams{
+		Pool:   []tools.Combatant{ma, mb, mc},
+		League: "master",
+	})
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+
+	if len(result.Teams) == 0 {
+		t.Fatal("no teams returned")
+	}
+
+	const (
+		wantTargetLevel = 50.0
+		wantStardust    = 520000
+	)
+
+	for i, breakdown := range result.Teams[0].CostBreakdowns {
+		if breakdown.TargetLevel != wantTargetLevel {
+			t.Errorf("team[%d] TargetLevel = %v, want %v (master league default)",
+				i, breakdown.TargetLevel, wantTargetLevel)
+		}
+
+		if breakdown.PowerupStardustCost != wantStardust {
+			t.Errorf("team[%d] PowerupStardustCost = %d, want %d (L1→L50 full climb)",
+				i, breakdown.PowerupStardustCost, wantStardust)
+		}
+
+		for _, flag := range breakdown.Flags {
+			if flag == "powerup_pricing_skipped" {
+				t.Errorf("team[%d] has powerup_pricing_skipped flag — master league regressed", i)
+			}
+		}
+	}
+}
+
+// TestTeamBuilderTool_InvalidTargetLevel pins the round-1 fix for
+// unvalidated target_level input: off-grid, out-of-range, and
+// negative values must surface ErrInvalidTargetLevel rather than
+// silently producing zero-cost breakdowns.
+func TestTeamBuilderTool_InvalidTargetLevel(t *testing.T) {
+	t.Parallel()
+
+	tool := newTeamBuilderTool(t)
+	handler := tool.Handler()
+
+	pool := []tools.Combatant{
+		baseCombatant("a"),
+		baseCombatant("b"),
+		baseCombatant("c"),
+	}
+
+	cases := []struct {
+		name   string
+		target float64
+	}{
+		{"off-grid target", 10.3},
+		{"above L50", 75.0},
+		{"negative", -1.0},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			_, _, err := handler(t.Context(), nil, tools.TeamBuilderParams{
+				Pool:        pool,
+				League:      leagueGreat,
+				TargetLevel: tc.target,
+			})
+			if !errors.Is(err, tools.ErrInvalidTargetLevel) {
+				t.Errorf("target %.2f: error = %v, want wrapping ErrInvalidTargetLevel",
+					tc.target, err)
+			}
+		})
 	}
 }

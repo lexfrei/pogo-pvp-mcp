@@ -97,6 +97,13 @@ type MemberCostBreakdown struct {
 // semantic breaks if some members are discarded.
 var ErrMemberInvalidForLeague = errors.New("pool member is invalid for the league CP cap")
 
+// ErrInvalidTargetLevel is returned when params.TargetLevel is set
+// but does not land on the 0.5 grid within [1.0, 50.0]. The cost
+// helpers would otherwise silently produce zero-cost breakdowns
+// via the fall-through "pricing skipped" path; preferring a hard
+// error matches pvp_powerup_cost's behaviour on the same check.
+var ErrInvalidTargetLevel = errors.New("target_level must lie on the 0.5 grid within [1.0, 50.0]")
+
 // TeamBuilderTeam is one candidate team plus its aggregated score.
 // Members carries the resolved species+moveset triple (post-moveset
 // defaulting) so the client sees exactly what was simulated, not
@@ -195,17 +202,7 @@ func (tool *TeamBuilderTool) handle(
 		return nil, TeamBuilderResult{}, fmt.Errorf("team_builder cancelled: %w", err)
 	}
 
-	inputs, err := tool.resolveTeamBuilderInputs(ctx, &params)
-	if err != nil {
-		return nil, TeamBuilderResult{}, err
-	}
-
-	snapshot := tool.gm.Current()
-	if snapshot == nil {
-		return nil, TeamBuilderResult{}, ErrGamemasterNotLoaded
-	}
-
-	err = validatePoolForLeague(inputs.pool, snapshot, inputs.cpCap)
+	inputs, snapshot, err := tool.preHandleValidation(ctx, &params)
 	if err != nil {
 		return nil, TeamBuilderResult{}, err
 	}
@@ -234,6 +231,40 @@ func (tool *TeamBuilderTool) handle(
 		SimulationFailures: result.Failures,
 		Teams:              result.Teams,
 	}, nil
+}
+
+// preHandleValidation bundles the cheap pre-simulation work that
+// handle would otherwise inline: target_level grid / bounds check,
+// pool resolution + moveset defaulting, snapshot acquisition, and
+// the pool-fits-the-league check. Returning both the resolved
+// inputs and the snapshot means the downstream cost-breakdown pass
+// sees the same gamemaster pointer as everything else in the
+// request, not a second .Current() read that could in principle
+// observe a mid-refresh pointer.
+func (tool *TeamBuilderTool) preHandleValidation(
+	ctx context.Context, params *TeamBuilderParams,
+) (*teamBuilderInputs, *pogopvp.Gamemaster, error) {
+	err := validateTargetLevel(params.TargetLevel)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	inputs, err := tool.resolveTeamBuilderInputs(ctx, params)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	snapshot := tool.gm.Current()
+	if snapshot == nil {
+		return nil, nil, ErrGamemasterNotLoaded
+	}
+
+	err = validatePoolForLeague(inputs.pool, snapshot, inputs.cpCap)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	return inputs, snapshot, nil
 }
 
 // resolveTeamBuilderInputs runs all validation, pool filtering, and
