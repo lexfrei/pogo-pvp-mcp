@@ -131,7 +131,6 @@ type counterFinderWorkspace struct {
 	candidates []pogopvp.Combatant
 	specs      []Combatant
 	scenarios  []int
-	cpCap      int
 }
 
 // handle orchestrates counter discovery: resolve target + candidate
@@ -223,7 +222,6 @@ func (tool *CounterFinderTool) prepareCounterFinder(
 		candidates: candidates,
 		specs:      specs,
 		scenarios:  scenarios,
-		cpCap:      cpCap,
 	}, nil
 }
 

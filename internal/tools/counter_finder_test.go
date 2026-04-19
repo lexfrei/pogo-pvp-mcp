@@ -432,6 +432,37 @@ func TestCounterFinder_DisallowLegacyFiltersMetaFallback(t *testing.T) {
 	}
 }
 
+// TestCounterFinder_DisallowLegacyRejectsFromPoolMember pins the
+// FromPool-side legacy gate: a pool entry with an explicit legacy
+// move under DisallowLegacy=true must surface ErrLegacyConflict
+// before any simulation. Companion to
+// TestCounterFinder_DisallowLegacyRejectsTarget which covers the
+// target-side guard.
+func TestCounterFinder_DisallowLegacyRejectsFromPoolMember(t *testing.T) {
+	t.Parallel()
+
+	tool := newCounterFinderTool(t, legacyFixtureGamemaster, `[]`)
+	handler := tool.Handler()
+
+	_, _, err := handler(t.Context(), nil, tools.CounterFinderParams{
+		Target: tools.Combatant{
+			Species: "machamp", IV: [3]int{15, 15, 15}, Level: 40,
+			FastMove: moveCounter, ChargedMoves: []string{"CROSS_CHOP"},
+		},
+		FromPool: []tools.Combatant{
+			{
+				Species: speciesMedicham, IV: [3]int{15, 15, 15}, Level: 40,
+				FastMove: moveCounter, ChargedMoves: []string{movePsychic},
+			},
+		},
+		League:         leagueGreat,
+		DisallowLegacy: true,
+	})
+	if !errors.Is(err, tools.ErrLegacyConflict) {
+		t.Errorf("error = %v, want wrapping ErrLegacyConflict (pool member uses legacy PSYCHIC)", err)
+	}
+}
+
 // TestCounterFinder_InvalidTopN rejects negative top_n.
 func TestCounterFinder_InvalidTopN(t *testing.T) {
 	t.Parallel()
