@@ -5,7 +5,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
-	"slices"
 	"testing"
 
 	"github.com/lexfrei/pogo-pvp-mcp/internal/config"
@@ -158,8 +157,18 @@ func TestTeamBuilderTool_RequiredAnchor(t *testing.T) {
 	}
 
 	for _, team := range result.Teams {
-		if !slices.Contains(team.Members, "a") {
-			t.Errorf("team %v missing required anchor 'a'", team.Members)
+		found := false
+
+		for _, member := range team.Members {
+			if member.Species == "a" {
+				found = true
+
+				break
+			}
+		}
+
+		if !found {
+			t.Errorf("team %+v missing required anchor 'a'", team.Members)
 		}
 	}
 }
@@ -221,7 +230,7 @@ func TestTeamBuilderTool_RequiredWithDuplicateSpecies(t *testing.T) {
 		count := 0
 
 		for _, member := range team.Members {
-			if member == "a" {
+			if member.Species == "a" {
 				count++
 			}
 		}
@@ -354,9 +363,9 @@ func TestTeamBuilderTool_ReturnsPoolIndices(t *testing.T) {
 			t.Errorf("PoolIndices[%d] = %d out of pool range", idx, poolIdx)
 		}
 
-		if pool[poolIdx].Species != team.Members[idx] {
-			t.Errorf("PoolIndices[%d]->%s does not match Members[%d]=%s",
-				idx, pool[poolIdx].Species, idx, team.Members[idx])
+		if pool[poolIdx].Species != team.Members[idx].Species {
+			t.Errorf("PoolIndices[%d]->%s does not match Members[%d].Species=%s",
+				idx, pool[poolIdx].Species, idx, team.Members[idx].Species)
 		}
 	}
 }

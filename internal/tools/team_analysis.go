@@ -91,15 +91,19 @@ type TeamAnalysisParams struct {
 }
 
 // TeamMemberAnalysis describes one team member's performance against
-// the sampled meta.
+// the sampled meta. FastMove and ChargedMoves echo the resolved
+// moveset (either the caller's explicit choice or the recommended
+// default from rankings) so the client can see what was simulated.
 type TeamMemberAnalysis struct {
-	Species    string   `json:"species"`
-	AvgRating  float64  `json:"avg_rating"`
-	Wins       int      `json:"wins"`
-	Losses     int      `json:"losses"`
-	Ties       int      `json:"ties"`
-	HardWins   []string `json:"hard_wins"`
-	HardLosses []string `json:"hard_losses"`
+	Species      string   `json:"species"`
+	FastMove     string   `json:"fast_move"`
+	ChargedMoves []string `json:"charged_moves"`
+	AvgRating    float64  `json:"avg_rating"`
+	Wins         int      `json:"wins"`
+	Losses       int      `json:"losses"`
+	Ties         int      `json:"ties"`
+	HardWins     []string `json:"hard_wins"`
+	HardLosses   []string `json:"hard_losses"`
 }
 
 // TeamAnalysisResult is the JSON output contract for pvp_team_analysis.
@@ -152,6 +156,17 @@ func (tool *TeamAnalysisTool) Handler() mcp.ToolHandlerFor[TeamAnalysisParams, T
 	return tool.handle
 }
 
+// teamAnalysisWorkspace is the fully-resolved state the simulation
+// phase consumes. Building it happens in prepareTeamAnalysis; the
+// handler then just runs the simulation and labels the result.
+type teamAnalysisWorkspace struct {
+	TeamCombatants []pogopvp.Combatant
+	MetaCombatants []pogopvp.Combatant
+	KeptEntries    []rankings.RankingEntry
+	SkippedMeta    []string
+	CPCap          int
+}
+
 // handle orchestrates the analysis: resolve the user team into engine
 // combatants, resolve the meta top-N, simulate every (member × meta)
 // pair, and aggregate.
@@ -165,47 +180,73 @@ func (tool *TeamAnalysisTool) handle(
 		return nil, TeamAnalysisResult{}, err
 	}
 
-	snapshot := tool.gm.Current()
-	if snapshot == nil {
-		return nil, TeamAnalysisResult{}, ErrGamemasterNotLoaded
-	}
-
-	cpCap, err := resolveCPCap(params.League, 0)
+	workspace, err := tool.prepareTeamAnalysis(ctx, &params)
 	if err != nil {
 		return nil, TeamAnalysisResult{}, err
 	}
 
-	defaults := resolveTeamDefaults(params.Shields, params.TopN)
-
-	entries, err := tool.rankings.Get(ctx, cpCap, params.Cup)
-	if err != nil {
-		return nil, TeamAnalysisResult{}, fmt.Errorf("rankings fetch: %w", err)
-	}
-
-	topN := min(defaults.TopN, len(entries))
-	metaEntries := entries[:topN]
-
-	metaCombatants, keptEntries, skipped, err := buildMetaCombatants(
-		snapshot, metaEntries, cpCap, defaults.MetaShields)
-	if err != nil {
-		return nil, TeamAnalysisResult{}, err
-	}
-
-	teamCombatants, err := buildTeamCombatants(snapshot, params.Team, defaults.TeamShields)
-	if err != nil {
-		return nil, TeamAnalysisResult{}, err
-	}
-
-	result := runTeamAnalysis(ctx, teamCombatants, metaCombatants, keptEntries,
-		params.League, cpCap, len(keptEntries))
+	result := runTeamAnalysis(ctx, workspace.TeamCombatants, workspace.MetaCombatants,
+		workspace.KeptEntries, params.League, workspace.CPCap, len(workspace.KeptEntries))
 	result.Cup = resolveCupLabel(params.Cup)
-	result.SkippedMetaSpecies = skipped
+	result.SkippedMetaSpecies = workspace.SkippedMeta
 
 	if ctx.Err() != nil {
 		return nil, TeamAnalysisResult{}, fmt.Errorf("team_analysis cancelled: %w", ctx.Err())
 	}
 
 	return nil, result, nil
+}
+
+// prepareTeamAnalysis resolves all inputs (gamemaster snapshot, CP
+// cap, rankings, moveset defaults, combatants) into a workspace for
+// the simulation phase. Keeps handle under funlen.
+func (tool *TeamAnalysisTool) prepareTeamAnalysis(
+	ctx context.Context, params *TeamAnalysisParams,
+) (*teamAnalysisWorkspace, error) {
+	snapshot := tool.gm.Current()
+	if snapshot == nil {
+		return nil, ErrGamemasterNotLoaded
+	}
+
+	cpCap, err := resolveCPCap(params.League, 0)
+	if err != nil {
+		return nil, err
+	}
+
+	defaults := resolveTeamDefaults(params.Shields, params.TopN)
+
+	entries, err := tool.rankings.Get(ctx, cpCap, params.Cup)
+	if err != nil {
+		return nil, fmt.Errorf("rankings fetch: %w", err)
+	}
+
+	metaEntries := entries[:min(defaults.TopN, len(entries))]
+
+	metaCombatants, keptEntries, skipped, err := buildMetaCombatants(
+		snapshot, metaEntries, cpCap, defaults.MetaShields)
+	if err != nil {
+		return nil, err
+	}
+
+	for i := range params.Team {
+		err = applyMovesetDefaults(ctx, tool.rankings, &params.Team[i], cpCap, params.Cup)
+		if err != nil {
+			return nil, fmt.Errorf("team[%d] moveset: %w", i, err)
+		}
+	}
+
+	teamCombatants, err := buildTeamCombatants(snapshot, params.Team, defaults.TeamShields)
+	if err != nil {
+		return nil, err
+	}
+
+	return &teamAnalysisWorkspace{
+		TeamCombatants: teamCombatants,
+		MetaCombatants: metaCombatants,
+		KeptEntries:    keptEntries,
+		SkippedMeta:    skipped,
+		CPCap:          cpCap,
+	}, nil
 }
 
 // validateTeamAnalysisParams runs the cheap pre-flight checks (cancel,
@@ -465,7 +506,11 @@ func analyzeMember(
 	metaEntries []rankings.RankingEntry,
 	coverage map[string]int,
 ) memberTally {
-	analysis := TeamMemberAnalysis{Species: member.Species.ID}
+	analysis := TeamMemberAnalysis{
+		Species:      member.Species.ID,
+		FastMove:     member.FastMove.ID,
+		ChargedMoves: chargedMoveIDs(member.ChargedMoves),
+	}
 
 	var (
 		memberSum float64

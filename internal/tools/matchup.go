@@ -7,6 +7,7 @@ import (
 
 	pogopvp "github.com/lexfrei/pogo-pvp-engine"
 	"github.com/lexfrei/pogo-pvp-mcp/internal/gamemaster"
+	"github.com/lexfrei/pogo-pvp-mcp/internal/rankings"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -21,43 +22,81 @@ var ErrUnknownMove = errors.New("unknown move")
 var ErrMoveCategoryMismatch = errors.New("move category mismatch")
 
 // Combatant is the MCP-visible input shape for one fighter in a
-// matchup. Shields is not here — it's specified once per side at the
-// MatchupParams level so callers can sweep (0, 1, 2)×(0, 1, 2) outside
-// the tool.
+// matchup / team. Shields on matchup is specified once per side at
+// the MatchupParams level so callers can sweep (0, 1, 2)×(0, 1, 2)
+// outside the tool. FastMove and ChargedMoves are optional: if left
+// empty the tool resolves the recommended moveset from the relevant
+// (cup, cap) rankings entry. An explicit move overrides the default.
 type Combatant struct {
 	Species      string   `json:"species" jsonschema:"species id"`
 	IV           [3]int   `json:"iv" jsonschema:"IV triple [atk, def, sta]"`
 	Level        float64  `json:"level" jsonschema:"level on 0.5 grid, [1.0, 51.0]"`
-	FastMove     string   `json:"fast_move" jsonschema:"fast move id (must be in species.fastMoves)"`
-	ChargedMoves []string `json:"charged_moves,omitempty" jsonschema:"one or two charged move ids"`
+	FastMove     string   `json:"fast_move,omitempty" jsonschema:"fast move id; omit to use recommended"`
+	ChargedMoves []string `json:"charged_moves,omitempty" jsonschema:"charged move ids; omit to use recommended"`
 }
 
-// MatchupParams is the JSON input contract for pvp_matchup.
+// ResolvedCombatant echoes back the species + moveset actually used
+// by the engine after any recommended-moveset defaulting. Callers
+// consume it to learn which fast/charged pair the tool picked when
+// they left those fields empty on input.
+type ResolvedCombatant struct {
+	Species      string   `json:"species"`
+	FastMove     string   `json:"fast_move"`
+	ChargedMoves []string `json:"charged_moves"`
+}
+
+// resolvedFromSpec projects a finalised Combatant (after moveset
+// defaulting) to its echo shape.
+func resolvedFromSpec(spec *Combatant) ResolvedCombatant {
+	charged := make([]string, len(spec.ChargedMoves))
+	copy(charged, spec.ChargedMoves)
+
+	return ResolvedCombatant{
+		Species:      spec.Species,
+		FastMove:     spec.FastMove,
+		ChargedMoves: charged,
+	}
+}
+
+// MatchupParams is the JSON input contract for pvp_matchup. Cup is
+// used only to pick the recommended moveset when a Combatant omits
+// its moves — cup rules do not otherwise modify simulation mechanics.
 type MatchupParams struct {
 	Attacker Combatant `json:"attacker"`
 	Defender Combatant `json:"defender"`
+	League   string    `json:"league,omitempty" jsonschema:"little|great|ultra|master; required when movesets are omitted"`
+	Cup      string    `json:"cup,omitempty" jsonschema:"cup id from pvpoke; used for recommended moveset lookup"`
 	Shields  [2]int    `json:"shields,omitempty" jsonschema:"shield counts [attacker, defender], each 0..2"`
 	MaxTurns int       `json:"max_turns,omitempty" jsonschema:"simulation turn cap; 0 uses engine default"`
 }
 
-// MatchupResult is the JSON output contract for pvp_matchup.
+// MatchupResult is the JSON output contract for pvp_matchup. Attacker
+// and Defender echo the resolved moveset so callers that omitted one
+// can see what was used.
 type MatchupResult struct {
-	Winner       string `json:"winner"`
-	Turns        int    `json:"turns"`
-	HPRemaining  [2]int `json:"hp_remaining"`
-	EnergyAtEnd  [2]int `json:"energy_at_end"`
-	ShieldsUsed  [2]int `json:"shields_used"`
-	ChargedFired [2]int `json:"charged_fired"`
+	Winner       string            `json:"winner"`
+	Turns        int               `json:"turns"`
+	HPRemaining  [2]int            `json:"hp_remaining"`
+	EnergyAtEnd  [2]int            `json:"energy_at_end"`
+	ShieldsUsed  [2]int            `json:"shields_used"`
+	ChargedFired [2]int            `json:"charged_fired"`
+	Attacker     ResolvedCombatant `json:"attacker"`
+	Defender     ResolvedCombatant `json:"defender"`
 }
 
-// MatchupTool wraps the shared Manager and exposes the MCP tool.
+// MatchupTool wraps the gamemaster plus an optional rankings
+// manager. When rankings is nil the tool behaves as pre-Phase-C:
+// every Combatant must carry an explicit moveset, otherwise the
+// handler errors with ErrNoRecommendedMoveset.
 type MatchupTool struct {
-	manager *gamemaster.Manager
+	manager  *gamemaster.Manager
+	rankings *rankings.Manager
 }
 
-// NewMatchupTool returns a MatchupTool bound to the given Manager.
-func NewMatchupTool(manager *gamemaster.Manager) *MatchupTool {
-	return &MatchupTool{manager: manager}
+// NewMatchupTool returns a MatchupTool bound to the given managers.
+// ranks may be nil in tests that supply explicit movesets.
+func NewMatchupTool(manager *gamemaster.Manager, ranks *rankings.Manager) *MatchupTool {
+	return &MatchupTool{manager: manager, rankings: ranks}
 }
 
 // matchupToolDescription is factored out so the struct-literal stays
@@ -97,6 +136,11 @@ func (tool *MatchupTool) handle(
 		return nil, MatchupResult{}, ErrGamemasterNotLoaded
 	}
 
+	err = tool.applyDefaults(ctx, &params)
+	if err != nil {
+		return nil, MatchupResult{}, err
+	}
+
 	attacker, err := buildEngineCombatant(snapshot, &params.Attacker, params.Shields[0])
 	if err != nil {
 		return nil, MatchupResult{}, fmt.Errorf("attacker: %w", err)
@@ -119,7 +163,44 @@ func (tool *MatchupTool) handle(
 		EnergyAtEnd:  result.EnergyAtEnd,
 		ShieldsUsed:  result.ShieldsUsed,
 		ChargedFired: result.ChargedFired,
+		Attacker:     resolvedFromSpec(&params.Attacker),
+		Defender:     resolvedFromSpec(&params.Defender),
 	}, nil
+}
+
+// applyDefaults fills in missing movesets on attacker / defender by
+// consulting the rankings manager when Cup/League let us resolve a
+// CP cap. Resolution is triggered only by an empty FastMove — an
+// empty ChargedMoves with a set FastMove is a legitimate fast-only
+// build and is left alone. If neither side needs resolution this is
+// a no-op and League may be empty.
+func (tool *MatchupTool) applyDefaults(ctx context.Context, params *MatchupParams) error {
+	needsResolve := params.Attacker.FastMove == "" || params.Defender.FastMove == ""
+	if !needsResolve {
+		return nil
+	}
+
+	if params.League == "" {
+		return fmt.Errorf("%w: league is required when combatant moves are omitted",
+			ErrUnknownLeague)
+	}
+
+	cpCap, err := resolveCPCap(params.League, 0)
+	if err != nil {
+		return err
+	}
+
+	err = applyMovesetDefaults(ctx, tool.rankings, &params.Attacker, cpCap, params.Cup)
+	if err != nil {
+		return fmt.Errorf("attacker moveset: %w", err)
+	}
+
+	err = applyMovesetDefaults(ctx, tool.rankings, &params.Defender, cpCap, params.Cup)
+	if err != nil {
+		return fmt.Errorf("defender moveset: %w", err)
+	}
+
+	return nil
 }
 
 // buildEngineCombatant maps a tool-level Combatant (string-addressed
