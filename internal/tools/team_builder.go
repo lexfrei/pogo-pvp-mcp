@@ -43,7 +43,7 @@ const MaxPoolSize = 50
 // OptimizeFor (overall|0s|1s|2s|all_pareto) selects which scenario
 // axis drives the ranking; see TeamBuilderTeam.ParetoLabel.
 //
-// TargetLevel nuance (tracked bug from r3 backlog):
+// TargetLevel nuance:
 //
 //   - Omitted / zero — the cost helper computes the deepest 0.5-
 //     grid level at which a 15/15/15 hundo of the same species
