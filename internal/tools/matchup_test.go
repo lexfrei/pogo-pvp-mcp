@@ -43,7 +43,7 @@ func TestMatchupTool_ReturnsBattleResult(t *testing.T) {
 	t.Parallel()
 
 	mgr := newManagerWithFixture(t, matchupFixtureGamemaster)
-	handler := tools.NewMatchupTool(mgr).Handler()
+	handler := tools.NewMatchupTool(mgr, nil).Handler()
 
 	_, result, err := handler(t.Context(), nil, tools.MatchupParams{
 		Attacker: tools.Combatant{
@@ -78,7 +78,7 @@ func TestMatchupTool_UnknownSpecies(t *testing.T) {
 	t.Parallel()
 
 	mgr := newManagerWithFixture(t, matchupFixtureGamemaster)
-	handler := tools.NewMatchupTool(mgr).Handler()
+	handler := tools.NewMatchupTool(mgr, nil).Handler()
 
 	_, _, err := handler(t.Context(), nil, tools.MatchupParams{
 		Attacker: tools.Combatant{
@@ -103,7 +103,7 @@ func TestMatchupTool_UnknownFastMove(t *testing.T) {
 	t.Parallel()
 
 	mgr := newManagerWithFixture(t, matchupFixtureGamemaster)
-	handler := tools.NewMatchupTool(mgr).Handler()
+	handler := tools.NewMatchupTool(mgr, nil).Handler()
 
 	_, _, err := handler(t.Context(), nil, tools.MatchupParams{
 		Attacker: tools.Combatant{
@@ -128,7 +128,7 @@ func TestMatchupTool_FastMoveUsedAsCharged(t *testing.T) {
 	t.Parallel()
 
 	mgr := newManagerWithFixture(t, matchupFixtureGamemaster)
-	handler := tools.NewMatchupTool(mgr).Handler()
+	handler := tools.NewMatchupTool(mgr, nil).Handler()
 
 	_, _, err := handler(t.Context(), nil, tools.MatchupParams{
 		Attacker: tools.Combatant{
@@ -154,7 +154,7 @@ func TestMatchupTool_ChargedMoveUsedAsFast(t *testing.T) {
 	t.Parallel()
 
 	mgr := newManagerWithFixture(t, matchupFixtureGamemaster)
-	handler := tools.NewMatchupTool(mgr).Handler()
+	handler := tools.NewMatchupTool(mgr, nil).Handler()
 
 	_, _, err := handler(t.Context(), nil, tools.MatchupParams{
 		Attacker: tools.Combatant{
@@ -179,7 +179,7 @@ func TestMatchupTool_ShieldsCountedInResult(t *testing.T) {
 	t.Parallel()
 
 	mgr := newManagerWithFixture(t, matchupFixtureGamemaster)
-	handler := tools.NewMatchupTool(mgr).Handler()
+	handler := tools.NewMatchupTool(mgr, nil).Handler()
 
 	_, result, err := handler(t.Context(), nil, tools.MatchupParams{
 		Attacker: tools.Combatant{

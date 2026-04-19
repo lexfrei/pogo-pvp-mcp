@@ -78,7 +78,7 @@ func buildWiredServer(t *testing.T) *mcp.Server {
 	rankTool := tools.NewRankTool(mgr, ranks)
 	mcp.AddTool(mcpServer, rankTool.Tool(), rankTool.Handler())
 
-	matchupTool := tools.NewMatchupTool(mgr)
+	matchupTool := tools.NewMatchupTool(mgr, ranks)
 	mcp.AddTool(mcpServer, matchupTool.Tool(), matchupTool.Handler())
 
 	cpLimitsTool := tools.NewCPLimitsTool(mgr)

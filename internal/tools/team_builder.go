@@ -51,15 +51,18 @@ type TeamBuilderParams struct {
 }
 
 // TeamBuilderTeam is one candidate team plus its aggregated score.
-// PoolIndices points back into TeamBuilderParams.Pool so callers can
-// disambiguate duplicate species entries (same species id, different
-// IV/moveset) — Members alone cannot identify which variant was
-// chosen when a species appears more than once in the pool.
+// Members carries the resolved species+moveset triple (post-moveset
+// defaulting) so the client sees exactly what was simulated, not
+// just species ids. PoolIndices points back into TeamBuilderParams.Pool
+// so callers can disambiguate duplicate species entries (same species
+// id, different IV) — the species name in Members alone cannot
+// identify which variant was chosen when a species appears more than
+// once in the pool.
 type TeamBuilderTeam struct {
-	Members     []string `json:"members"`
-	PoolIndices []int    `json:"pool_indices"`
-	TeamScore   float64  `json:"team_score"`
-	Reason      string   `json:"reason"`
+	Members     []ResolvedCombatant `json:"members"`
+	PoolIndices []int               `json:"pool_indices"`
+	TeamScore   float64             `json:"team_score"`
+	Reason      string              `json:"reason"`
 }
 
 // TeamBuilderResult is the JSON output for pvp_team_builder.
@@ -188,6 +191,36 @@ func (tool *TeamBuilderTool) resolveTeamBuilderInputs(
 		return nil, err
 	}
 
+	err = tool.defaultPoolMovesets(ctx, params, cpCap)
+	if err != nil {
+		return nil, err
+	}
+
+	return tool.buildTeamBuilderInputs(ctx, snapshot, params, cpCap)
+}
+
+// defaultPoolMovesets fills in the recommended moveset for every
+// pool entry whose FastMove was omitted by the caller, so the rest
+// of the pipeline operates on fully-specified combatants.
+func (tool *TeamBuilderTool) defaultPoolMovesets(
+	ctx context.Context, params *TeamBuilderParams, cpCap int,
+) error {
+	for i := range params.Pool {
+		err := applyMovesetDefaults(ctx, tool.rankings, &params.Pool[i], cpCap, params.Cup)
+		if err != nil {
+			return fmt.Errorf("pool[%d] moveset: %w", i, err)
+		}
+	}
+
+	return nil
+}
+
+// buildTeamBuilderInputs runs the remaining resolution (pool filter,
+// required species, meta slice) once the pool movesets are finalised.
+func (tool *TeamBuilderTool) buildTeamBuilderInputs(
+	ctx context.Context, snapshot *pogopvp.Gamemaster,
+	params *TeamBuilderParams, cpCap int,
+) (*teamBuilderInputs, error) {
 	defaults := resolveTeamDefaults(params.Shields, params.TopN)
 
 	pool, err := tool.preparePool(snapshot, params, defaults.TeamShields)
@@ -386,8 +419,8 @@ func evaluateTeams(
 
 		for jIdx := i + 1; jIdx < len(pool); jIdx++ {
 			for kIdx := jIdx + 1; kIdx < len(pool); kIdx++ {
-				members := []string{pool[i].Species, pool[jIdx].Species, pool[kIdx].Species}
-				if !containsAllSpecies(members, required) {
+				speciesIDs := []string{pool[i].Species, pool[jIdx].Species, pool[kIdx].Species}
+				if !containsAllSpecies(speciesIDs, required) {
 					continue
 				}
 
@@ -395,7 +428,11 @@ func evaluateTeams(
 				out.Evaluated++
 
 				out.Teams = append(out.Teams, TeamBuilderTeam{
-					Members:     members,
+					Members: []ResolvedCombatant{
+						resolvedFromSpec(&pool[i]),
+						resolvedFromSpec(&pool[jIdx]),
+						resolvedFromSpec(&pool[kIdx]),
+					},
 					PoolIndices: []int{i, jIdx, kIdx},
 					TeamScore:   score,
 					Reason:      "highest average battle rating across the sampled meta",
