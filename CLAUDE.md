@@ -68,6 +68,7 @@ The MCP server is a thin wrapper around the engine. The hot shape: an MCP tool h
 12. `pvp_evolution_preview` — invert current CP to level via `pogopvp.LevelForCP`, then BFS-walk `Species.Evolutions` to project each descendant's stats/CP at that shared level (evolution preserves level in Pokémon GO). Returns `league_fit` per evolved form, supports branching roots (eevee) and multi-hop paths. Unknown ids in the evolution chain are silently skipped to tolerate gamemaster/rankings cache skew.
 13. `pvp_rank_batch` — thin batch wrapper over `pvp_rank`: same species + league + cup + CPCap + XL flag applied to every IV triple in `IVs`. Each entry is isolated (one bad IV surfaces as `OK=false` with the error message, siblings still produce results). Capped at `maxRankBatchSize=64` per call via `ErrTooManyIVs`.
 14. `pvp_threat_coverage` — given a 3-member team + candidate pool, compute team coverage vs top-N meta (same averaged-rating semantics as `team_analysis`), then for each meta species below `uncoveredThreshold=400` list pool members whose rating clears the same threshold. Candidates capped at `defaultThreatCoverageCandidates=3` per threat, sorted descending by rating.
+15. `pvp_weather_boost` — zero-dependency lookup of Niantic's weather → boosted-types table (1.1× flat multiplier). Returns the full seven-weather table on empty query; one-row response on named query. Hardcoded from the canonical Niantic mapping — no gamemaster / rankings data touched.
 
 ### Non-obvious invariants (you will break these)
 
