@@ -1051,9 +1051,14 @@ func TestTeamBuilderTool_InvalidTargetLevel(t *testing.T) {
 
 // autoEvolveLinearFixture publishes a three-stage linear chain
 // (squirtle → wartortle → blastoise), plus the team-analysis a/b/c
-// stand-ins so the test has a valid 3-member pool. Used to pin the
-// auto_evolve=true happy path: squirtle gets promoted to blastoise
-// (terminal, fits Great League at L1 CP 10).
+// stand-ins so the test has a valid 3-member pool. Squirtle and
+// blastoise are deliberately given disjoint charged movesets
+// (CH_SQUIRT vs CH_BLAST) so the linear-chain test can prove the
+// moveset was actually cleared and re-resolved from the evolved
+// species' rankings entry — if the clearing step regresses, the
+// resolved member still carries CH_SQUIRT and the assertion fails.
+// Additionally publishes squirtle_shadow so the Shadow+AutoEvolve
+// interaction test can verify Options.Shadow survives promotion.
 const autoEvolveLinearFixture = `{
   "id": "gamemaster",
   "timestamp": "2026-04-19 00:00:00",
@@ -1061,19 +1066,31 @@ const autoEvolveLinearFixture = `{
     {"dex": 7, "speciesId": "squirtle", "speciesName": "Squirtle",
      "baseStats": {"atk": 94, "def": 121, "hp": 127},
      "types": ["water"],
-     "fastMoves": ["FAST1"], "chargedMoves": ["CH1"],
+     "fastMoves": ["FAST1"], "chargedMoves": ["CH_SQUIRT"],
+     "family": {"id": "FAMILY_SQUIRTLE", "evolutions": ["wartortle"]},
+     "released": true},
+    {"dex": 7, "speciesId": "squirtle_shadow", "speciesName": "Squirtle (Shadow)",
+     "baseStats": {"atk": 94, "def": 121, "hp": 127},
+     "types": ["water"],
+     "fastMoves": ["FAST1"], "chargedMoves": ["CH_SQUIRT"],
      "family": {"id": "FAMILY_SQUIRTLE", "evolutions": ["wartortle"]},
      "released": true},
     {"dex": 8, "speciesId": "wartortle", "speciesName": "Wartortle",
      "baseStats": {"atk": 126, "def": 155, "hp": 153},
      "types": ["water"],
-     "fastMoves": ["FAST1"], "chargedMoves": ["CH1"],
+     "fastMoves": ["FAST1"], "chargedMoves": ["CH_WART"],
      "family": {"id": "FAMILY_SQUIRTLE", "parent": "squirtle", "evolutions": ["blastoise"]},
      "released": true},
     {"dex": 9, "speciesId": "blastoise", "speciesName": "Blastoise",
      "baseStats": {"atk": 171, "def": 207, "hp": 188},
      "types": ["water"],
-     "fastMoves": ["FAST1"], "chargedMoves": ["CH1"],
+     "fastMoves": ["FAST1"], "chargedMoves": ["CH_BLAST"],
+     "family": {"id": "FAMILY_SQUIRTLE", "parent": "wartortle"},
+     "released": true},
+    {"dex": 9, "speciesId": "blastoise_shadow", "speciesName": "Blastoise (Shadow)",
+     "baseStats": {"atk": 171, "def": 207, "hp": 188},
+     "types": ["water"],
+     "fastMoves": ["FAST1"], "chargedMoves": ["CH_BLAST"],
      "family": {"id": "FAMILY_SQUIRTLE", "parent": "wartortle"},
      "released": true},
     {"dex": 2, "speciesId": "b", "speciesName": "B",
@@ -1087,7 +1104,13 @@ const autoEvolveLinearFixture = `{
     {"moveId": "FAST1", "name": "Fast 1", "type": "normal",
      "power": 3, "energy": 0, "energyGain": 5, "cooldown": 1000, "turns": 2},
     {"moveId": "CH1", "name": "Charged 1", "type": "normal",
-     "power": 50, "energy": 35, "cooldown": 500}
+     "power": 50, "energy": 35, "cooldown": 500},
+    {"moveId": "CH_SQUIRT", "name": "Squirt Blast", "type": "water",
+     "power": 50, "energy": 35, "cooldown": 500},
+    {"moveId": "CH_WART", "name": "Wart Pound", "type": "water",
+     "power": 50, "energy": 35, "cooldown": 500},
+    {"moveId": "CH_BLAST", "name": "Blast Cannon", "type": "water",
+     "power": 90, "energy": 55, "cooldown": 500}
   ]
 }`
 
@@ -1100,9 +1123,15 @@ const autoEvolveLinearFixture = `{
 func TestTeamBuilderTool_AutoEvolveLinearChain(t *testing.T) {
 	t.Parallel()
 
+	// Blastoise rankings entry declares CH_BLAST. Squirtle's
+	// explicit charged move (CH_SQUIRT) must be cleared by the
+	// promotion; the evolved member's ChargedMoves must come from
+	// this rankings row — if the clearing step regresses the
+	// resolved member still carries CH_SQUIRT and the assertion
+	// fails.
 	const rankingsPayload = `[
   {"speciesId": "blastoise", "speciesName": "Blastoise", "rating": 700,
-   "moveset": ["FAST1", "CH1"],
+   "moveset": ["FAST1", "CH_BLAST"],
    "stats": {"product": 2100, "atk": 106, "def": 139, "hp": 141}},
   {"speciesId": "b", "speciesName": "B", "rating": 600,
    "moveset": ["FAST1", "CH1"],
@@ -1116,7 +1145,7 @@ func TestTeamBuilderTool_AutoEvolveLinearChain(t *testing.T) {
 	handler := tool.Handler()
 
 	pool := []tools.Combatant{
-		{Species: "squirtle", IV: [3]int{15, 15, 15}, Level: 1, FastMove: "FAST1", ChargedMoves: []string{"CH1"}},
+		{Species: "squirtle", IV: [3]int{15, 15, 15}, Level: 1, FastMove: "FAST1", ChargedMoves: []string{"CH_SQUIRT"}},
 		baseCombatant("b"),
 		baseCombatant("c"),
 	}
@@ -1139,7 +1168,7 @@ func TestTeamBuilderTool_AutoEvolveLinearChain(t *testing.T) {
 	var evolvedBreakdown *tools.MemberCostBreakdown
 
 	for i := range result.Teams[0].Members {
-		if result.Teams[0].Members[i].Species == "blastoise" {
+		if result.Teams[0].Members[i].Species == speciesBlastoise {
 			evolvedMember = &result.Teams[0].Members[i]
 			evolvedBreakdown = &result.Teams[0].CostBreakdowns[i]
 
@@ -1157,6 +1186,197 @@ func TestTeamBuilderTool_AutoEvolveLinearChain(t *testing.T) {
 
 	if !slices.Contains(evolvedBreakdown.Flags, "auto_evolved_from:squirtle") {
 		t.Errorf("auto_evolved_from:squirtle flag missing in Flags=%v", evolvedBreakdown.Flags)
+	}
+
+	// Moveset-cleared signal: the resolved member's ChargedMoves
+	// must come from the BLASTOISE rankings row, not the original
+	// squirtle-only CH_SQUIRT. If a future refactor drops the
+	// clearing step, this assertion fails.
+	if !slices.Contains(evolvedMember.ChargedMoves, "CH_BLAST") {
+		t.Errorf("ChargedMoves = %v, want [CH_BLAST] (moveset must be cleared and re-resolved from evolved species rankings)",
+			evolvedMember.ChargedMoves)
+	}
+
+	if slices.Contains(evolvedMember.ChargedMoves, "CH_SQUIRT") {
+		t.Errorf("ChargedMoves = %v; the original squirtle CH_SQUIRT must not survive promotion",
+			evolvedMember.ChargedMoves)
+	}
+}
+
+// TestTeamBuilderTool_AutoEvolveRequiredMatchesPostEvolve pins the
+// documented Required semantics: Required matches the POST-evolve
+// species id. Listing the pre-evolution id alongside auto_evolve
+// therefore surfaces ErrRequiredNotInPool once squirtle becomes
+// blastoise. This is the counter-intuitive edge the README /
+// CLAUDE.md call out explicitly.
+func TestTeamBuilderTool_AutoEvolveRequiredMatchesPostEvolve(t *testing.T) {
+	t.Parallel()
+
+	const rankingsPayload = `[
+  {"speciesId": "blastoise", "speciesName": "Blastoise", "rating": 700,
+   "moveset": ["FAST1", "CH_BLAST"],
+   "stats": {"product": 2100, "atk": 106, "def": 139, "hp": 141}},
+  {"speciesId": "b", "speciesName": "B", "rating": 600,
+   "moveset": ["FAST1", "CH1"],
+   "stats": {"product": 2000, "atk": 100, "def": 120, "hp": 150}},
+  {"speciesId": "c", "speciesName": "C", "rating": 650,
+   "moveset": ["FAST1", "CH1"],
+   "stats": {"product": 2050, "atk": 105, "def": 125, "hp": 145}}
+]`
+
+	tool := newTeamBuilderToolFromFixture(t, autoEvolveLinearFixture, rankingsPayload)
+	handler := tool.Handler()
+
+	pool := []tools.Combatant{
+		{Species: "squirtle", IV: [3]int{15, 15, 15}, Level: 1, FastMove: "FAST1", ChargedMoves: []string{"CH_SQUIRT"}},
+		baseCombatant("b"),
+		baseCombatant("c"),
+	}
+
+	_, _, err := handler(t.Context(), nil, tools.TeamBuilderParams{
+		Pool:       pool,
+		League:     leagueGreat,
+		AutoEvolve: true,
+		Required:   []string{"squirtle"},
+	})
+	if !errors.Is(err, tools.ErrRequiredNotInPool) {
+		t.Errorf("error = %v, want wrapping ErrRequiredNotInPool (squirtle is no longer in the pool after auto-evolve)",
+			err)
+	}
+}
+
+// TestTeamBuilderTool_AutoEvolveBanMatchesPreEvolveID pins the
+// documented Banned semantics: a ban on the pre-evolution species
+// id still filters the pool entry after auto-evolve promotes it.
+// Without the autoEvolvedFrom check in filterPool, banning the
+// base form would silently bypass and the evolved species would
+// make the team.
+func TestTeamBuilderTool_AutoEvolveBanMatchesPreEvolveID(t *testing.T) {
+	t.Parallel()
+
+	const rankingsPayload = `[
+  {"speciesId": "blastoise", "speciesName": "Blastoise", "rating": 700,
+   "moveset": ["FAST1", "CH_BLAST"],
+   "stats": {"product": 2100, "atk": 106, "def": 139, "hp": 141}},
+  {"speciesId": "b", "speciesName": "B", "rating": 600,
+   "moveset": ["FAST1", "CH1"],
+   "stats": {"product": 2000, "atk": 100, "def": 120, "hp": 150}},
+  {"speciesId": "c", "speciesName": "C", "rating": 650,
+   "moveset": ["FAST1", "CH1"],
+   "stats": {"product": 2050, "atk": 105, "def": 125, "hp": 145}}
+]`
+
+	tool := newTeamBuilderToolFromFixture(t, autoEvolveLinearFixture, rankingsPayload)
+	handler := tool.Handler()
+
+	// Four-member pool with squirtle banned by pre-evolve id.
+	// Without the autoEvolvedFrom ban check, blastoise would
+	// survive the filter (Species no longer == "squirtle") and
+	// land in teams. Since C(3, 3) = 1 triple, the ban working
+	// means squirtle/blastoise is dropped → pool of 3 = one
+	// non-banned triple, all three others compose the team.
+	pool := []tools.Combatant{
+		{Species: "squirtle", IV: [3]int{15, 15, 15}, Level: 1, FastMove: "FAST1", ChargedMoves: []string{"CH_SQUIRT"}},
+		baseCombatant("b"),
+		baseCombatant("c"),
+		{Species: "b", IV: [3]int{14, 14, 14}, Level: 39, FastMove: "FAST1", ChargedMoves: []string{"CH1"}},
+	}
+
+	_, result, err := handler(t.Context(), nil, tools.TeamBuilderParams{
+		Pool:       pool,
+		League:     leagueGreat,
+		AutoEvolve: true,
+		Banned:     []string{"squirtle"},
+	})
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+
+	for _, team := range result.Teams {
+		for _, member := range team.Members {
+			if member.Species == "blastoise" {
+				t.Errorf("blastoise leaked into team despite banned=[squirtle] (pre-evolve id must match post-promotion pool entries)")
+			}
+		}
+	}
+}
+
+// TestTeamBuilderTool_AutoEvolveShadowCarriesOver pins that
+// Options.Shadow survives auto-evolve: a shadow squirtle pool
+// entry becomes shadow blastoise after promotion. resolvedFromSpec
+// exposes ResolvedSpeciesID=blastoise_shadow via the shadow-aware
+// lookup in buildEngineCombatant. The fixture publishes both
+// squirtle_shadow and blastoise_shadow so pvpoke has a dedicated
+// entry for each form; if blastoise_shadow were missing, we'd
+// expect shadow_variant_missing=true in the resolved combatant.
+func TestTeamBuilderTool_AutoEvolveShadowCarriesOver(t *testing.T) {
+	t.Parallel()
+
+	const rankingsPayload = `[
+  {"speciesId": "blastoise", "speciesName": "Blastoise", "rating": 700,
+   "moveset": ["FAST1", "CH_BLAST"],
+   "stats": {"product": 2100, "atk": 106, "def": 139, "hp": 141}},
+  {"speciesId": "blastoise_shadow", "speciesName": "Blastoise (Shadow)", "rating": 720,
+   "moveset": ["FAST1", "CH_BLAST"],
+   "stats": {"product": 2150, "atk": 130, "def": 116, "hp": 141}},
+  {"speciesId": "b", "speciesName": "B", "rating": 600,
+   "moveset": ["FAST1", "CH1"],
+   "stats": {"product": 2000, "atk": 100, "def": 120, "hp": 150}},
+  {"speciesId": "c", "speciesName": "C", "rating": 650,
+   "moveset": ["FAST1", "CH1"],
+   "stats": {"product": 2050, "atk": 105, "def": 125, "hp": 145}}
+]`
+
+	tool := newTeamBuilderToolFromFixture(t, autoEvolveLinearFixture, rankingsPayload)
+	handler := tool.Handler()
+
+	pool := []tools.Combatant{
+		{
+			Species: "squirtle", IV: [3]int{15, 15, 15}, Level: 1,
+			Options: tools.CombatantOptions{Shadow: true},
+		},
+		baseCombatant("b"),
+		baseCombatant("c"),
+	}
+
+	_, result, err := handler(t.Context(), nil, tools.TeamBuilderParams{
+		Pool:       pool,
+		League:     leagueGreat,
+		AutoEvolve: true,
+	})
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+
+	if len(result.Teams) == 0 {
+		t.Fatal("no teams returned")
+	}
+
+	var evolved *tools.ResolvedCombatant
+
+	for i := range result.Teams[0].Members {
+		if result.Teams[0].Members[i].Species == speciesBlastoise {
+			evolved = &result.Teams[0].Members[i]
+
+			break
+		}
+	}
+
+	if evolved == nil {
+		t.Fatalf("blastoise not in team; members=%+v", result.Teams[0].Members)
+	}
+
+	if !evolved.Options.Shadow {
+		t.Errorf("Options.Shadow = false after promotion, want true (shadow flag must carry over)")
+	}
+
+	if evolved.ResolvedSpeciesID != "blastoise_shadow" {
+		t.Errorf("ResolvedSpeciesID = %q, want \"blastoise_shadow\" (shadow lookup must resolve the evolved shadow entry)",
+			evolved.ResolvedSpeciesID)
+	}
+
+	if evolved.ShadowVariantMissing {
+		t.Errorf("ShadowVariantMissing = true; fixture publishes blastoise_shadow — must not signal missing")
 	}
 }
 

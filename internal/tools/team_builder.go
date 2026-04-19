@@ -463,6 +463,15 @@ func filterPool(pool []Combatant, banned []string) []Combatant {
 			continue
 		}
 
+		// When AutoEvolve promoted this pool entry the user's ban
+		// may have been against the pre-evolution id; match both
+		// the current Species and the original autoEvolvedFrom so
+		// the ban honours the caller's intent without forcing them
+		// to know the post-evolve species id in advance.
+		if pool[i].autoEvolvedFrom != "" && bannedSet[pool[i].autoEvolvedFrom] {
+			continue
+		}
+
 		out = append(out, pool[i])
 	}
 

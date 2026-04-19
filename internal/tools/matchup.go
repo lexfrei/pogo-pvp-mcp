@@ -61,11 +61,14 @@ type CombatantOptions struct {
 // Options carries modifier flags (shadow / lucky / purified) — see
 // CombatantOptions godoc.
 //
-// Unexported fields (resolvedSpeciesID, shadowVariantMissing) are
-// runtime-only bookkeeping populated by buildEngineCombatant after
-// shadow-aware lookup; they skip JSON (un)marshalling and are read
-// back by resolvedFromSpec to surface the missing-variant signal
-// in the response.
+// Unexported fields (resolvedSpeciesID, shadowVariantMissing,
+// autoEvolvedFrom, autoEvolveSkip) are runtime-only bookkeeping
+// populated by buildEngineCombatant (shadow-aware lookup) and
+// autoEvolvePool (Phase R4.4 team_builder helper); they skip JSON
+// (un)marshalling and are read back by resolvedFromSpec /
+// autoEvolveFlagsFor / filterPool to surface missing-variant
+// signals, auto-evolve provenance flags, and the original-species
+// ban match in downstream pipeline stages.
 type Combatant struct {
 	Species      string           `json:"species" jsonschema:"species id"`
 	IV           [3]int           `json:"iv" jsonschema:"IV triple [atk, def, sta]"`
