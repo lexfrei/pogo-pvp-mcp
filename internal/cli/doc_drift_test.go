@@ -153,6 +153,32 @@ func TestReadmeDocumentsTargetLevelAndCPCapNuance(t *testing.T) {
 	}
 }
 
+// TestTargetLevelJSONSchemaTagsMatch pins a sibling invariant of
+// TestReadmeDocumentsTargetLevelAndCPCapNuance: team_analysis.go and
+// team_builder.go both expose `target_level` on their params structs
+// and both route through computeMemberCost with identical semantics.
+// Their jsonschema tags MUST carry the same description — an MCP
+// client reading the per-tool schema over the wire would otherwise
+// see a drift between two tools that behave identically. This test
+// loads both source files as raw text and checks that both contain
+// the canonical description string.
+func TestTargetLevelJSONSchemaTagsMatch(t *testing.T) {
+	t.Parallel()
+
+	const canonical = `"cost target; 0 = deepest fit under cap; positive = 0.5-grid level"`
+
+	for _, path := range []string{
+		"internal/tools/team_builder.go",
+		"internal/tools/team_analysis.go",
+	} {
+		src := readRepoFile(t, path)
+		if !strings.Contains(src, canonical) {
+			t.Errorf("%s missing canonical target_level jsonschema %s (drift between sibling tool schemas)",
+				path, canonical)
+		}
+	}
+}
+
 // TestReportDataIssueURLMatchesLiveRepo pins the round-2 fix for
 // pvp_report_data_issue: the tool's outbound URLs must target the
 // live GitHub repository name, not the Go module path. CLAUDE.md
