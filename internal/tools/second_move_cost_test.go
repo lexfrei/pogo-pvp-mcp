@@ -20,7 +20,19 @@ const secondMoveCostFixture = `{
      "baseStats": {"atk": 121, "def": 152, "hp": 155},
      "types": ["fighting", "psychic"],
      "fastMoves": ["COUNTER"], "chargedMoves": ["ICE_PUNCH"],
-     "thirdMoveCost": 50000,
+     "thirdMoveCost": 50000, "buddyDistance": 3,
+     "released": true},
+    {"dex": 308, "speciesId": "medicham_shadow", "speciesName": "Medicham (Shadow)",
+     "baseStats": {"atk": 121, "def": 152, "hp": 155},
+     "types": ["fighting", "psychic"],
+     "fastMoves": ["COUNTER"], "chargedMoves": ["ICE_PUNCH"],
+     "thirdMoveCost": 50000, "buddyDistance": 3,
+     "released": true},
+    {"dex": 340, "speciesId": "whiscash", "speciesName": "Whiscash",
+     "baseStats": {"atk": 151, "def": 141, "hp": 242},
+     "types": ["water", "ground"],
+     "fastMoves": ["COUNTER"], "chargedMoves": ["ICE_PUNCH"],
+     "thirdMoveCost": 10000, "buddyDistance": 1,
      "released": true},
     {"dex": 132, "speciesId": "ditto", "speciesName": "Ditto",
      "baseStats": {"atk": 91, "def": 91, "hp": 134},
@@ -61,10 +73,11 @@ func newSecondMoveCostTool(t *testing.T) *tools.SecondMoveCostTool {
 	return tools.NewSecondMoveCostTool(gmMgr)
 }
 
-// TestSecondMoveCost_PublishedCost pins the happy path: a species
-// with a non-zero thirdMoveCost surfaces Available=true and equal
-// stardust / candy values.
-func TestSecondMoveCost_PublishedCost(t *testing.T) {
+// TestSecondMoveCost_3kmBuddy pins medicham: 50,000 stardust + 50
+// candy (3km buddy). The round-1 review blocker was that the prior
+// implementation reported CandyCost=50000 (equal to stardust) —
+// factually wrong. This test fails against that bug.
+func TestSecondMoveCost_3kmBuddy(t *testing.T) {
 	t.Parallel()
 
 	tool := newSecondMoveCostTool(t)
@@ -77,23 +90,95 @@ func TestSecondMoveCost_PublishedCost(t *testing.T) {
 		t.Fatalf("handler: %v", err)
 	}
 
-	if !result.Available {
-		t.Errorf("Available = false, want true (medicham has thirdMoveCost=50000)")
-	}
-
 	if result.StardustCost != 50000 {
 		t.Errorf("StardustCost = %d, want 50000", result.StardustCost)
 	}
 
-	if result.CandyCost != 50000 {
-		t.Errorf("CandyCost = %d, want 50000 (candy mirrors stardust)", result.CandyCost)
+	if result.CandyCost != 50 {
+		t.Errorf("CandyCost = %d, want 50 (3km buddy distance)", result.CandyCost)
+	}
+
+	if result.BuddyDistanceKM != 3 {
+		t.Errorf("BuddyDistanceKM = %d, want 3", result.BuddyDistanceKM)
+	}
+
+	if !result.StardustCostAvailable || !result.CandyCostAvailable {
+		t.Errorf("availability flags both should be true: stardust=%v candy=%v",
+			result.StardustCostAvailable, result.CandyCostAvailable)
+	}
+
+	if result.ShadowMultiplier != 1 {
+		t.Errorf("ShadowMultiplier = %d, want 1 (non-shadow species)", result.ShadowMultiplier)
 	}
 }
 
-// TestSecondMoveCost_NoPublishedCost pins the absent-field path:
-// species whose payload does not carry thirdMoveCost (like ditto in
-// the fixture) surface Available=false with a Note and zero values.
-func TestSecondMoveCost_NoPublishedCost(t *testing.T) {
+// TestSecondMoveCost_1kmBuddy pins the 1km buddy rate via whiscash:
+// 10,000 stardust + 25 candy.
+func TestSecondMoveCost_1kmBuddy(t *testing.T) {
+	t.Parallel()
+
+	tool := newSecondMoveCostTool(t)
+	handler := tool.Handler()
+
+	_, result, err := handler(t.Context(), nil, tools.SecondMoveCostParams{
+		Species: "whiscash",
+	})
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+
+	if result.StardustCost != 10000 {
+		t.Errorf("StardustCost = %d, want 10000", result.StardustCost)
+	}
+
+	if result.CandyCost != 25 {
+		t.Errorf("CandyCost = %d, want 25 (1km buddy distance)", result.CandyCost)
+	}
+
+	if result.BuddyDistanceKM != 1 {
+		t.Errorf("BuddyDistanceKM = %d, want 1", result.BuddyDistanceKM)
+	}
+}
+
+// TestSecondMoveCost_ShadowMultiplier pins the 3× shadow penalty on
+// both currencies. medicham_shadow is the same base (3km buddy,
+// 50,000 stardust) but the response must multiply by 3 → 150,000
+// stardust + 150 candy.
+func TestSecondMoveCost_ShadowMultiplier(t *testing.T) {
+	t.Parallel()
+
+	tool := newSecondMoveCostTool(t)
+	handler := tool.Handler()
+
+	_, result, err := handler(t.Context(), nil, tools.SecondMoveCostParams{
+		Species: "medicham_shadow",
+	})
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+
+	if result.ShadowMultiplier != 3 {
+		t.Errorf("ShadowMultiplier = %d, want 3", result.ShadowMultiplier)
+	}
+
+	if result.StardustCost != 150000 {
+		t.Errorf("StardustCost = %d, want 150000 (3× shadow)", result.StardustCost)
+	}
+
+	if result.CandyCost != 150 {
+		t.Errorf("CandyCost = %d, want 150 (3× shadow)", result.CandyCost)
+	}
+
+	if result.Note == "" {
+		t.Errorf("Note empty on shadow response; disclaimer must be carried")
+	}
+}
+
+// TestSecondMoveCost_MissingBuddyDistance pins the degraded path:
+// ditto in the fixture has neither thirdMoveCost nor buddyDistance
+// in the payload, so CandyCostAvailable must be false and
+// StardustCostAvailable likewise.
+func TestSecondMoveCost_MissingBuddyDistance(t *testing.T) {
 	t.Parallel()
 
 	tool := newSecondMoveCostTool(t)
@@ -106,17 +191,16 @@ func TestSecondMoveCost_NoPublishedCost(t *testing.T) {
 		t.Fatalf("handler: %v", err)
 	}
 
-	if result.Available {
-		t.Errorf("Available = true; ditto has no thirdMoveCost in the fixture")
+	if result.CandyCostAvailable {
+		t.Errorf("CandyCostAvailable = true; ditto has no buddyDistance in fixture")
 	}
 
-	if result.StardustCost != 0 || result.CandyCost != 0 {
-		t.Errorf("costs = (%d, %d), want (0, 0) on unavailable species",
-			result.StardustCost, result.CandyCost)
+	if result.StardustCostAvailable {
+		t.Errorf("StardustCostAvailable = true; ditto has no thirdMoveCost in fixture")
 	}
 
 	if result.Note == "" {
-		t.Errorf("Note empty on Available=false; caller needs the explanation")
+		t.Errorf("Note empty on missing-data response; caller needs the explanation")
 	}
 }
 
