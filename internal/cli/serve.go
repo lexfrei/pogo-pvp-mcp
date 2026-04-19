@@ -275,34 +275,61 @@ func runRefreshLoop(
 	}
 }
 
-// buildMCPServer constructs the mcp.Server with all fourteen currently
+// buildMCPServer constructs the mcp.Server with all fifteen currently
 // implemented tools registered (pvp_rank, pvp_matchup, pvp_cp_limits,
 // pvp_meta, pvp_team_analysis, pvp_team_builder, pvp_species_info,
 // pvp_move_info, pvp_type_matchup, pvp_level_from_cp, pvp_counter_finder,
-// pvp_evolution_preview, pvp_rank_batch, pvp_threat_coverage).
+// pvp_evolution_preview, pvp_rank_batch, pvp_threat_coverage, pvp_weather_boost).
 func buildMCPServer(gamemasterMgr *gamemaster.Manager, ranks *rankings.Manager) *mcp.Server {
 	server := mcp.NewServer(&mcp.Implementation{
 		Name:    serverName,
 		Version: serverVersion,
 	}, nil)
 
+	registerCombatTools(server, gamemasterMgr, ranks)
+	registerInfoAndLookupTools(server, gamemasterMgr, ranks)
+
+	return server
+}
+
+// registerCombatTools registers every tool that runs actual battle
+// simulation or aggregates simulated ratings. Split out of
+// buildMCPServer so funlen stays under budget as the tool list grows.
+func registerCombatTools(
+	server *mcp.Server, gamemasterMgr *gamemaster.Manager, ranks *rankings.Manager,
+) {
 	rankTool := tools.NewRankTool(gamemasterMgr, ranks)
 	mcp.AddTool(server, rankTool.Tool(), rankTool.Handler())
 
 	matchupTool := tools.NewMatchupTool(gamemasterMgr, ranks)
 	mcp.AddTool(server, matchupTool.Tool(), matchupTool.Handler())
 
-	cpLimitsTool := tools.NewCPLimitsTool(gamemasterMgr)
-	mcp.AddTool(server, cpLimitsTool.Tool(), cpLimitsTool.Handler())
-
-	metaTool := tools.NewMetaTool(ranks, gamemasterMgr)
-	mcp.AddTool(server, metaTool.Tool(), metaTool.Handler())
-
 	teamAnalysisTool := tools.NewTeamAnalysisTool(gamemasterMgr, ranks)
 	mcp.AddTool(server, teamAnalysisTool.Tool(), teamAnalysisTool.Handler())
 
 	teamBuilderTool := tools.NewTeamBuilderTool(gamemasterMgr, ranks)
 	mcp.AddTool(server, teamBuilderTool.Tool(), teamBuilderTool.Handler())
+
+	counterFinderTool := tools.NewCounterFinderTool(gamemasterMgr, ranks)
+	mcp.AddTool(server, counterFinderTool.Tool(), counterFinderTool.Handler())
+
+	rankBatchTool := tools.NewRankBatchTool(gamemasterMgr, ranks)
+	mcp.AddTool(server, rankBatchTool.Tool(), rankBatchTool.Handler())
+
+	threatCoverageTool := tools.NewThreatCoverageTool(gamemasterMgr, ranks)
+	mcp.AddTool(server, threatCoverageTool.Tool(), threatCoverageTool.Handler())
+}
+
+// registerInfoAndLookupTools registers every read-only lookup tool
+// (no simulation, just gamemaster / rankings / static-table reads).
+func registerInfoAndLookupTools(
+	server *mcp.Server, gamemasterMgr *gamemaster.Manager, ranks *rankings.Manager,
+) {
+	cpLimitsTool := tools.NewCPLimitsTool(gamemasterMgr)
+	mcp.AddTool(server, cpLimitsTool.Tool(), cpLimitsTool.Handler())
+
+	metaTool := tools.NewMetaTool(ranks, gamemasterMgr)
+	mcp.AddTool(server, metaTool.Tool(), metaTool.Handler())
 
 	speciesInfoTool := tools.NewSpeciesInfoTool(gamemasterMgr, ranks)
 	mcp.AddTool(server, speciesInfoTool.Tool(), speciesInfoTool.Handler())
@@ -316,19 +343,11 @@ func buildMCPServer(gamemasterMgr *gamemaster.Manager, ranks *rankings.Manager) 
 	levelFromCPTool := tools.NewLevelFromCPTool(gamemasterMgr)
 	mcp.AddTool(server, levelFromCPTool.Tool(), levelFromCPTool.Handler())
 
-	counterFinderTool := tools.NewCounterFinderTool(gamemasterMgr, ranks)
-	mcp.AddTool(server, counterFinderTool.Tool(), counterFinderTool.Handler())
-
 	evolutionPreviewTool := tools.NewEvolutionPreviewTool(gamemasterMgr)
 	mcp.AddTool(server, evolutionPreviewTool.Tool(), evolutionPreviewTool.Handler())
 
-	rankBatchTool := tools.NewRankBatchTool(gamemasterMgr, ranks)
-	mcp.AddTool(server, rankBatchTool.Tool(), rankBatchTool.Handler())
-
-	threatCoverageTool := tools.NewThreatCoverageTool(gamemasterMgr, ranks)
-	mcp.AddTool(server, threatCoverageTool.Tool(), threatCoverageTool.Handler())
-
-	return server
+	weatherBoostTool := tools.NewWeatherBoostTool()
+	mcp.AddTool(server, weatherBoostTool.Tool(), weatherBoostTool.Handler())
 }
 
 // buildRankingsManager constructs the shared rankings manager using
