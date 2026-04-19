@@ -693,3 +693,184 @@ func TestTeamAnalysisTool_UnknownLeague(t *testing.T) {
 		t.Errorf("error = %v, want wrapping ErrUnknownLeague", err)
 	}
 }
+
+// TestTeamAnalysisTool_CostBreakdownPresent pins Phase R4.2: every
+// PerMember entry across Overall + every PerScenario aggregate
+// carries a CostBreakdown pointer populated via computeMemberCost.
+// Target level = 0 → per-species default (deepest climb under
+// league cap with 15/15/15 IVs).
+func TestTeamAnalysisTool_CostBreakdownPresent(t *testing.T) {
+	t.Parallel()
+
+	tool := newTeamAnalysisTool(t)
+	handler := tool.Handler()
+
+	member := tools.Combatant{
+		IV: [3]int{15, 15, 15}, Level: 1.0,
+		FastMove: "FAST1", ChargedMoves: []string{"CH1"},
+	}
+	memberA := member
+	memberA.Species = "a"
+	memberB := member
+	memberB.Species = "b"
+	memberC := member
+	memberC.Species = "c"
+
+	_, result, err := handler(t.Context(), nil, tools.TeamAnalysisParams{
+		Team:   []tools.Combatant{memberA, memberB, memberC},
+		League: leagueGreat,
+	})
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+
+	for i, m := range result.Overall.PerMember {
+		if m.CostBreakdown == nil {
+			t.Errorf("Overall.PerMember[%d] CostBreakdown = nil, want populated", i)
+
+			continue
+		}
+
+		if m.CostBreakdown.TargetLevel <= 0 {
+			t.Errorf("Overall.PerMember[%d] TargetLevel = %v, want > 0 (per-species default)",
+				i, m.CostBreakdown.TargetLevel)
+		}
+
+		if m.CostBreakdown.PowerupStardustCost <= 0 {
+			t.Errorf("Overall.PerMember[%d] PowerupStardustCost = %d, want > 0 (L1 → target climb)",
+				i, m.CostBreakdown.PowerupStardustCost)
+		}
+	}
+
+	for key, agg := range result.PerScenario {
+		for i, m := range agg.PerMember {
+			if m.CostBreakdown == nil {
+				t.Errorf("PerScenario[%s].PerMember[%d] CostBreakdown = nil", key, i)
+			}
+		}
+	}
+}
+
+// TestTeamAnalysisTool_InvalidTargetLevel pins the gate on off-grid
+// / out-of-range target_level inputs: validateTargetLevel must
+// short-circuit before any rankings fetch or simulation, same as
+// the pvp_team_builder path.
+func TestTeamAnalysisTool_InvalidTargetLevel(t *testing.T) {
+	t.Parallel()
+
+	tool := newTeamAnalysisTool(t)
+	handler := tool.Handler()
+
+	valid := tools.Combatant{
+		Species: "a", IV: [3]int{15, 15, 15}, Level: 40,
+		FastMove: "FAST1", ChargedMoves: []string{"CH1"},
+	}
+
+	cases := []struct {
+		name   string
+		target float64
+	}{
+		{"off-grid target", 10.3},
+		{"above L50", 75.0},
+		{"negative", -1.0},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			_, _, err := handler(t.Context(), nil, tools.TeamAnalysisParams{
+				Team:        []tools.Combatant{valid, valid, valid},
+				League:      leagueGreat,
+				TargetLevel: tc.target,
+			})
+			if !errors.Is(err, tools.ErrInvalidTargetLevel) {
+				t.Errorf("target %.2f: error = %v, want wrapping ErrInvalidTargetLevel",
+					tc.target, err)
+			}
+		})
+	}
+}
+
+// TestTeamAnalysisTool_InvalidMemberForLeague pins the early-fail
+// path when a team member's level-1 CP already exceeds the league
+// cap: validatePoolForLeague short-circuits with
+// ErrMemberInvalidForLeague before any simulation, matching the
+// pvp_team_builder semantics introduced in Phase 3A.
+func TestTeamAnalysisTool_InvalidMemberForLeague(t *testing.T) {
+	t.Parallel()
+
+	const oversizedFixture = `{
+  "id": "gamemaster",
+  "timestamp": "2026-04-19 00:00:00",
+  "pokemon": [
+    {"dex": 1, "speciesId": "colossus", "speciesName": "Colossus",
+     "baseStats": {"atk": 9000, "def": 9000, "hp": 9000},
+     "types": ["normal"],
+     "fastMoves": ["FAST1"], "chargedMoves": ["CH1"], "released": true},
+    {"dex": 2, "speciesId": "b", "speciesName": "B",
+     "baseStats": {"atk": 152, "def": 143, "hp": 216},
+     "types": ["water"],
+     "fastMoves": ["FAST1"], "chargedMoves": ["CH1"], "released": true},
+    {"dex": 3, "speciesId": "c", "speciesName": "C",
+     "baseStats": {"atk": 234, "def": 159, "hp": 207},
+     "types": ["fighting"],
+     "fastMoves": ["FAST1"], "chargedMoves": ["CH1"], "released": true}
+  ],
+  "moves": [
+    {"moveId": "FAST1", "name": "Fast 1", "type": "normal",
+     "power": 3, "energy": 0, "energyGain": 5, "cooldown": 1000, "turns": 2},
+    {"moveId": "CH1", "name": "Charged 1", "type": "normal",
+     "power": 50, "energy": 35, "cooldown": 500}
+  ]
+}`
+
+	gmServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(oversizedFixture))
+	}))
+	t.Cleanup(gmServer.Close)
+
+	gmMgr, err := gamemaster.NewManager(config.GamemasterConfig{
+		Source:    gmServer.URL,
+		LocalPath: filepath.Join(t.TempDir(), "gm.json"),
+	})
+	if err != nil {
+		t.Fatalf("NewManager gm: %v", err)
+	}
+
+	err = gmMgr.Refresh(t.Context())
+	if err != nil {
+		t.Fatalf("Refresh gm: %v", err)
+	}
+
+	rankServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte("[]"))
+	}))
+	t.Cleanup(rankServer.Close)
+
+	ranksMgr, err := rankings.NewManager(rankings.Config{
+		BaseURL:  rankServer.URL,
+		LocalDir: filepath.Join(t.TempDir(), "rankings"),
+	})
+	if err != nil {
+		t.Fatalf("NewManager rankings: %v", err)
+	}
+
+	handler := tools.NewTeamAnalysisTool(gmMgr, ranksMgr).Handler()
+
+	pool := []tools.Combatant{
+		{Species: "colossus", IV: [3]int{15, 15, 15}, Level: 1.0, FastMove: "FAST1", ChargedMoves: []string{"CH1"}},
+		{Species: "b", IV: [3]int{15, 15, 15}, Level: 30, FastMove: "FAST1", ChargedMoves: []string{"CH1"}},
+		{Species: "c", IV: [3]int{15, 15, 15}, Level: 30, FastMove: "FAST1", ChargedMoves: []string{"CH1"}},
+	}
+
+	_, _, err = handler(t.Context(), nil, tools.TeamAnalysisParams{
+		Team:   pool,
+		League: leagueGreat,
+	})
+	if !errors.Is(err, tools.ErrMemberInvalidForLeague) {
+		t.Errorf("error = %v, want wrapping ErrMemberInvalidForLeague", err)
+	}
+}

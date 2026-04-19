@@ -106,6 +106,7 @@ type TeamAnalysisParams struct {
 	TopN           int         `json:"top_n,omitempty" jsonschema:"meta species to sweep (default 30)"`
 	Shields        []int       `json:"shields,omitempty" jsonschema:"symmetric shield scenarios; omit for [1]; averaged; each 0..2"`
 	DisallowLegacy bool        `json:"disallow_legacy,omitempty" jsonschema:"reject legacy moves; default false (legacy allowed)"`
+	TargetLevel    float64     `json:"target_level,omitempty" jsonschema:"target level for cost estimation; 0 = max level under league CP cap"`
 }
 
 // TeamMemberAnalysis describes one team member's performance against
@@ -113,15 +114,16 @@ type TeamAnalysisParams struct {
 // moveset (either the caller's explicit choice or the recommended
 // default from rankings) so the client can see what was simulated.
 type TeamMemberAnalysis struct {
-	Species      string   `json:"species"`
-	FastMove     string   `json:"fast_move"`
-	ChargedMoves []string `json:"charged_moves"`
-	AvgRating    float64  `json:"avg_rating"`
-	Wins         int      `json:"wins"`
-	Losses       int      `json:"losses"`
-	Ties         int      `json:"ties"`
-	HardWins     []string `json:"hard_wins"`
-	HardLosses   []string `json:"hard_losses"`
+	Species       string               `json:"species"`
+	FastMove      string               `json:"fast_move"`
+	ChargedMoves  []string             `json:"charged_moves"`
+	AvgRating     float64              `json:"avg_rating"`
+	Wins          int                  `json:"wins"`
+	Losses        int                  `json:"losses"`
+	Ties          int                  `json:"ties"`
+	HardWins      []string             `json:"hard_wins"`
+	HardLosses    []string             `json:"hard_losses"`
+	CostBreakdown *MemberCostBreakdown `json:"cost_breakdown,omitempty"`
 }
 
 // TeamAnalysisAggregate bundles the per-scope metrics produced by one
@@ -237,11 +239,61 @@ func (tool *TeamAnalysisTool) handle(
 	result.Cup = resolveCupLabel(params.Cup)
 	result.SkippedMetaSpecies = workspace.SkippedMeta
 
+	tool.attachAnalysisCostBreakdowns(&result, &params, workspace.CPCap)
+
 	if ctx.Err() != nil {
 		return nil, TeamAnalysisResult{}, fmt.Errorf("team_analysis cancelled: %w", ctx.Err())
 	}
 
 	return nil, result, nil
+}
+
+// attachAnalysisCostBreakdowns walks the resolved team and attaches
+// a per-member MemberCostBreakdown to every PerMember entry across
+// Overall + every PerScenario aggregate. Reuses computeMemberCost
+// from team_builder_costs so the pvp_team_analysis and
+// pvp_team_builder cost semantics stay identical — same target
+// resolution, same Options multipliers, same clamp-at-or-above-
+// target behaviour. The snapshot pointer is captured once per call
+// so the attach pass sees the gamemaster the validation ran
+// against, not a second .Current() read that could race a
+// mid-refresh pointer.
+func (tool *TeamAnalysisTool) attachAnalysisCostBreakdowns(
+	result *TeamAnalysisResult, params *TeamAnalysisParams, cpCap int,
+) {
+	snapshot := tool.gm.Current()
+	if snapshot == nil {
+		return
+	}
+
+	breakdowns := make([]MemberCostBreakdown, len(params.Team))
+	for i := range params.Team {
+		breakdowns[i] = computeMemberCost(snapshot, &params.Team[i], cpCap, params.TargetLevel)
+	}
+
+	applyBreakdownsToAggregate(&result.Overall, breakdowns)
+
+	for key, agg := range result.PerScenario {
+		applyBreakdownsToAggregate(&agg, breakdowns)
+		result.PerScenario[key] = agg
+	}
+}
+
+// applyBreakdownsToAggregate copies the per-member breakdown
+// pointers into every PerMember entry of the aggregate. Stores a
+// pointer so the wire shape stays omitempty-friendly when a future
+// scenario-specific breakdown is added; today every aggregate
+// shares the same breakdowns (cost is scenario-independent — the
+// climb does not depend on shield count).
+func applyBreakdownsToAggregate(agg *TeamAnalysisAggregate, breakdowns []MemberCostBreakdown) {
+	for i := range agg.PerMember {
+		if i >= len(breakdowns) {
+			return
+		}
+
+		breakdown := breakdowns[i]
+		agg.PerMember[i].CostBreakdown = &breakdown
+	}
 }
 
 // prepareTeam orchestrates the team-side prep: legacy rejection
@@ -280,6 +332,11 @@ func (tool *TeamAnalysisTool) prepareTeamAnalysis(
 	}
 
 	cpCap, err := resolveCPCap(params.League, 0)
+	if err != nil {
+		return nil, err
+	}
+
+	err = validatePoolForLeague(params.Team, snapshot, cpCap)
 	if err != nil {
 		return nil, err
 	}
@@ -328,6 +385,11 @@ func validateTeamAnalysisParams(ctx context.Context, params *TeamAnalysisParams)
 
 	if params.TopN < 0 {
 		return fmt.Errorf("%w: %d must be non-negative", ErrInvalidTopN, params.TopN)
+	}
+
+	err = validateTargetLevel(params.TargetLevel)
+	if err != nil {
+		return err
 	}
 
 	return validateShields(params.Shields)
