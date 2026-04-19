@@ -1380,6 +1380,176 @@ func TestTeamBuilderTool_AutoEvolveShadowCarriesOver(t *testing.T) {
 	}
 }
 
+// TestTeamBuilderTool_BudgetDropsOverBudgetTeam pins the hard-drop
+// path: a StardustLimit below the team's aggregate cost with no
+// tolerance filters the team out entirely. Uses a high target
+// level so the L1-member climb produces meaningful stardust.
+func TestTeamBuilderTool_BudgetDropsOverBudgetTeam(t *testing.T) {
+	t.Parallel()
+
+	tool := newTeamBuilderTool(t)
+	handler := tool.Handler()
+
+	member := tools.Combatant{
+		IV: [3]int{15, 15, 15}, Level: 1.0,
+		FastMove: "FAST1", ChargedMoves: []string{"CH1"},
+	}
+	memberA := member
+	memberA.Species = "a"
+	memberB := member
+	memberB.Species = "b"
+	memberC := member
+	memberC.Species = "c"
+
+	_, result, err := handler(t.Context(), nil, tools.TeamBuilderParams{
+		Pool:        []tools.Combatant{memberA, memberB, memberC},
+		League:      leagueGreat,
+		TargetLevel: 40.0,
+		Budget:      &tools.BudgetSpec{StardustLimit: 1000},
+	})
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+
+	if len(result.Teams) != 0 {
+		t.Errorf("Teams len = %d, want 0 (budget 1000 stardust << 3 × L1→L40 climbs)",
+			len(result.Teams))
+	}
+}
+
+// TestTeamBuilderTool_BudgetInToleranceKeptAndFlagged pins the
+// tolerance branch: a team whose AggregateCost sits between
+// StardustLimit and StardustLimit × (1+Tolerance) is kept in the
+// response with BudgetExceeded=true + BudgetExcess > 0.
+// Synthesises the exact budget from the actual aggregate cost so
+// the fixture stays deterministic across powerup table edits.
+func TestTeamBuilderTool_BudgetInToleranceKeptAndFlagged(t *testing.T) {
+	t.Parallel()
+
+	tool := newTeamBuilderTool(t)
+	handler := tool.Handler()
+
+	member := tools.Combatant{
+		IV: [3]int{15, 15, 15}, Level: 1.0,
+		FastMove: "FAST1", ChargedMoves: []string{"CH1"},
+	}
+	memberA := member
+	memberA.Species = "a"
+	memberB := member
+	memberB.Species = "b"
+	memberC := member
+	memberC.Species = "c"
+
+	// Warm-up run to discover the actual aggregate cost for this
+	// team at target level 40.
+	_, warm, err := handler(t.Context(), nil, tools.TeamBuilderParams{
+		Pool:        []tools.Combatant{memberA, memberB, memberC},
+		League:      leagueGreat,
+		TargetLevel: 40.0,
+	})
+	if err != nil {
+		t.Fatalf("warm: %v", err)
+	}
+
+	if len(warm.Teams) == 0 {
+		t.Fatal("warm: no teams to measure aggregate")
+	}
+
+	var actualCost int
+
+	for _, breakdown := range warm.Teams[0].CostBreakdowns {
+		actualCost += breakdown.PowerupStardustCost + breakdown.SecondMoveStardustCost
+	}
+
+	// Set the budget below actualCost but within 50% tolerance.
+	limit := actualCost * 9 / 10 // 10% below actual
+	tolerance := 0.5             // 50% tolerance → hardCap = limit × 1.5 >> actualCost
+
+	_, result, err := handler(t.Context(), nil, tools.TeamBuilderParams{
+		Pool:        []tools.Combatant{memberA, memberB, memberC},
+		League:      leagueGreat,
+		TargetLevel: 40.0,
+		Budget: &tools.BudgetSpec{
+			StardustLimit:     limit,
+			StardustTolerance: tolerance,
+		},
+	})
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+
+	if len(result.Teams) == 0 {
+		t.Fatal("Teams empty; team within tolerance must be kept")
+	}
+
+	team := result.Teams[0]
+
+	if !team.BudgetExceeded {
+		t.Errorf("BudgetExceeded = false; team over limit but within tolerance must flag")
+	}
+
+	if team.BudgetExcess <= 0 {
+		t.Errorf("BudgetExcess = %d, want > 0", team.BudgetExcess)
+	}
+
+	if team.AggregateCost != actualCost {
+		t.Errorf("AggregateCost = %d, want %d (matches warm-run sum)",
+			team.AggregateCost, actualCost)
+	}
+}
+
+// TestTeamBuilderTool_BudgetKeepsFittingTeam pins the negative
+// path of the budget filter: a limit comfortably above the team's
+// actual cost keeps the team in the response with
+// BudgetExceeded=false and BudgetExcess=0. AggregateCost is still
+// populated so callers can see the total even when they're under
+// budget.
+func TestTeamBuilderTool_BudgetKeepsFittingTeam(t *testing.T) {
+	t.Parallel()
+
+	tool := newTeamBuilderTool(t)
+	handler := tool.Handler()
+
+	member := tools.Combatant{
+		IV: [3]int{15, 15, 15}, Level: 1.0,
+		FastMove: "FAST1", ChargedMoves: []string{"CH1"},
+	}
+	memberA := member
+	memberA.Species = "a"
+	memberB := member
+	memberB.Species = "b"
+	memberC := member
+	memberC.Species = "c"
+
+	_, result, err := handler(t.Context(), nil, tools.TeamBuilderParams{
+		Pool:        []tools.Combatant{memberA, memberB, memberC},
+		League:      leagueGreat,
+		TargetLevel: 40.0,
+		Budget:      &tools.BudgetSpec{StardustLimit: 100_000_000},
+	})
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+
+	if len(result.Teams) == 0 {
+		t.Fatal("Teams empty; team well under 100M budget must be kept")
+	}
+
+	team := result.Teams[0]
+
+	if team.BudgetExceeded {
+		t.Errorf("BudgetExceeded = true; 100M budget comfortably covers the climb")
+	}
+
+	if team.BudgetExcess != 0 {
+		t.Errorf("BudgetExcess = %d, want 0", team.BudgetExcess)
+	}
+
+	if team.AggregateCost == 0 {
+		t.Errorf("AggregateCost = 0; must be populated even when under budget")
+	}
+}
+
 // autoEvolveBranchingFixture publishes eevee with three evolutions;
 // autoEvolve must refuse to pick one and flag the skip.
 const autoEvolveBranchingFixture = `{
