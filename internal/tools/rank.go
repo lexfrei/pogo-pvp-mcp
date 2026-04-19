@@ -85,18 +85,30 @@ type Moveset struct {
 // constructed without a rankings manager, the rankings fetch failed,
 // or the species is not present in the ranking for the requested cup.
 type RankResult struct {
-	Species            string   `json:"species"`
-	CP                 int      `json:"cp"`
-	StatProduct        float64  `json:"stat_product"`
-	Level              float64  `json:"level"`
-	Atk                float64  `json:"atk"`
-	Def                float64  `json:"def"`
-	HP                 int      `json:"hp"`
-	PercentOfBest      float64  `json:"percent_of_best"`
-	League             string   `json:"league"`
-	Cup                string   `json:"cup"`
-	CPCap              int      `json:"cp_cap"`
-	RecommendedMoveset *Moveset `json:"recommended_moveset,omitempty"`
+	Species            string           `json:"species"`
+	CP                 int              `json:"cp"`
+	StatProduct        float64          `json:"stat_product"`
+	Level              float64          `json:"level"`
+	Atk                float64          `json:"atk"`
+	Def                float64          `json:"def"`
+	HP                 int              `json:"hp"`
+	PercentOfBest      float64          `json:"percent_of_best"`
+	League             string           `json:"league"`
+	Cup                string           `json:"cup"`
+	CPCap              int              `json:"cp_cap"`
+	RecommendedMoveset *Moveset         `json:"recommended_moveset,omitempty"`
+	Hundo              *HundoComparison `json:"comparison_to_hundo,omitempty"`
+}
+
+// HundoComparison carries the best-case 15/15/15 spread for the same
+// species under the same CP cap so callers can see how much stat
+// product they'd get from a "perfect" catch without a second tool
+// call. Omitted under master league / unbounded caps where the
+// comparison is uninformative (every IV reaches the same MaxLevel).
+type HundoComparison struct {
+	Level       float64 `json:"level"`
+	CP          int     `json:"cp"`
+	StatProduct float64 `json:"stat_product"`
 }
 
 // RankTool wraps the shared gamemaster.Manager plus an optional
@@ -285,7 +297,36 @@ func buildRankResult(inputs rankInputs) (RankResult, error) {
 		League:        inputs.league,
 		Cup:           resolveCupLabel(inputs.cup),
 		CPCap:         inputs.cpCap,
+		Hundo:         computeHundo(inputs),
 	}, nil
+}
+
+// computeHundo searches the best 15/15/15 spread under the same cap
+// as the requested IV and packages it for the RankResult. Returns
+// nil for master league (every spread saturates at MaxLevel so the
+// comparison is uninformative). A search error (e.g. cap so low even
+// hundo can't fit) drops the field; that's acceptable because the
+// main spread already surfaced its own error above this point.
+func computeHundo(inputs rankInputs) *HundoComparison {
+	if inputs.league == "master" {
+		return nil
+	}
+
+	hundoIVs, err := pogopvp.NewIV(pogopvp.MaxIV, pogopvp.MaxIV, pogopvp.MaxIV)
+	if err != nil {
+		return nil
+	}
+
+	spread, err := findSpreadForSpecies(inputs.species.BaseStats, hundoIVs, inputs.cpCap, inputs.opts)
+	if err != nil {
+		return nil
+	}
+
+	return &HundoComparison{
+		Level:       spread.Level,
+		CP:          spread.CP,
+		StatProduct: spread.StatProduct,
+	}
 }
 
 // ErrDegenerateSpecies is returned when the gamemaster supplies a
