@@ -22,6 +22,11 @@ type SecondMoveCostParams struct {
 // derived from the species' buddy distance using Niantic's
 // canonical table (1km → 25 candy, 3km → 50, 5km → 75, 20km → 100).
 //
+// StardustCost / CandyCost are the already-multiplied values (shadow
+// species pay 1.2× both currencies — symmetric with the purified
+// 0.8× discount). CostMultiplier carries the applied factor so
+// callers can back it out if they need the non-shadow baseline.
+//
 // CandyCostAvailable reports whether the candy derivation
 // succeeded: false means the gamemaster does not publish a
 // buddy distance for this species (no derivation possible), in
@@ -29,14 +34,14 @@ type SecondMoveCostParams struct {
 // before acting on CandyCost — zero is not a valid Pokémon GO
 // second-move candy cost.
 type SecondMoveCostResult struct {
-	Species               string `json:"species"`
-	StardustCost          int    `json:"stardust_cost"`
-	CandyCost             int    `json:"candy_cost"`
-	BuddyDistanceKM       int    `json:"buddy_distance_km"`
-	CandyCostAvailable    bool   `json:"candy_cost_available"`
-	StardustCostAvailable bool   `json:"stardust_cost_available"`
-	ShadowMultiplier      int    `json:"shadow_multiplier"`
-	Note                  string `json:"note,omitempty"`
+	Species               string  `json:"species"`
+	StardustCost          int     `json:"stardust_cost"`
+	CandyCost             int     `json:"candy_cost"`
+	BuddyDistanceKM       int     `json:"buddy_distance_km,omitempty"`
+	CandyCostAvailable    bool    `json:"candy_cost_available"`
+	StardustCostAvailable bool    `json:"stardust_cost_available"`
+	CostMultiplier        float64 `json:"cost_multiplier"`
+	Note                  string  `json:"note,omitempty"`
 }
 
 // SecondMoveCostTool wraps the gamemaster manager.
@@ -71,10 +76,15 @@ func (tool *SecondMoveCostTool) Handler() mcp.ToolHandlerFor[SecondMoveCostParam
 // shadow variants: "medicham_shadow", "mewtwo_shadow", etc.
 const shadowSpeciesSuffix = "_shadow"
 
-// shadowCostMultiplier is Niantic's confirmed 3× penalty on both
-// stardust and candy when unlocking the second charged move on a
-// shadow-form Pokémon.
-const shadowCostMultiplier = 3
+// shadowCostMultiplier is Niantic's documented 1.2× (+20%) penalty
+// on stardust and candy when powering up or unlocking a second
+// charged move on a shadow-form Pokémon. Symmetric with the
+// published purified 0.8× discount (not applied by this tool
+// because pvpoke does not carry a purified species id; callers can
+// apply 0.8× themselves to the non-shadow lookup). 1.2 is exact
+// against every buddy-bracket product in the canonical table
+// (25×1.2=30, 50×1.2=60, 75×1.2=90, 100×1.2=120).
+const shadowCostMultiplier = 1.2
 
 // handle looks up the species, derives the candy cost from its
 // buddy distance, and applies the shadow multiplier if applicable.
@@ -105,13 +115,15 @@ func (tool *SecondMoveCostTool) handle(
 	stardust := species.ThirdMoveCost
 	candy, candyOK := candyCostFromBuddy(species.BuddyDistance)
 
-	multiplier := 1
-	if strings.HasSuffix(params.Species, shadowSpeciesSuffix) {
+	isShadow := strings.HasSuffix(params.Species, shadowSpeciesSuffix)
+	multiplier := 1.0
+
+	if isShadow {
 		multiplier = shadowCostMultiplier
-		stardust *= shadowCostMultiplier
+		stardust = applyShadowMultiplier(stardust)
 
 		if candyOK {
-			candy *= shadowCostMultiplier
+			candy = applyShadowMultiplier(candy)
 		}
 	}
 
@@ -122,9 +134,23 @@ func (tool *SecondMoveCostTool) handle(
 		BuddyDistanceKM:       species.BuddyDistance,
 		StardustCostAvailable: species.ThirdMoveCost > 0,
 		CandyCostAvailable:    candyOK,
-		ShadowMultiplier:      multiplier,
-		Note:                  buildSecondMoveCostNote(species.ThirdMoveCost, candyOK, multiplier),
+		CostMultiplier:        multiplier,
+		Note:                  buildSecondMoveCostNote(species.ThirdMoveCost, candyOK, isShadow),
 	}, nil
+}
+
+// applyShadowMultiplier scales a cost by the 1.2× shadow penalty
+// using integer arithmetic (×12/÷10). Every value in the canonical
+// buddy / stardust tables is a multiple of 10 so the division is
+// exact; the closed-form integer op avoids floating-point rounding
+// drift in the JSON output.
+func applyShadowMultiplier(cost int) int {
+	const (
+		numerator   = 12
+		denominator = 10
+	)
+
+	return cost * numerator / denominator
 }
 
 // Canonical Pokémon GO buddy-distance brackets + their associated
@@ -165,22 +191,29 @@ func candyCostFromBuddy(kilometres int) (int, bool) {
 
 // buildSecondMoveCostNote composes a human-readable explanation of
 // which fields in the response are load-bearing vs derived from
-// missing data. LLMs consuming the tool use this to explain the
-// result back to the user.
-func buildSecondMoveCostNote(stardust int, candyOK bool, multiplier int) string {
-	switch {
-	case multiplier == shadowCostMultiplier && stardust > 0 && candyOK:
-		return "Shadow form: 3× both stardust and candy. Purified forms get a 20% discount on both currencies " +
-			"(not modelled here — re-query the purified species id)."
-	case stardust == 0 && !candyOK:
-		return "Neither stardust nor candy cost is available for this species in the current gamemaster."
-	case stardust == 0:
-		return "Upstream does not publish a stardust cost for this species. Candy cost is derived from buddy " +
-			"distance."
-	case !candyOK:
-		return "Upstream does not publish a buddy distance for this species. Stardust cost comes from the " +
-			"gamemaster; candy cost cannot be derived."
-	default:
-		return ""
+// missing data, and whether the shadow premium was applied. Parts
+// are concatenated so partial-data shadow responses carry BOTH the
+// shadow-premium note and the availability-caveat note.
+func buildSecondMoveCostNote(stardust int, candyOK, isShadow bool) string {
+	parts := make([]string, 0, 2)
+
+	if isShadow {
+		parts = append(parts, "Shadow form: +20% (1.2×) on both stardust and candy. "+
+			"Purified forms use the inverse 0.8× discount; apply that factor client-side "+
+			"to the non-shadow species lookup since pvpoke does not expose a purified id.")
 	}
+
+	switch {
+	case stardust == 0 && !candyOK:
+		parts = append(parts,
+			"Neither stardust nor candy cost is available for this species in the current gamemaster.")
+	case stardust == 0:
+		parts = append(parts,
+			"Upstream does not publish a stardust cost for this species; candy cost is derived from buddy distance.")
+	case !candyOK:
+		parts = append(parts,
+			"Upstream does not publish a buddy distance for this species; candy cost cannot be derived.")
+	}
+
+	return strings.Join(parts, " ")
 }

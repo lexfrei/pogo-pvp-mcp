@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/lexfrei/pogo-pvp-mcp/internal/config"
@@ -107,8 +108,8 @@ func TestSecondMoveCost_3kmBuddy(t *testing.T) {
 			result.StardustCostAvailable, result.CandyCostAvailable)
 	}
 
-	if result.ShadowMultiplier != 1 {
-		t.Errorf("ShadowMultiplier = %d, want 1 (non-shadow species)", result.ShadowMultiplier)
+	if result.CostMultiplier != 1.0 {
+		t.Errorf("CostMultiplier = %f, want 1.0 (non-shadow species)", result.CostMultiplier)
 	}
 }
 
@@ -140,10 +141,12 @@ func TestSecondMoveCost_1kmBuddy(t *testing.T) {
 	}
 }
 
-// TestSecondMoveCost_ShadowMultiplier pins the 3× shadow penalty on
-// both currencies. medicham_shadow is the same base (3km buddy,
-// 50,000 stardust) but the response must multiply by 3 → 150,000
-// stardust + 150 candy.
+// TestSecondMoveCost_ShadowMultiplier pins the 1.2× shadow penalty
+// on both currencies. medicham_shadow is the same base (3km buddy,
+// 50,000 stardust) so the response must multiply by 1.2 →
+// 60,000 stardust + 60 candy. (Niantic-documented; symmetric with
+// the purified 0.8× discount. Round 2 review caught an earlier
+// 3× misread.)
 func TestSecondMoveCost_ShadowMultiplier(t *testing.T) {
 	t.Parallel()
 
@@ -157,20 +160,25 @@ func TestSecondMoveCost_ShadowMultiplier(t *testing.T) {
 		t.Fatalf("handler: %v", err)
 	}
 
-	if result.ShadowMultiplier != 3 {
-		t.Errorf("ShadowMultiplier = %d, want 3", result.ShadowMultiplier)
+	if result.CostMultiplier != 1.2 {
+		t.Errorf("CostMultiplier = %f, want 1.2", result.CostMultiplier)
 	}
 
-	if result.StardustCost != 150000 {
-		t.Errorf("StardustCost = %d, want 150000 (3× shadow)", result.StardustCost)
+	if result.StardustCost != 60000 {
+		t.Errorf("StardustCost = %d, want 60000 (1.2× shadow)", result.StardustCost)
 	}
 
-	if result.CandyCost != 150 {
-		t.Errorf("CandyCost = %d, want 150 (3× shadow)", result.CandyCost)
+	if result.CandyCost != 60 {
+		t.Errorf("CandyCost = %d, want 60 (1.2× shadow)", result.CandyCost)
 	}
 
 	if result.Note == "" {
 		t.Errorf("Note empty on shadow response; disclaimer must be carried")
+	}
+
+	if strings.Contains(result.Note, "re-query the purified species id") {
+		t.Errorf("Note still contains stale \"re-query the purified species id\" advice: %q",
+			result.Note)
 	}
 }
 
@@ -201,6 +209,83 @@ func TestSecondMoveCost_MissingBuddyDistance(t *testing.T) {
 
 	if result.Note == "" {
 		t.Errorf("Note empty on missing-data response; caller needs the explanation")
+	}
+}
+
+// TestSecondMoveCost_ShadowWithMissingBuddyDistance pins the
+// compose-both-notes path: a shadow species whose payload publishes
+// stardust but not buddyDistance must carry BOTH the shadow-premium
+// disclaimer AND the candy-unavailable caveat in the same Note.
+// Round-2 review caught a switch that treated them as mutually
+// exclusive, dropping the shadow note entirely on partial data.
+func TestSecondMoveCost_ShadowWithMissingBuddyDistance(t *testing.T) {
+	t.Parallel()
+
+	const fixtureWithShadowNoBuddy = `{
+  "id": "gamemaster",
+  "timestamp": "2026-04-19 00:00:00",
+  "pokemon": [
+    {"dex": 150, "speciesId": "mewtwo_shadow", "speciesName": "Mewtwo (Shadow)",
+     "baseStats": {"atk": 300, "def": 182, "hp": 214},
+     "types": ["psychic"],
+     "fastMoves": ["COUNTER"], "chargedMoves": ["ICE_PUNCH"],
+     "thirdMoveCost": 75000,
+     "released": true}
+  ],
+  "moves": [
+    {"moveId": "COUNTER", "name": "Counter", "type": "fighting",
+     "power": 8, "energy": 0, "energyGain": 7, "cooldown": 1000, "turns": 2},
+    {"moveId": "ICE_PUNCH", "name": "Ice Punch", "type": "ice",
+     "power": 55, "energy": 40, "cooldown": 500}
+  ]
+}`
+
+	gmServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(fixtureWithShadowNoBuddy))
+	}))
+	t.Cleanup(gmServer.Close)
+
+	gmMgr, err := gamemaster.NewManager(config.GamemasterConfig{
+		Source:    gmServer.URL,
+		LocalPath: filepath.Join(t.TempDir(), "gm.json"),
+	})
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+
+	err = gmMgr.Refresh(t.Context())
+	if err != nil {
+		t.Fatalf("Refresh: %v", err)
+	}
+
+	tool := tools.NewSecondMoveCostTool(gmMgr)
+	handler := tool.Handler()
+
+	_, result, err := handler(t.Context(), nil, tools.SecondMoveCostParams{
+		Species: "mewtwo_shadow",
+	})
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+
+	if result.CostMultiplier != 1.2 {
+		t.Errorf("CostMultiplier = %f, want 1.2", result.CostMultiplier)
+	}
+
+	if result.StardustCost != 90000 {
+		t.Errorf("StardustCost = %d, want 90000 (75000 × 1.2)", result.StardustCost)
+	}
+
+	if result.CandyCostAvailable {
+		t.Errorf("CandyCostAvailable = true; fixture has no buddyDistance")
+	}
+
+	if !strings.Contains(result.Note, "Shadow") {
+		t.Errorf("Note missing shadow disclaimer; got %q", result.Note)
+	}
+
+	if !strings.Contains(result.Note, "buddy distance") {
+		t.Errorf("Note missing buddy-distance caveat; got %q", result.Note)
 	}
 }
 
