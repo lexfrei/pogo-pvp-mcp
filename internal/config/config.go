@@ -103,14 +103,16 @@ type Config struct {
 //   - MaxRequestBytes: body-size cap via http.MaxBytesReader. 0 =
 //     disabled (safe for dev).
 type ServerConfig struct {
-	Transport       string   `mapstructure:"transport"`
-	HTTPHost        string   `mapstructure:"http_host"`
-	HTTPPort        int      `mapstructure:"http_port"`
-	MCPHTTPListen   string   `mapstructure:"mcp_http_listen"`
-	TrustedProxies  []string `mapstructure:"trusted_proxies"`
-	RateLimitRPS    int      `mapstructure:"rate_limit_rps"`
-	RateLimitBurst  int      `mapstructure:"rate_limit_burst"`
-	MaxRequestBytes int64    `mapstructure:"max_request_bytes"`
+	Transport          string        `mapstructure:"transport"`
+	HTTPHost           string        `mapstructure:"http_host"`
+	HTTPPort           int           `mapstructure:"http_port"`
+	MCPHTTPListen      string        `mapstructure:"mcp_http_listen"`
+	TrustedProxies     []string      `mapstructure:"trusted_proxies"`
+	RateLimitRPS       int           `mapstructure:"rate_limit_rps"`
+	RateLimitBurst     int           `mapstructure:"rate_limit_burst"`
+	MaxRequestBytes    int64         `mapstructure:"max_request_bytes"`
+	ToolTimeoutDefault time.Duration `mapstructure:"tool_timeout_default"`
+	ToolTimeoutHeavy   time.Duration `mapstructure:"tool_timeout_heavy"`
 }
 
 // LogConfig toggles slog output level and format.
@@ -181,6 +183,8 @@ func applyDefaults(view *viper.Viper) {
 	view.SetDefault("server.rate_limit_rps", defaultRateLimitRPS)
 	view.SetDefault("server.rate_limit_burst", defaultRateLimitBurst)
 	view.SetDefault("server.max_request_bytes", defaultMaxRequestBytes)
+	view.SetDefault("server.tool_timeout_default", defaultToolTimeoutDefault)
+	view.SetDefault("server.tool_timeout_heavy", defaultToolTimeoutHeavy)
 
 	view.SetDefault("log.level", "info")
 	view.SetDefault("log.format", "text")
@@ -229,6 +233,19 @@ const defaultRateLimitBurst = 20
 // combatants with full Options blocks; malicious oversized posts are
 // cut off before they reach the handler.
 const defaultMaxRequestBytes int64 = 64 * 1024
+
+// defaultToolTimeoutDefault is the per-call timeout budget for
+// light-weight tools (single-species lookups, static-table reads).
+// 5s is a generous upper bound — these tools typically finish in
+// single-digit ms.
+const defaultToolTimeoutDefault = 5 * time.Second
+
+// defaultToolTimeoutHeavy is the per-call budget for methods that
+// sweep meta / matrices (team_builder, team_analysis, counter_finder,
+// threat_coverage, rank_batch). Pre-Phase-4-parallelization a full
+// 50-member pool can take tens of seconds; 30s is the documented
+// ceiling aligned with the MCP HTTP WriteTimeout.
+const defaultToolTimeoutHeavy = 30 * time.Second
 
 // Validate reports whether every field is consistent. Callers usually
 // receive this via [Load]; hand calls exist for tests that mutate a
@@ -299,6 +316,16 @@ func (c *Config) validateMCPHTTPPhase3() error {
 	if c.Server.MaxRequestBytes < 0 {
 		return fmt.Errorf("%w: server.max_request_bytes=%d must be non-negative",
 			ErrInvalidConfig, c.Server.MaxRequestBytes)
+	}
+
+	if c.Server.ToolTimeoutDefault < 0 {
+		return fmt.Errorf("%w: server.tool_timeout_default=%v must be non-negative",
+			ErrInvalidConfig, c.Server.ToolTimeoutDefault)
+	}
+
+	if c.Server.ToolTimeoutHeavy < 0 {
+		return fmt.Errorf("%w: server.tool_timeout_heavy=%v must be non-negative",
+			ErrInvalidConfig, c.Server.ToolTimeoutHeavy)
 	}
 
 	// CIDR validation is the same one httpmw.ParseTrustedProxies

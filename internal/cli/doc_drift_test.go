@@ -167,10 +167,10 @@ func TestReadmeDocumentsMCPHTTPListener(t *testing.T) {
 		"POGO_PVP_SERVER_RATE_LIMIT_BURST",
 		"POGO_PVP_SERVER_MAX_REQUEST_BYTES",
 		"POGO_PVP_SERVER_TRUSTED_PROXIES",
-		// The residual gap (tool-call timeout) must remain called
-		// out until Phase 2 lands, so users running Phase 3-but-not-2
-		// know what's still missing.
-		"tool-call timeout",
+		// Phase 2 controls: per-method timeout + structured logging.
+		"POGO_PVP_SERVER_TOOL_TIMEOUT_DEFAULT",
+		"POGO_PVP_SERVER_TOOL_TIMEOUT_HEAVY",
+		"timed_out", // logged field name
 		// DNS-rebinding caveat.
 		"DNS-rebinding protection",
 	}
