@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"strings"
 	"testing"
 	"time"
 
@@ -122,7 +123,7 @@ func TestLogging_SuccessRecordsInfoLevel(t *testing.T) {
 	wants := []string{"mcp method ok", "level=INFO", "method=tools/call", "tool=pvp_rank", "duration_ms="}
 
 	for _, want := range wants {
-		if !contains(got, want) {
+		if !strings.Contains(got, want) {
 			t.Errorf("log entry missing %q; got:\n%s", want, got)
 		}
 	}
@@ -158,9 +159,67 @@ func TestLogging_FailureRecordsErrorLevelAndTimedOutFlag(t *testing.T) {
 	}
 
 	for _, want := range wants {
-		if !contains(got, want) {
+		if !strings.Contains(got, want) {
 			t.Errorf("log entry missing %q; got:\n%s", want, got)
 		}
+	}
+}
+
+// TestLogging_NonTimeoutFailureTimedOutFalse pins the negative
+// side of the timed_out flag: a plain error (not wrapping
+// context.DeadlineExceeded) surfaces with timed_out=false. Prevents
+// an accidental errors.Is-inversion refactor from claiming every
+// failure was a timeout.
+func TestLogging_NonTimeoutFailureTimedOutFalse(t *testing.T) {
+	t.Parallel()
+
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
+	//nolint:err113 // synthetic sentinel for the test's failure contract
+	syntheticFail := errors.New("tool-internal boom")
+
+	mw := mcpmw.Logging(logger)
+	handler := mw(func(_ context.Context, _ string, _ mcp.Request) (mcp.Result, error) {
+		return nil, syntheticFail
+	})
+
+	_, err := handler(t.Context(), "tools/call", &mcp.CallToolRequest{
+		Params: &mcp.CallToolParamsRaw{Name: "pvp_species_info"},
+	})
+	if !errors.Is(err, syntheticFail) {
+		t.Fatalf("handler err = %v, want %v", err, syntheticFail)
+	}
+
+	got := buf.String()
+	if !strings.Contains(got, "timed_out=false") {
+		t.Errorf("log entry missing timed_out=false for non-timeout error; got:\n%s", got)
+	}
+}
+
+// TestTimeout_HeavyToolWithZeroHeavyBudgetDisables pins the heavy-
+// tier opt-out: setting heavy budget to zero while keeping default
+// non-zero disables the wrapper for heavy tools only. Catches a
+// refactor that would accidentally pass the default budget through
+// to heavy methods or vice versa.
+func TestTimeout_HeavyToolWithZeroHeavyBudgetDisables(t *testing.T) {
+	t.Parallel()
+
+	mw := mcpmw.Timeout(30*time.Second, 0)
+
+	handler := mw(func(ctx context.Context, _ string, _ mcp.Request) (mcp.Result, error) {
+		if _, hasDeadline := ctx.Deadline(); hasDeadline {
+			t.Errorf("heavy tool ctx has deadline; zero heavy budget should skip WithTimeout wrapping")
+		}
+
+		return nil, nil //nolint:nilnil // synthetic test handler
+	})
+
+	method, req := fakeToolCall("pvp_team_builder")
+
+	_, err := handler(t.Context(), method, req)
+	if err != nil {
+		t.Errorf("handler err = %v, want nil", err)
 	}
 }
 
@@ -182,16 +241,4 @@ func TestLogging_NilLoggerDefaults(t *testing.T) {
 	if err != nil {
 		t.Errorf("handler err = %v, want nil", err)
 	}
-}
-
-// contains is a trivial substring helper; avoids the stdlib import
-// so the test file's import list stays short.
-func contains(haystack, needle string) bool {
-	for i := 0; i+len(needle) <= len(haystack); i++ {
-		if haystack[i:i+len(needle)] == needle {
-			return true
-		}
-	}
-
-	return false
 }

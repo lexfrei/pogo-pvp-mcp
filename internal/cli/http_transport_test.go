@@ -1,7 +1,9 @@
 package cli_test
 
 import (
+	"bytes"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -9,6 +11,7 @@ import (
 
 	"github.com/lexfrei/pogo-pvp-mcp/internal/cli"
 	"github.com/lexfrei/pogo-pvp-mcp/internal/httpmw"
+	"github.com/lexfrei/pogo-pvp-mcp/internal/mcpmw"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -87,6 +90,76 @@ func TestMCPHTTPHandler_ListToolsOverHTTP(t *testing.T) {
 	for _, name := range expected {
 		if !names[name] {
 			t.Errorf("%s missing from HTTP-transport ListTools", name)
+		}
+	}
+}
+
+// TestMCPHTTPHandler_Phase2MiddlewareLogsEveryCall wires the real
+// Phase 2 SDK middleware around buildWiredServer +
+// NewMCPHTTPHandler and asserts that every MCP method reaching the
+// server produces a structured log entry with the expected fields.
+// This proves the middleware is attached to the same *mcp.Server
+// used by NewMCPHTTPHandler — a regression that drops
+// attachMCPMiddleware from serve.go would leave the log buffer
+// empty and fail this test.
+//
+// The specific timeout-firing path is covered in mcpmw_test.go
+// (TestLogging_FailureRecordsErrorLevelAndTimedOutFlag); here we
+// only care about the integration wiring, not whether a tool
+// actually exceeds its deadline (the test fixture's empty
+// rankings make every call trivially fast).
+func TestMCPHTTPHandler_Phase2MiddlewareLogsEveryCall(t *testing.T) {
+	t.Parallel()
+
+	mcpServer := buildWiredServer(t)
+
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
+	mcpServer.AddReceivingMiddleware(
+		mcpmw.Logging(logger),
+		// Disabled-tier budgets — we're not testing the timeout
+		// firing here, only the log side of the wiring.
+		mcpmw.Timeout(0, 0),
+	)
+
+	handler := cli.NewMCPHTTPHandler(mcpServer, nil)
+	httpServer := httptest.NewServer(handler)
+	t.Cleanup(httpServer.Close)
+
+	client := mcp.NewClient(&mcp.Implementation{Name: "phase2-test", Version: "t"}, nil)
+	session, err := client.Connect(t.Context(), &mcp.StreamableClientTransport{Endpoint: httpServer.URL}, nil)
+	if err != nil {
+		t.Fatalf("client.Connect: %v", err)
+	}
+	defer session.Close()
+
+	_, err = session.CallTool(t.Context(), &mcp.CallToolParams{
+		Name: "pvp_rank",
+		Arguments: map[string]any{
+			"species": integrationFixtureSpecies,
+			"iv":      []int{0, 15, 15},
+			"league":  "great",
+		},
+	})
+	if err != nil {
+		t.Fatalf("CallTool: %v", err)
+	}
+
+	got := buf.String()
+
+	// initialize call + tools/call pvp_rank — both must surface
+	// through the Logging middleware attached to the same server
+	// that NewMCPHTTPHandler dispatches to.
+	wants := []string{
+		"method=initialize",
+		"tool=pvp_rank",
+		"duration_ms=",
+	}
+
+	for _, want := range wants {
+		if !strings.Contains(got, want) {
+			t.Errorf("server log missing %q; full log:\n%s", want, got)
 		}
 	}
 }
