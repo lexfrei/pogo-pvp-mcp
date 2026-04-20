@@ -8,10 +8,13 @@ testdata/
 .containerignore
 .gitattributes
 README.md
-# .engine-src is the CI / local checkout of lexfrei/pogo-pvp-engine;
-# the Containerfile receives that source via the `engine` named
-# BuildKit context (COPY --from=engine), so sending it a second time
-# through the default build context would bloat the builder layer.
+# .engine-src is the release-workflow checkout of
+# lexfrei/pogo-pvp-engine (see .github/workflows/release.yml). The
+# Containerfile already receives that source via the `engine` named
+# BuildKit context (COPY --from=engine), so sending it a second
+# time through the default build context would bloat the builder
+# layer. Local builds via scripts/build-image.sh use ENGINE_PATH
+# and do not touch .engine-src/.
 .engine-src/
 # LICENSE must reach the builder — BSD 3-Clause §2 requires the
 # license text in every redistribution, including container images.

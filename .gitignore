@@ -41,8 +41,10 @@ TODO.md
 # Claude Code session state (scheduled tasks, local hooks)
 /.claude/
 
-# Engine source checkout for CI / local Docker smoke builds —
-# .github/workflows/{ci,pr,release}.yml clone
-# lexfrei/pogo-pvp-engine here so the go.mod replace directive
-# (and the Containerfile named build-context) resolves.
+# Release-workflow engine checkout — .github/workflows/release.yml
+# clones lexfrei/pogo-pvp-engine into .engine-src/ and wires it
+# through BuildKit's `build-contexts: engine=./.engine-src`, so the
+# Containerfile can resolve the go.mod replace directive in CI.
+# Local docker builds use ENGINE_PATH (default ../pogo-pvp-engine)
+# and do not touch .engine-src/.
 /.engine-src/
