@@ -153,7 +153,11 @@ func TestStartMCPHTTPServer_DisabledReturnsNil(t *testing.T) {
 	rt := newServeTestRuntime(t, 0)
 	rt.Config.Server.MCPHTTPListen = ""
 
-	done := startMCPHTTPServer(t.Context(), rt, newMinimalMCPServer(t))
+	done, err := startMCPHTTPServer(t.Context(), rt, newMinimalMCPServer(t))
+	if err != nil {
+		t.Fatalf("startMCPHTTPServer: %v", err)
+	}
+
 	if done != nil {
 		t.Error("startMCPHTTPServer returned non-nil channel for empty MCPHTTPListen")
 	}
@@ -170,7 +174,11 @@ func TestStartMCPHTTPServer_ShutsDownOnContextCancel(t *testing.T) {
 	rt.Config.Server.MCPHTTPListen = fmt.Sprintf("127.0.0.1:%d", port)
 
 	ctx, cancel := context.WithCancel(t.Context())
-	done := startMCPHTTPServer(ctx, rt, newMinimalMCPServer(t))
+
+	done, err := startMCPHTTPServer(ctx, rt, newMinimalMCPServer(t))
+	if err != nil {
+		t.Fatalf("startMCPHTTPServer: %v", err)
+	}
 
 	waitForTCPReady(t, port)
 
@@ -207,7 +215,10 @@ func TestStartMCPHTTPServer_DoesNotLeakOnListenFailure(t *testing.T) {
 	rt := newServeTestRuntime(t, 0)
 	rt.Config.Server.MCPHTTPListen = fmt.Sprintf("127.0.0.1:%d", port)
 
-	done := startMCPHTTPServer(t.Context(), rt, newMinimalMCPServer(t))
+	done, err := startMCPHTTPServer(t.Context(), rt, newMinimalMCPServer(t))
+	if err != nil {
+		t.Fatalf("startMCPHTTPServer: %v", err)
+	}
 
 	select {
 	case <-done:

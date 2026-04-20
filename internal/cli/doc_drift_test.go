@@ -160,12 +160,16 @@ func TestReadmeDocumentsMCPHTTPListener(t *testing.T) {
 	requiredPhrases := []string{
 		"POGO_PVP_SERVER_MCP_HTTP_LISTEN",
 		"Streamable HTTP",
-		"trusted reverse proxy",
-		// Phase 1 gaps: each of the three missing middleware pieces
-		// must be called out by name so a future rewrite can't
-		// silently swallow any individual item.
-		"rate-limit",
-		"request-size cap",
+		// Phase 3 middleware controls must be documented with env var
+		// names operators will grep for; each field stands on its own
+		// so dropping one leaves the others pinned.
+		"POGO_PVP_SERVER_RATE_LIMIT_RPS",
+		"POGO_PVP_SERVER_RATE_LIMIT_BURST",
+		"POGO_PVP_SERVER_MAX_REQUEST_BYTES",
+		"POGO_PVP_SERVER_TRUSTED_PROXIES",
+		// The residual gap (tool-call timeout) must remain called
+		// out until Phase 2 lands, so users running Phase 3-but-not-2
+		// know what's still missing.
 		"tool-call timeout",
 		// DNS-rebinding caveat.
 		"DNS-rebinding protection",
