@@ -100,7 +100,7 @@ Phase 3 adds the net/http middleware chain around the MCP handler (order outer �
 | --- | --- | --- |
 | `server.trusted_proxies` (`POGO_PVP_SERVER_TRUSTED_PROXIES`) | `[]` (trust nobody) | `X-Forwarded-For` always ignored; `RemoteAddr` is the client |
 | `server.rate_limit_rps` (`POGO_PVP_SERVER_RATE_LIMIT_RPS`) | `10` requests/sec per client IP | `0` disables rate limiting entirely — dev only |
-| `server.rate_limit_burst` (`POGO_PVP_SERVER_RATE_LIMIT_BURST`) | `20` burst budget | — |
+| `server.rate_limit_burst` (`POGO_PVP_SERVER_RATE_LIMIT_BURST`) | `20` burst budget | `0` silently clamped to `1` when RPS > 0 — `burst=0` would reject every first request |
 | `server.max_request_bytes` (`POGO_PVP_SERVER_MAX_REQUEST_BYTES`) | `65536` (64 KiB) | `0` disables the body cap — dev only |
 
 Still missing until Phase 2 lands: **tool-call timeout** (per-method context deadline). Long-running tools can currently tie up a connection for the full 60s HTTP WriteTimeout regardless of caller patience.

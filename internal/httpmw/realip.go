@@ -14,8 +14,8 @@ import (
 // matchable by callers via errors.Is without string comparison.
 var ErrInvalidTrustedProxy = errors.New("invalid trusted proxy CIDR")
 
-// xForwardedForHeader is Niantic-… er, the standard header name for
-// the forwarded-client-ip chain from reverse proxies. Hoisted to a
+// xForwardedForHeader is the standard header name for the
+// forwarded-client-ip chain from reverse proxies. Hoisted to a
 // constant because it's referenced in the middleware and in godoc.
 const xForwardedForHeader = "X-Forwarded-For"
 
@@ -77,13 +77,23 @@ func (s TrustedProxySet) contains(ip net.IP) bool {
 // request context. Resolution rule:
 //
 //  1. Strip the port from r.RemoteAddr to get the peer IP.
-//  2. If the peer IP is in the trusted-proxy set and r.Header
-//     carries X-Forwarded-For, the first XFF entry is the client
-//     IP (the left-most entry is the original client per
-//     RFC 7239 / Forwarded-For convention; later entries are
-//     proxy hops added on each traversal).
-//  3. Otherwise the peer IP is the client IP — a direct client, or
-//     an unauthenticated one trying to spoof the chain.
+//  2. If the peer IP is NOT in the trusted-proxy set, the peer IP
+//     is the client IP — XFF is ignored. An unauthenticated caller
+//     cannot talk to the server with a non-trusted peer address AND
+//     inject an XFF pretending otherwise.
+//  3. If the peer IP IS trusted, walk X-Forwarded-For right-to-left
+//     (proxies APPEND to XFF, so the right-most entry is the most-
+//     recent hop). Skip entries whose IP is also in the trusted
+//     set; the first UNTRUSTED entry is the original client. If
+//     every entry in XFF is trusted (or XFF is absent), fall back
+//     to the peer IP.
+//
+// This guards against the classic XFF-spoofing attack where a
+// client sends `X-Forwarded-For: <attacker-chosen>` through a
+// legitimate proxy: the real proxy appends the attacker's TCP peer
+// IP to the right, so right-to-left + skip-trusted lands on the
+// attacker's real IP rather than the attacker-controlled left-most
+// entry.
 //
 // Downstream handlers read the resolved value via ClientIP(r). Not
 // writing to an HTTP header — the resolved IP is server-internal
@@ -98,9 +108,9 @@ func RealIP(trusted TrustedProxySet) func(http.Handler) http.Handler {
 	}
 }
 
-// resolveClientIP implements the resolution rule from RealIP. Split
-// out so the decision logic is unit-testable without spinning an
-// HTTP server.
+// resolveClientIP implements the right-to-left XFF walk documented
+// in RealIP. Split out so the decision logic is unit-testable
+// without spinning an HTTP server.
 func resolveClientIP(r *http.Request, trusted TrustedProxySet) string {
 	peerHost, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
@@ -114,19 +124,38 @@ func resolveClientIP(r *http.Request, trusted TrustedProxySet) string {
 		return peerHost
 	}
 
-	xff := r.Header.Get(xForwardedForHeader)
-	if xff == "" {
-		return peerHost
+	// Peer is trusted — consult XFF. Right-to-left walk: the right-
+	// most entry is the hop closest to our server, left-most is the
+	// hop (or attacker-supplied value) furthest away. Skip trusted
+	// entries; first untrusted one is the effective client.
+	xffValues := r.Header.Values(xForwardedForHeader)
+	for i := len(xffValues) - 1; i >= 0; i-- {
+		entries := strings.Split(xffValues[i], ",")
+		for j := len(entries) - 1; j >= 0; j-- {
+			candidate := strings.TrimSpace(entries[j])
+			if candidate == "" {
+				continue
+			}
+
+			parsed := net.ParseIP(candidate)
+			if parsed == nil {
+				// Malformed IP in the chain — skip, keep walking
+				// toward the client. Don't return a string that
+				// cannot be a valid IP.
+				continue
+			}
+
+			if trusted.contains(parsed) {
+				continue
+			}
+
+			return candidate
+		}
 	}
 
-	// Take the left-most entry — the original client. Trim whitespace
-	// because the standard format is "ip1, ip2, ip3".
-	first := strings.TrimSpace(strings.SplitN(xff, ",", 2)[0])
-	if first == "" {
-		return peerHost
-	}
-
-	return first
+	// Every XFF entry was trusted (or XFF absent / empty). Fall
+	// back to the peer IP.
+	return peerHost
 }
 
 // ClientIP returns the effective client IP resolved by RealIP. If

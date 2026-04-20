@@ -21,6 +21,15 @@ const rateLimitJanitorInterval = 5 * time.Minute
 // the "LLM paused on a long answer" case.
 const rateLimitIdleEviction = 30 * time.Minute
 
+// rateLimitHardCap is a backstop on the size of the per-IP limiter
+// map between janitor runs. An IPv6 /64 attacker could mint 2^64
+// unique keys and burn memory before the 30-min eviction cycle
+// fires; once we cross this threshold we evict the oldest entries
+// synchronously on the next insert. Size chosen to cover a plausible
+// public-endpoint load (tens of thousands of distinct callers per
+// eviction window) without becoming a DoS surface itself.
+const rateLimitHardCap = 10_000
+
 // RateLimiter is a per-client-IP token-bucket limiter with TTL
 // eviction. Construct with NewRateLimiter; shut down with Stop.
 //
@@ -151,13 +160,20 @@ func (limiter *RateLimiter) evictIdle(now time.Time) {
 
 // limiterFor returns (or creates) the rate.Limiter for the given
 // client IP and updates its lastSeen timestamp. Centralises the
-// map-locking so the middleware fast path is one call.
+// map-locking so the middleware fast path is one call. Enforces
+// rateLimitHardCap synchronously on insert so an attacker minting
+// unique IPs faster than the janitor's 5-minute cycle cannot grow
+// the map unboundedly.
 func (limiter *RateLimiter) limiterFor(clientIP string, now time.Time) *rate.Limiter {
 	limiter.mu.Lock()
 	defer limiter.mu.Unlock()
 
 	entry, ok := limiter.data[clientIP]
 	if !ok {
+		if len(limiter.data) >= rateLimitHardCap {
+			limiter.evictOldestLocked()
+		}
+
 		entry = &rateLimiterEntry{
 			limiter: rate.NewLimiter(limiter.rps, limiter.burst),
 		}
@@ -167,4 +183,30 @@ func (limiter *RateLimiter) limiterFor(clientIP string, now time.Time) *rate.Lim
 	entry.lastSeen = now
 
 	return entry.limiter
+}
+
+// evictOldestLocked removes the single oldest-seen entry from the
+// per-IP map. Caller MUST hold limiter.mu. Only invoked when the
+// map has reached rateLimitHardCap — the worst case drops a
+// legitimate-but-idle limiter, but bounds memory even against an
+// IPv6-range attacker. O(len(data)) but runs rarely (only on hard-
+// cap saturation).
+func (limiter *RateLimiter) evictOldestLocked() {
+	var (
+		oldestIP   string
+		oldestSeen time.Time
+		found      bool
+	)
+
+	for clientIP, entry := range limiter.data {
+		if !found || entry.lastSeen.Before(oldestSeen) {
+			oldestIP = clientIP
+			oldestSeen = entry.lastSeen
+			found = true
+		}
+	}
+
+	if found {
+		delete(limiter.data, oldestIP)
+	}
 }

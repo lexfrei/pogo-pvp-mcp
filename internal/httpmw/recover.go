@@ -24,6 +24,14 @@ import (
 // condition. The client gets a single 500; any subsequent request
 // reaches a fresh handler invocation.
 func Recover(logger *slog.Logger) func(http.Handler) http.Handler {
+	if logger == nil {
+		// Ambiguous contract guard: a nil logger would panic inside
+		// the defer on rec!=nil. Fall back to slog.Default so tests
+		// passing nil still get the stack trace on an unrelated
+		// panic, and production wiring always supplies rt.Logger.
+		logger = slog.Default()
+	}
+
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			defer func() {
