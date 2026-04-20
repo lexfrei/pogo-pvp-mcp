@@ -236,11 +236,10 @@ type PoolMemberStatus struct {
 // Action values. Hoisted so callers building their own tooling can
 // switch on exact strings without guessing.
 const (
-	AutoEvolveActionKept               = "kept"
-	AutoEvolveActionEvolved            = "evolved"
-	AutoEvolveActionSkippedBranching   = "skipped_branching"
-	AutoEvolveActionSkippedOverCap     = "skipped_over_cap"
-	AutoEvolveActionSkippedUnrecogSkip = "skipped_unrecognised"
+	AutoEvolveActionKept             = "kept"
+	AutoEvolveActionEvolved          = "evolved"
+	AutoEvolveActionSkippedBranching = "skipped_branching"
+	AutoEvolveActionSkippedOverCap   = "skipped_over_cap"
 )
 
 // TeamBuilderTool wraps the gamemaster and rankings managers.
@@ -330,19 +329,7 @@ func (tool *TeamBuilderTool) handle(
 		return nil, TeamBuilderResult{}, fmt.Errorf("team_builder cancelled: %w", ctx.Err())
 	}
 
-	sort.SliceStable(result.Teams, func(i, j int) bool {
-		return result.Teams[i].TeamScore > result.Teams[j].TeamScore
-	})
-
-	poolBreakdowns := computePoolBreakdowns(snapshot, inputs.pool, inputs.cpCap, params.TargetLevel)
-
-	result.Teams = applyBudgetFilter(&params, result.Teams, poolBreakdowns)
-
-	result.Teams = result.Teams[:min(inputs.maxResults, len(result.Teams))]
-
-	attachCostBreakdownsFromPool(result.Teams, poolBreakdowns)
-
-	poolMembers := buildPoolMemberStatuses(params.Pool, params.Banned, inputs.pool, result.Teams)
+	poolMembers := tool.finaliseTeams(snapshot, &params, inputs, &result)
 
 	return nil, TeamBuilderResult{
 		League:             inputs.league,
@@ -354,6 +341,44 @@ func (tool *TeamBuilderTool) handle(
 		Teams:              result.Teams,
 		PoolMembers:        poolMembers,
 	}, nil
+}
+
+// finaliseTeams runs the post-enumeration pipeline: stable sort by
+// score, apply the optional budget filter, trim to MaxResults,
+// attach per-member cost breakdowns, capture PoolMemberStatus
+// (using filtered-pool PoolIndices), and remap PoolIndices to
+// original-pool coordinates for caller-visibility. Extracted from
+// handle so the top-level stays under the funlen budget.
+func (tool *TeamBuilderTool) finaliseTeams(
+	snapshot *pogopvp.Gamemaster,
+	params *TeamBuilderParams,
+	inputs *teamBuilderInputs,
+	result *evaluationResult,
+) []PoolMemberStatus {
+	_ = tool // receiver kept for symmetry with other helpers
+
+	sort.SliceStable(result.Teams, func(i, j int) bool {
+		return result.Teams[i].TeamScore > result.Teams[j].TeamScore
+	})
+
+	poolBreakdowns := computePoolBreakdowns(snapshot, inputs.pool, inputs.cpCap, params.TargetLevel)
+
+	result.Teams = applyBudgetFilter(params, result.Teams, poolBreakdowns)
+
+	result.Teams = result.Teams[:min(inputs.maxResults, len(result.Teams))]
+
+	attachCostBreakdownsFromPool(result.Teams, poolBreakdowns)
+
+	// Pool-member status uses PoolIndices in filtered-pool coords
+	// to compute in_returned_team; must run BEFORE the remap below.
+	poolMembers := buildPoolMemberStatuses(params.Pool, params.Banned, inputs.pool, result.Teams)
+
+	// Remap PoolIndices from filtered-pool to ORIGINAL-pool
+	// coordinates so the caller-visible field shares one coordinate
+	// system with PoolMembers.
+	remapPoolIndicesToOriginal(result.Teams, inputs.pool)
+
+	return poolMembers
 }
 
 // buildPoolMemberStatuses returns a per-pool-entry status snapshot
@@ -414,6 +439,28 @@ func buildPoolMemberStatuses(
 	return out
 }
 
+// remapPoolIndicesToOriginal rewrites TeamBuilderTeam.PoolIndices
+// from filtered-pool coordinates (what newTeam emits while the
+// ranking matrix is laid out over the ban-filtered pool) to
+// original-pool coordinates via filteredPool[idx].originalIndex.
+// Mutates teams in place. Runs at the very end of handle so the
+// caller-visible PoolIndices shares one coordinate system with
+// PoolMembers; internal consumers (budget filter, cost attach)
+// read the filtered-pool form earlier in the pipeline.
+func remapPoolIndicesToOriginal(teams []TeamBuilderTeam, filteredPool []Combatant) {
+	for teamIdx := range teams {
+		indices := teams[teamIdx].PoolIndices
+
+		for j, filteredIdx := range indices {
+			if filteredIdx < 0 || filteredIdx >= len(filteredPool) {
+				continue
+			}
+
+			indices[j] = filteredPool[filteredIdx].originalIndex
+		}
+	}
+}
+
 // classifyAutoEvolveAction maps the runtime-only autoEvolvedFrom +
 // autoEvolveSkip state onto the exported AutoEvolveAction* constants
 // used in PoolMemberStatus.
@@ -426,14 +473,16 @@ func classifyAutoEvolveAction(spec *Combatant) string {
 		return AutoEvolveActionEvolved
 	}
 
-	switch spec.autoEvolveSkip {
-	case skipReasonBranching:
+	// walkEvolutionChain is the only writer of autoEvolveSkip and
+	// only ever emits skipReasonBranching or skipReasonOverCap
+	// (the "" case is handled above as "evolved"). No default arm
+	// needed — an unrecognised value is a programmer error, not a
+	// state the tool contract exposes.
+	if spec.autoEvolveSkip == skipReasonBranching {
 		return AutoEvolveActionSkippedBranching
-	case skipReasonOverCap:
-		return AutoEvolveActionSkippedOverCap
-	default:
-		return AutoEvolveActionSkippedUnrecogSkip
 	}
+
+	return AutoEvolveActionSkippedOverCap
 }
 
 // preHandleValidation bundles the cheap pre-simulation work that
@@ -973,7 +1022,13 @@ func duplicateInFrontier(existing []TeamBuilderTeam, indices []int) bool {
 	return false
 }
 
-// newTeam assembles a TeamBuilderTeam from three pool indices.
+// newTeam assembles a TeamBuilderTeam from three filtered-pool
+// indices. PoolIndices is initially populated in FILTERED-pool
+// coordinates (what newTeam sees directly); downstream passes —
+// budget filter + cost breakdown attach — rely on that coordinate
+// system. handle() calls remapPoolIndicesToOriginal at the very
+// end so the value that leaves the tool is in ORIGINAL-pool
+// coordinates, aligned with TeamBuilderResult.PoolMembers.
 func newTeam(
 	pool []Combatant, i, jIdx, kIdx int, score float64, label string,
 ) TeamBuilderTeam {

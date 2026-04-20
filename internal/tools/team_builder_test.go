@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/lexfrei/pogo-pvp-mcp/internal/config"
@@ -2111,6 +2112,114 @@ func TestTeamBuilderTool_AutoEvolveBranchingAlternativesLeagueFit(t *testing.T) 
 	}
 
 	t.Fatalf("eevee not in the returned team")
+}
+
+// TestTeamBuilderTool_ParallelSharedPoolNoRace pins the R5
+// defensive-clone claim on Combatant.originalIndex's godoc: two
+// parallel handler invocations sharing one []Combatant pool must
+// not trip the race detector, because handle() clones params.Pool
+// before stamping originalIndex / running autoEvolvePool. A
+// regression that reverted to in-place caller mutation would
+// surface as a write/write race on pool[i].originalIndex here
+// under -race.
+func TestTeamBuilderTool_ParallelSharedPoolNoRace(t *testing.T) {
+	t.Parallel()
+
+	tool := newTeamBuilderTool(t)
+	handler := tool.Handler()
+
+	pool := []tools.Combatant{
+		baseCombatant("a"),
+		baseCombatant("b"),
+		baseCombatant("c"),
+	}
+
+	var wg sync.WaitGroup
+
+	wg.Add(2)
+
+	for range 2 {
+		go func() {
+			defer wg.Done()
+
+			_, _, handlerErr := handler(t.Context(), nil, tools.TeamBuilderParams{
+				Pool:   pool,
+				League: leagueGreat,
+			})
+			if handlerErr != nil {
+				t.Errorf("handler: %v", handlerErr)
+			}
+		}()
+	}
+
+	wg.Wait()
+}
+
+// TestTeamBuilderTool_PoolIndicesAlignWithPoolMembers pins the R5
+// round-1 review blocker: TeamBuilderTeam.PoolIndices and
+// TeamBuilderResult.PoolMembers must share one coordinate system
+// (original-pool). Without the remapPoolIndicesToOriginal step,
+// PoolIndices would point into the ban-filtered pool while
+// PoolMembers indexes the original — a cross-reference like
+// PoolMembers[team.PoolIndices[k]].Species would silently return
+// the wrong entry. Banned leading species in the fixture exposes
+// the mismatch cleanly.
+func TestTeamBuilderTool_PoolIndicesAlignWithPoolMembers(t *testing.T) {
+	t.Parallel()
+
+	tool := newTeamBuilderTool(t)
+	handler := tool.Handler()
+
+	// 4-member pool with "a" banned so the filtered pool is
+	// [b, c, c14] with indices shifting: filtered[0]=original[1]=b,
+	// filtered[1]=original[2]=c, filtered[2]=original[3]=c14. A
+	// regression that skipped remapPoolIndicesToOriginal would
+	// hand back filtered indices 0..2, but PoolMembers slot 0 is
+	// the banned "a" — cross-reference mismatch.
+	pool := []tools.Combatant{
+		baseCombatant("a"), // banned; filtered pool starts at b.
+		baseCombatant("b"),
+		baseCombatant("c"),
+		{
+			Species: "c", IV: [3]int{14, 14, 15}, Level: 40,
+			FastMove: "FAST1", ChargedMoves: []string{"CH1"},
+		},
+	}
+
+	_, result, err := handler(t.Context(), nil, tools.TeamBuilderParams{
+		Pool:   pool,
+		League: leagueGreat,
+		Banned: []string{"a"},
+	})
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+
+	if len(result.Teams) == 0 {
+		t.Fatal("no teams returned")
+	}
+
+	team := result.Teams[0]
+	if len(team.Members) != 3 {
+		t.Fatalf("members = %d, want 3", len(team.Members))
+	}
+
+	for k, poolIdx := range team.PoolIndices {
+		if poolIdx < 0 || poolIdx >= len(result.PoolMembers) {
+			t.Errorf("team.PoolIndices[%d]=%d out of PoolMembers range len=%d",
+				k, poolIdx, len(result.PoolMembers))
+
+			continue
+		}
+
+		want := team.Members[k].Species
+		got := result.PoolMembers[poolIdx].ResolvedSpecies
+
+		if got != want {
+			t.Errorf("PoolMembers[team.PoolIndices[%d]=%d].ResolvedSpecies = %q, want %q "+
+				"(one coordinate system)", k, poolIdx, got, want)
+		}
+	}
 }
 
 // TestTeamBuilderTool_PoolMembersDebugInfo pins Finding #6 — the
