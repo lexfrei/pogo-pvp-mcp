@@ -40,3 +40,9 @@ TODO.md
 
 # Claude Code session state (scheduled tasks, local hooks)
 /.claude/
+
+# Engine source checkout for CI / local Docker smoke builds —
+# .github/workflows/{ci,pr,release}.yml clone
+# lexfrei/pogo-pvp-engine here so the go.mod replace directive
+# (and the Containerfile named build-context) resolves.
+/.engine-src/

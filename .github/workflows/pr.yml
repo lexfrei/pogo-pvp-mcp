@@ -91,9 +91,10 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
-      # Mirror the release workflow's engine wiring so the Dockerfile
-      # named-build-context stays covered by PR CI. Catches drift in
-      # the Containerfile or build-image.sh before it reaches a tag.
+      # Mirror the release workflow's engine wiring so the
+      # Containerfile named-build-context stays covered by PR CI.
+      # Catches drift in the Containerfile or build-image.sh before
+      # it reaches a tag.
       - name: Checkout engine
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
