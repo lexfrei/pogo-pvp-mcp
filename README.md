@@ -103,6 +103,8 @@ Phase 3 adds the net/http middleware chain around the MCP handler (order outer �
 | `server.rate_limit_burst` (`POGO_PVP_SERVER_RATE_LIMIT_BURST`) | `20` burst budget | `0` silently clamped to `1` when RPS > 0 — `burst=0` would reject every first request |
 | `server.max_request_bytes` (`POGO_PVP_SERVER_MAX_REQUEST_BYTES`) | `65536` (64 KiB) | `0` disables the body cap — dev only |
 
+**Phantom rate-limit pitfall**: when `trusted_proxies` covers the proxy IP but the proxy does NOT forward an `X-Forwarded-For` header (or all XFF entries are themselves trusted), every downstream user collapses to a single rate-limit bucket keyed on the proxy IP. Symptom: legitimate traffic rate-limits itself long before the configured RPS. Fix: configure your reverse proxy to set / forward `X-Forwarded-For` on requests to the MCP endpoint.
+
 Still missing until Phase 2 lands: **tool-call timeout** (per-method context deadline). Long-running tools can currently tie up a connection for the full 60s HTTP WriteTimeout regardless of caller patience.
 
 **DNS-rebinding protection (SDK built-in)**: the MCP SDK rejects requests that arrive via a loopback listener (`127.0.0.1`, `[::1]`) with a non-loopback `Host` header — a 403 is returned. When binding to `127.0.0.1` for local development, keep the client's `Host` header as `127.0.0.1:PORT` (or drop it). Proxied deployments where `Host` matches the public FQDN and the listener is on `0.0.0.0` are unaffected.

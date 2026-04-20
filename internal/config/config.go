@@ -303,11 +303,14 @@ func (c *Config) validateMCPHTTPPhase3() error {
 
 	// CIDR validation is the same one httpmw.ParseTrustedProxies
 	// runs at startup — we replay it here so misconfigurations fail
-	// at config load rather than on first public request. Keeping
-	// net.ParseCIDR inline (vs. calling httpmw.ParseTrustedProxies)
-	// avoids an import cycle and keeps config free of runtime deps.
+	// at config load rather than on first public request. Both
+	// validators TrimSpace the entry first so a leading/trailing
+	// space does not split the two into "valid at startup, invalid
+	// at load" or vice versa. Keeping net.ParseCIDR inline (vs.
+	// calling httpmw.ParseTrustedProxies) avoids an import cycle
+	// and keeps config free of runtime deps.
 	for _, cidr := range c.Server.TrustedProxies {
-		_, _, err := net.ParseCIDR(cidr)
+		_, _, err := net.ParseCIDR(strings.TrimSpace(cidr))
 		if err != nil {
 			return fmt.Errorf("%w: server.trusted_proxies=%q: %w",
 				ErrInvalidConfig, cidr, err)

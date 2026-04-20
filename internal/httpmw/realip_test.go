@@ -14,6 +14,11 @@ import (
 // threshold.
 const spoofedClientIP = "203.0.113.45"
 
+// loopbackIP is the IPv4 loopback literal. Used in test assertions
+// that compare the resolved ClientIP against the httptest server's
+// peer address; hoisted to a const for the same goconst reason.
+const loopbackIP = "127.0.0.1"
+
 // TestRealIP_TrustedChainReturnsLeftmostUntrusted pins the secure
 // walk: when every proxy in the chain is in the trusted set, XFF
 // walking right-to-left lands on the left-most untrusted entry —
@@ -158,8 +163,52 @@ func TestRealIP_UntrustedProxyIgnoresXForwardedFor(t *testing.T) {
 		t.Errorf("ClientIP = %q; spoofed XFF from untrusted proxy leaked through", observed)
 	}
 
-	if observed != "127.0.0.1" {
-		t.Errorf("ClientIP = %q, want \"127.0.0.1\" (RemoteAddr host)", observed)
+	if observed != loopbackIP {
+		t.Errorf("ClientIP = %q, want %q (RemoteAddr host)", observed, loopbackIP)
+	}
+}
+
+// TestRealIP_TrustedPeerNoXFFKeysOnPeer pins the phantom-rate-limit
+// pitfall documented in the README: when the peer IP is trusted but
+// no X-Forwarded-For header is sent, resolveClientIP falls back to
+// the peer IP. Every downstream user then collapses into a single
+// rate-limit bucket keyed on the proxy IP. This is not a bug —
+// there's no better information available — but it's surprising
+// enough that the README calls it out. Test locks the behaviour.
+func TestRealIP_TrustedPeerNoXFFKeysOnPeer(t *testing.T) {
+	t.Parallel()
+
+	trusted, err := httpmw.ParseTrustedProxies([]string{"127.0.0.0/8"})
+	if err != nil {
+		t.Fatalf("ParseTrustedProxies: %v", err)
+	}
+
+	var observed string
+	inner := http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		observed = httpmw.ClientIP(r)
+	})
+
+	handler := httpmw.RealIP(trusted)(inner)
+	ts := httptest.NewServer(handler)
+	t.Cleanup(ts.Close)
+
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, ts.URL, http.NoBody)
+	if err != nil {
+		t.Fatalf("NewRequestWithContext: %v", err)
+	}
+
+	// Deliberately no X-Forwarded-For — the proxy is misconfigured
+	// and isn't forwarding it.
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("Do: %v", err)
+	}
+	_ = resp.Body.Close()
+
+	if observed != loopbackIP {
+		t.Errorf("ClientIP = %q, want %q (trusted peer + no XFF collapses to peer IP — "+
+			"this is the phantom rate-limit pitfall documented in README)", observed, loopbackIP)
 	}
 }
 

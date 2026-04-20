@@ -313,6 +313,28 @@ func TestValidate_MaxRequestBytesNonNegative(t *testing.T) {
 	}
 }
 
+// TestValidate_TrustedProxyWhitespaceTolerated pins that a CIDR
+// entry with surrounding whitespace is accepted verbatim at config
+// load, matching httpmw.ParseTrustedProxies which also TrimSpaces
+// before net.ParseCIDR. An inconsistency here would produce
+// "invalid at config load, fine at runtime parse" for a YAML file
+// the user put spaces around and expected to work.
+func TestValidate_TrustedProxyWhitespaceTolerated(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := config.Load("")
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	cfg.Server.TrustedProxies = []string{"  10.0.0.0/8  "}
+
+	err = cfg.Validate()
+	if err != nil {
+		t.Errorf("Validate() = %v, want nil (TrimSpace must match httpmw.ParseTrustedProxies)", err)
+	}
+}
+
 // TestValidate_InvalidTrustedProxyCIDR pins that a malformed CIDR
 // entry fails at config load rather than silently accepting every
 // X-Forwarded-For (because no trust entries match). Empty slice is
