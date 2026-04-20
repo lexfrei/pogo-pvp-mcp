@@ -13,8 +13,9 @@ import (
 // of httpmw.Chain: the first argument wraps the outermost, the last
 // wraps just above the final handler. Proven via a shared
 // order-capturing slice — each fake middleware appends its name on
-// entry. The expected order (recover → realIP → rateLimit → maxBytes
-// → handler) is exactly what the production Chain call site uses.
+// entry. The expected order (recover → securityHeaders → realIP →
+// rateLimit → maxBytes → handler) is exactly what the production
+// Chain call site uses.
 func TestChain_OrdersMiddlewareOuterToInner(t *testing.T) {
 	t.Parallel()
 
@@ -46,6 +47,7 @@ func TestChain_OrdersMiddlewareOuterToInner(t *testing.T) {
 	handler := httpmw.Chain(
 		inner,
 		record("recover"),
+		record("securityHeaders"),
 		record("realIP"),
 		record("rateLimit"),
 		record("maxBytes"),
@@ -65,7 +67,7 @@ func TestChain_OrdersMiddlewareOuterToInner(t *testing.T) {
 	}
 	_ = resp.Body.Close()
 
-	want := []string{"recover", "realIP", "rateLimit", "maxBytes", "handler"}
+	want := []string{"recover", "securityHeaders", "realIP", "rateLimit", "maxBytes", "handler"}
 
 	mu.Lock()
 	defer mu.Unlock()

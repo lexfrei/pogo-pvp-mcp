@@ -94,7 +94,7 @@ Behaviour:
 - **Timeouts**: ReadHeader 5s, Read 30s, Write 60s, Idle 90s, MaxHeaderBytes 64 KiB. Graceful shutdown drains in 60s on `SIGTERM`.
 - **Separate from debug**: the loopback debug server (`server.http_port`) stays on `127.0.0.1` with its auth-free `/healthz` / `/refresh` endpoints. The two listeners are orthogonal.
 
-Phase 3 adds the net/http middleware chain around the MCP handler (order outer → inner: `recover → realIP → rateLimit → maxBytes`). Each layer is configurable:
+Phase 3 adds the net/http middleware chain around the MCP handler (order outer → inner: `recover → securityHeaders → realIP → rateLimit → maxBytes`). `securityHeaders` always runs with the Phase 5 baseline set (see "Phase 5 security headers" below); the remaining layers are configurable:
 
 | Field (env var) | Default | 0 / empty means |
 | --- | --- | --- |

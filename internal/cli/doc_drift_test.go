@@ -144,6 +144,24 @@ func TestReadmeToolCountConsistent(t *testing.T) {
 	}
 }
 
+// TestReadmeDocumentsProductionChainOrder pins the exact outer →
+// inner chain order recited by the README (and production code).
+// A future refactor that e.g. drops SecurityHeaders from the chain
+// but forgets to update the README paragraph would leave the docs
+// actively misleading; this test catches that asymmetry.
+func TestReadmeDocumentsProductionChainOrder(t *testing.T) {
+	t.Parallel()
+
+	readme := readRepoFile(t, "README.md")
+
+	const canonicalOrder = "recover → securityHeaders → realIP → rateLimit → maxBytes"
+
+	if !strings.Contains(readme, canonicalOrder) {
+		t.Errorf("README.md missing canonical middleware order %q — chain docs drifted from production code",
+			canonicalOrder)
+	}
+}
+
 // TestReadmeDocumentsMCPHTTPListener pins the Phase 1 (public HTTP
 // transport) README section: the opt-in env var, the Streamable HTTP
 // nature, the separation from the loopback debug server, and the

@@ -1,10 +1,11 @@
 // Package httpmw implements net/http middleware wrappers that protect
-// the public MCP HTTP listener: panic recovery, X-Forwarded-For-aware
-// client IP resolution, token-bucket rate limiting per client IP, and
-// a body-size cap. Each middleware is composable via the standard
-// func(http.Handler) http.Handler signature so they chain cleanly in
-// Chain. Ordering (outer → inner) is Recover → RealIP → RateLimit →
-// MaxBytes → downstream handler.
+// the public MCP HTTP listener: panic recovery, baseline security
+// headers, X-Forwarded-For-aware client IP resolution, token-bucket
+// rate limiting per client IP, and a body-size cap. Each middleware
+// is composable via the standard func(http.Handler) http.Handler
+// signature so they chain cleanly in Chain. Production ordering
+// (outer → inner) is Recover → SecurityHeaders → RealIP → RateLimit
+// → MaxBytes → downstream handler.
 package httpmw
 
 import (

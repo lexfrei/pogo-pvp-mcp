@@ -88,7 +88,7 @@ type Config struct {
 // MCPHTTPListen governs the PUBLIC MCP endpoint (Streamable HTTP). It
 // is bound on whatever address the operator chooses (":8080" or
 // "0.0.0.0:8080" typically) and is protected by the Phase 3 net/http
-// middleware chain (recover → realIP → rateLimit → maxBytes). Empty
+// middleware chain (recover → securityHeaders → realIP → rateLimit → maxBytes). Empty
 // = disabled; stdio remains the only transport.
 //
 // Phase 3 controls:
