@@ -2233,3 +2233,61 @@ func TestTeamBuilderTool_AutoEvolvePartialWalkTerminalOverCap(t *testing.T) {
 			promotedBreakdown.Flags)
 	}
 }
+
+// TestTeamBuilderTool_ParallelMatrixDeterministicAcrossRuns pins
+// the Phase 4 invariant: rating-matrix precompute is parallel
+// (runtime.NumCPU() workers) but the resulting Teams list is
+// bit-identical across repeated runs. Workers complete in
+// non-deterministic order; if write-back slots weren't row-
+// indexed or sort keys weren't stable, the output could reorder
+// between runs. This test catches such a regression by running
+// the same request 5 times and comparing every field.
+func TestTeamBuilderTool_ParallelMatrixDeterministicAcrossRuns(t *testing.T) {
+	t.Parallel()
+
+	tool := newTeamBuilderTool(t)
+	handler := tool.Handler()
+
+	pool := []tools.Combatant{
+		baseCombatant("a"),
+		baseCombatant("b"),
+		baseCombatant("c"),
+	}
+
+	var canonical *tools.TeamBuilderResult
+
+	const iterations = 5
+
+	for run := range iterations {
+		_, result, err := handler(t.Context(), nil, tools.TeamBuilderParams{
+			Pool:   pool,
+			League: leagueGreat,
+		})
+		if err != nil {
+			t.Fatalf("run %d handler: %v", run, err)
+		}
+
+		if run == 0 {
+			canonical = &result
+
+			continue
+		}
+
+		if len(result.Teams) != len(canonical.Teams) {
+			t.Fatalf("run %d len(Teams) = %d, canonical = %d",
+				run, len(result.Teams), len(canonical.Teams))
+		}
+
+		for i := range result.Teams {
+			if result.Teams[i].TeamScore != canonical.Teams[i].TeamScore {
+				t.Errorf("run %d team[%d] TeamScore = %v, canonical = %v",
+					run, i, result.Teams[i].TeamScore, canonical.Teams[i].TeamScore)
+			}
+
+			if !slices.Equal(result.Teams[i].PoolIndices, canonical.Teams[i].PoolIndices) {
+				t.Errorf("run %d team[%d] PoolIndices = %v, canonical = %v",
+					run, i, result.Teams[i].PoolIndices, canonical.Teams[i].PoolIndices)
+			}
+		}
+	}
+}
