@@ -6,6 +6,7 @@ testdata/
 .env*
 .mcp.json
 .containerignore
+.dockerignore
 .gitattributes
 README.md
 # .engine-src is the release-workflow checkout of
