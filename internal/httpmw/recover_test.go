@@ -59,6 +59,44 @@ func TestRecover_PanicReturnsFiveHundred(t *testing.T) {
 	}
 }
 
+// TestRecover_AbortHandlerRethrownSilently pins the stdlib contract
+// for http.ErrAbortHandler: the sentinel must propagate up to the
+// server framework, which cancels the connection without logging.
+// Our middleware must NOT swallow it (no 500, no slog entry).
+func TestRecover_AbortHandlerRethrownSilently(t *testing.T) {
+	t.Parallel()
+
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, nil))
+
+	inner := http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {
+		panic(http.ErrAbortHandler)
+	})
+
+	handler := httpmw.Recover(logger)(inner)
+	ts := httptest.NewServer(handler)
+	t.Cleanup(ts.Close)
+
+	// Request lands but the server aborts the connection; the client
+	// sees EOF (err != nil) rather than a response. That's the
+	// documented ErrAbortHandler behaviour. We only care about the
+	// log output — must NOT contain our panicked handler message.
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, ts.URL, http.NoBody)
+	if err != nil {
+		t.Fatalf("NewRequestWithContext: %v", err)
+	}
+
+	resp, _ := http.DefaultClient.Do(req)
+	if resp != nil {
+		_ = resp.Body.Close()
+	}
+
+	if strings.Contains(buf.String(), "http handler panicked") {
+		t.Errorf("Recover logged a stack trace for http.ErrAbortHandler (silent sentinel); got:\n%s",
+			buf.String())
+	}
+}
+
 // TestRecover_NoPanicPassesThrough confirms the middleware is a no-op
 // on the success path — the downstream handler's response reaches the
 // client unchanged.

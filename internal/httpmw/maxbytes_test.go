@@ -100,6 +100,48 @@ func TestMaxBytes_RejectsOversizedBody(t *testing.T) {
 	}
 }
 
+// TestMaxBytes_ContentLengthShortCircuitReturns413 pins the
+// production behaviour: a client that declares Content-Length above
+// the cap gets a 413 BEFORE the body is read and BEFORE the
+// downstream handler is invoked. Proves the middleware itself
+// writes the 413 rather than relying on the downstream handler's
+// behaviour (the MCP SDK writes 400 on MaxBytesReader failure; we
+// must intercept oversize declarations ourselves).
+func TestMaxBytes_ContentLengthShortCircuitReturns413(t *testing.T) {
+	t.Parallel()
+
+	big := strings.Repeat("x", 4096)
+
+	innerCalled := false
+	inner := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		innerCalled = true
+		w.WriteHeader(http.StatusOK)
+	})
+
+	handler := httpmw.MaxBytes(64)(inner)
+	ts := httptest.NewServer(handler)
+	t.Cleanup(ts.Close)
+
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, ts.URL, strings.NewReader(big))
+	if err != nil {
+		t.Fatalf("NewRequestWithContext: %v", err)
+	}
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("Do: %v", err)
+	}
+	_ = resp.Body.Close()
+
+	if resp.StatusCode != http.StatusRequestEntityTooLarge {
+		t.Errorf("status = %d, want 413 (Content-Length short-circuit)", resp.StatusCode)
+	}
+
+	if innerCalled {
+		t.Errorf("downstream handler invoked; oversize declaration must short-circuit before next.ServeHTTP")
+	}
+}
+
 // TestMaxBytes_ZeroCapDisables pins the documented escape hatch:
 // passing 0 to MaxBytes leaves the body untouched. Useful for dev
 // and tests that want to POST arbitrary payloads.

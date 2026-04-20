@@ -2,10 +2,13 @@ package cli_test
 
 import (
 	"encoding/json"
+	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/lexfrei/pogo-pvp-mcp/internal/cli"
+	"github.com/lexfrei/pogo-pvp-mcp/internal/httpmw"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -85,6 +88,106 @@ func TestMCPHTTPHandler_ListToolsOverHTTP(t *testing.T) {
 		if !names[name] {
 			t.Errorf("%s missing from HTTP-transport ListTools", name)
 		}
+	}
+}
+
+// TestMCPHTTPHandler_Phase3ChainBlocksOversizedBody wires the real
+// Phase 3 middleware chain (Recover → RealIP → RateLimit → MaxBytes)
+// around NewMCPHTTPHandler and proves that oversized request bodies
+// are rejected by the middleware itself (413) rather than reaching
+// the MCP handler. Guards against the round-2 review finding that
+// MaxBytes alone doesn't guarantee 413 — the Content-Length
+// short-circuit in the middleware must fire before any handler
+// gets to choose a different status code.
+func TestMCPHTTPHandler_Phase3ChainBlocksOversizedBody(t *testing.T) {
+	t.Parallel()
+
+	mcpServer := buildWiredServer(t)
+
+	trusted, err := httpmw.ParseTrustedProxies(nil)
+	if err != nil {
+		t.Fatalf("ParseTrustedProxies: %v", err)
+	}
+
+	// Cap at 64 bytes; the MCP initialize payload is a few hundred,
+	// so Content-Length always exceeds and every request 413s.
+	limiter := httpmw.NewRateLimiter(0, 0)
+	t.Cleanup(limiter.Stop)
+
+	handler := httpmw.Chain(
+		cli.NewMCPHTTPHandler(mcpServer, nil),
+		httpmw.Recover(nil),
+		httpmw.RealIP(trusted),
+		limiter.Middleware,
+		httpmw.MaxBytes(64),
+	)
+
+	ts := httptest.NewServer(handler)
+	t.Cleanup(ts.Close)
+
+	body := strings.Repeat("x", 4096)
+
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, ts.URL, strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("NewRequestWithContext: %v", err)
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("Do: %v", err)
+	}
+	_ = resp.Body.Close()
+
+	if resp.StatusCode != http.StatusRequestEntityTooLarge {
+		t.Errorf("status = %d, want 413 (MaxBytes must short-circuit oversized Content-Length before the MCP SDK gets a chance to answer 400)",
+			resp.StatusCode)
+	}
+}
+
+// TestMCPHTTPHandler_Phase3ChainAllowsLegitimateRequest is the happy-
+// path companion: the same chain with a generous 64 KiB cap must NOT
+// block a normal initialize. Otherwise a zero-byte regression
+// elsewhere would silently break production traffic.
+func TestMCPHTTPHandler_Phase3ChainAllowsLegitimateRequest(t *testing.T) {
+	t.Parallel()
+
+	mcpServer := buildWiredServer(t)
+
+	trusted, err := httpmw.ParseTrustedProxies(nil)
+	if err != nil {
+		t.Fatalf("ParseTrustedProxies: %v", err)
+	}
+
+	limiter := httpmw.NewRateLimiter(0, 0)
+	t.Cleanup(limiter.Stop)
+
+	handler := httpmw.Chain(
+		cli.NewMCPHTTPHandler(mcpServer, nil),
+		httpmw.Recover(nil),
+		httpmw.RealIP(trusted),
+		limiter.Middleware,
+		httpmw.MaxBytes(65536),
+	)
+
+	ts := httptest.NewServer(handler)
+	t.Cleanup(ts.Close)
+
+	client := mcp.NewClient(&mcp.Implementation{Name: "http-chain-test", Version: "t"}, nil)
+	session, err := client.Connect(t.Context(), &mcp.StreamableClientTransport{Endpoint: ts.URL}, nil)
+	if err != nil {
+		t.Fatalf("client.Connect: %v", err)
+	}
+	defer session.Close()
+
+	listed, err := session.ListTools(t.Context(), nil)
+	if err != nil {
+		t.Fatalf("ListTools: %v", err)
+	}
+
+	if len(listed.Tools) == 0 {
+		t.Errorf("ListTools returned no tools through Phase 3 chain")
 	}
 }
 

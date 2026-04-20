@@ -301,6 +301,11 @@ func (c *Config) validateMCPHTTPPhase3() error {
 			ErrInvalidConfig, c.Server.MaxRequestBytes)
 	}
 
+	// CIDR validation is the same one httpmw.ParseTrustedProxies
+	// runs at startup — we replay it here so misconfigurations fail
+	// at config load rather than on first public request. Keeping
+	// net.ParseCIDR inline (vs. calling httpmw.ParseTrustedProxies)
+	// avoids an import cycle and keeps config free of runtime deps.
 	for _, cidr := range c.Server.TrustedProxies {
 		_, _, err := net.ParseCIDR(cidr)
 		if err != nil {

@@ -8,6 +8,7 @@
 package httpmw
 
 import (
+	"errors"
 	"log/slog"
 	"net/http"
 	"runtime/debug"
@@ -29,6 +30,18 @@ func Recover(logger *slog.Logger) func(http.Handler) http.Handler {
 				rec := recover()
 				if rec == nil {
 					return
+				}
+
+				// http.ErrAbortHandler is the stdlib-documented
+				// sentinel for "abort the request without logging".
+				// The server framework recognises it specially; we
+				// must re-panic so the connection closes without
+				// our 500-write or stack-log side effects. Type-
+				// assert then errors.Is to satisfy the err113 +
+				// errorlint pair simultaneously.
+				asErr, isErr := rec.(error)
+				if isErr && errors.Is(asErr, http.ErrAbortHandler) {
+					panic(rec)
 				}
 
 				// Log with stack trace so operators can triage.
