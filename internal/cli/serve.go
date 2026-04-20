@@ -581,6 +581,7 @@ func buildMCPHTTPMiddlewareChain(
 	handler := httpmw.Chain(
 		NewMCPHTTPHandler(mcpServer, rt.Logger),
 		httpmw.Recover(rt.Logger),
+		httpmw.SecurityHeaders(),
 		httpmw.RealIP(trusted),
 		limiter.Middleware,
 		httpmw.MaxBytes(rt.Config.Server.MaxRequestBytes),

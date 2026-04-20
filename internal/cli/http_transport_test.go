@@ -164,6 +164,70 @@ func TestMCPHTTPHandler_Phase2MiddlewareLogsEveryCall(t *testing.T) {
 	}
 }
 
+// TestMCPHTTPHandler_Phase5SecurityHeadersPresent wires the real
+// Phase 3 chain (same one production uses via
+// buildMCPHTTPMiddlewareChain) and asserts every response carries
+// the Phase 5 security-header set. Without the SecurityHeaders
+// middleware threaded into the chain, the headers would be absent
+// and a silent drop during a chain refactor is exactly what this
+// test catches.
+func TestMCPHTTPHandler_Phase5SecurityHeadersPresent(t *testing.T) {
+	t.Parallel()
+
+	mcpServer := buildWiredServer(t)
+
+	trusted, err := httpmw.ParseTrustedProxies(nil)
+	if err != nil {
+		t.Fatalf("ParseTrustedProxies: %v", err)
+	}
+
+	limiter := httpmw.NewRateLimiter(0, 0)
+	t.Cleanup(limiter.Stop)
+
+	// Same chain order production uses — see serve.go
+	// buildMCPHTTPMiddlewareChain.
+	handler := httpmw.Chain(
+		cli.NewMCPHTTPHandler(mcpServer, nil),
+		httpmw.Recover(nil),
+		httpmw.SecurityHeaders(),
+		httpmw.RealIP(trusted),
+		limiter.Middleware,
+		httpmw.MaxBytes(65536),
+	)
+
+	ts := httptest.NewServer(handler)
+	t.Cleanup(ts.Close)
+
+	// A failed GET (MCP endpoint only speaks POST) is enough to
+	// exercise the response path. Any request the server replies
+	// to MUST carry the security headers.
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, ts.URL, http.NoBody)
+	if err != nil {
+		t.Fatalf("NewRequestWithContext: %v", err)
+	}
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("Do: %v", err)
+	}
+	_ = resp.Body.Close()
+
+	expected := map[string]string{
+		"Strict-Transport-Security": "max-age=31536000; includeSubDomains",
+		"X-Content-Type-Options":    "nosniff",
+		"Referrer-Policy":           "no-referrer",
+		"Content-Security-Policy":   "default-src 'none'",
+	}
+
+	for name, want := range expected {
+		got := resp.Header.Get(name)
+		if got != want {
+			t.Errorf("header %s = %q, want %q (SecurityHeaders must be in the production chain)",
+				name, got, want)
+		}
+	}
+}
+
 // TestMCPHTTPHandler_Phase3ChainBlocksOversizedBody wires the real
 // Phase 3 middleware chain (Recover → RealIP → RateLimit → MaxBytes)
 // around NewMCPHTTPHandler and proves that oversized request bodies

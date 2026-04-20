@@ -173,6 +173,11 @@ func TestReadmeDocumentsMCPHTTPListener(t *testing.T) {
 		"timed_out", // logged field name
 		// DNS-rebinding caveat.
 		"DNS-rebinding protection",
+		// Phase 5 operational hardening: security headers +
+		// reverse proxy example must remain documented.
+		"Strict-Transport-Security",
+		"Content-Security-Policy",
+		"Public deployment (reverse proxy example)",
 	}
 
 	for _, phrase := range requiredPhrases {
