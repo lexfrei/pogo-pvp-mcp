@@ -14,6 +14,12 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
+// integrationFixtureSpecies is the single species published by
+// integrationFixtureGamemaster — hoisted so the multiple callsites
+// in this file + http_transport_test.go reference the same symbol
+// (goconst trigger). Same package (cli_test) so both files see it.
+const integrationFixtureSpecies = "medicham"
+
 const integrationFixtureGamemaster = `{
   "id": "gamemaster",
   "timestamp": "2026-04-18 00:00:00",
@@ -237,7 +243,7 @@ func TestIntegration_CallRank(t *testing.T) {
 	defer session.Close()
 
 	args := map[string]any{
-		"species": "medicham",
+		"species": integrationFixtureSpecies,
 		"iv":      []int{0, 15, 15},
 		"league":  "great",
 	}
@@ -266,8 +272,8 @@ func TestIntegration_CallRank(t *testing.T) {
 		t.Fatalf("unmarshal RankResult: %v", err)
 	}
 
-	if decoded.Species != "medicham" {
-		t.Errorf("Species = %q, want medicham", decoded.Species)
+	if decoded.Species != integrationFixtureSpecies {
+		t.Errorf("Species = %q, want %q", decoded.Species, integrationFixtureSpecies)
 	}
 	if decoded.CP <= 0 || decoded.CP > 1500 {
 		t.Errorf("CP = %d, want in (0, 1500]", decoded.CP)

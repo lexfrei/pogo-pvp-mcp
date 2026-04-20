@@ -59,6 +59,42 @@ const debugServerShutdownGrace = 5 * time.Second
 // handler goroutine.
 const debugServerReadHeaderTimeout = 10 * time.Second
 
+// mcpHTTPReadHeaderTimeout is the read-header deadline for the
+// public MCP HTTP listener. Short enough to rebuff Slowloris but
+// generous enough for proxies adding modest delay.
+const mcpHTTPReadHeaderTimeout = 5 * time.Second
+
+// mcpHTTPReadTimeout is the full body-read deadline. Phase 1 ships
+// without a body-size cap (Phase 3 adds http.MaxBytesReader at
+// 64 KiB), so this timeout is the only backstop against a malicious
+// client sending an arbitrarily long stream of bytes. 30s is far
+// more than any legitimate MCP client needs; tighten if Phase 3 adds
+// a smaller cap that makes the ceiling negligible.
+const mcpHTTPReadTimeout = 30 * time.Second
+
+// mcpHTTPWriteTimeout is the response-write deadline. Bumped above
+// ReadTimeout because pvp_team_builder on a 50-member pool can take
+// tens of seconds to sweep the rating matrix (pre-Phase-4
+// parallelization). Tied to tools.MaxPoolSize (=50 at last check) —
+// any future pool-size bump needs a timeout review. Phase 4
+// parallelization will likely let this drop back to 30s.
+const mcpHTTPWriteTimeout = 60 * time.Second
+
+// mcpHTTPIdleTimeout is the keep-alive idle window. Proxies typically
+// reuse upstream connections for bursts; 90s is long enough to
+// amortise TCP setup without leaking idle goroutines.
+const mcpHTTPIdleTimeout = 90 * time.Second
+
+// mcpHTTPMaxHeaderBytes caps the per-request header budget at 64 KiB.
+// Default net/http value (1 MiB) is needlessly generous for a
+// JSON-RPC endpoint.
+const mcpHTTPMaxHeaderBytes = 1 << 16
+
+// mcpHTTPShutdownGrace is the window the public MCP HTTP listener
+// gets to drain in-flight requests after shutdown signal. Matched to
+// WriteTimeout so a long-running team_builder call can finish.
+const mcpHTTPShutdownGrace = 60 * time.Second
+
 // bootstrapRetries is how many times primeGamemaster retries the
 // upstream fetch during cold start before giving up and returning an
 // error. Bootstrap failures are fatal because the main RefreshInterval
@@ -112,6 +148,7 @@ func runServe(parent context.Context, rt *Runtime) error {
 	server := buildMCPServer(managers.Gamemaster, managers.Rankings)
 	refreshDone := startRefreshLoop(ctx, rt, managers.Gamemaster)
 	debugDone := startDebugServer(ctx, rt, managers.Gamemaster)
+	mcpHTTPDone := startMCPHTTPServer(ctx, rt, server)
 
 	rt.Logger.Info("starting stdio transport",
 		slog.String("transport", rt.Config.Server.Transport),
@@ -121,7 +158,7 @@ func runServe(parent context.Context, rt *Runtime) error {
 	err = server.Run(ctx, &mcp.StdioTransport{})
 
 	stop()
-	waitForBackgroundShutdown(rt, refreshDone, debugDone)
+	waitForBackgroundShutdown(rt, refreshDone, debugDone, mcpHTTPDone)
 
 	if err != nil {
 		return fmt.Errorf("mcp transport: %w", err)
@@ -171,24 +208,34 @@ func startRefreshLoop(ctx context.Context, rt *Runtime, mgr *gamemaster.Manager)
 	return done
 }
 
-// waitForBackgroundShutdown blocks until the refresh loop and the
-// optional debug HTTP server have exited, each under its own grace
-// window, and warns when either misses its deadline.
-func waitForBackgroundShutdown(rt *Runtime, refreshDone, debugDone <-chan struct{}) {
+// waitForBackgroundShutdown blocks until the refresh loop, the
+// optional debug HTTP server, and the optional public MCP HTTP
+// listener have exited — each under its own grace window — and warns
+// when any of them misses its deadline. Debug and MCP HTTP listeners
+// are orthogonal and may both be enabled / disabled independently.
+func waitForBackgroundShutdown(
+	rt *Runtime, refreshDone, debugDone, mcpHTTPDone <-chan struct{},
+) {
 	select {
 	case <-refreshDone:
 	case <-time.After(refreshGrace):
 		rt.Logger.Warn("refresh loop did not exit within grace window")
 	}
 
-	if debugDone == nil {
-		return
+	if debugDone != nil {
+		select {
+		case <-debugDone:
+		case <-time.After(debugServerShutdownGrace):
+			rt.Logger.Warn("debug HTTP server did not exit within grace window")
+		}
 	}
 
-	select {
-	case <-debugDone:
-	case <-time.After(debugServerShutdownGrace):
-		rt.Logger.Warn("debug HTTP server did not exit within grace window")
+	if mcpHTTPDone != nil {
+		select {
+		case <-mcpHTTPDone:
+		case <-time.After(mcpHTTPShutdownGrace):
+			rt.Logger.Warn("MCP HTTP listener did not exit within grace window")
+		}
 	}
 }
 
@@ -462,6 +509,102 @@ func watchAndShutdown(
 	err := server.Shutdown(shutdownCtx)
 	if err != nil {
 		rt.Logger.Warn("debug HTTP server shutdown error",
+			slog.String("error", err.Error()))
+	}
+}
+
+// NewMCPHTTPHandler wraps a *mcp.Server in a Streamable HTTP handler
+// suitable for use as a net/http endpoint. The SDK's
+// NewStreamableHTTPHandler takes a per-request server selector; for
+// this tool we always hand back the same pre-built server (read-only,
+// no per-client state). Stateless:true is correct for read-only data;
+// JSONResponse:true returns application/json rather than SSE streams
+// so the endpoint is reverse-proxy-friendly and does not require
+// hop-by-hop SSE handling.
+//
+// Exported so integration tests can drive a real client through the
+// same wrapper production uses; production callers pass in their
+// configured slog.Logger.
+func NewMCPHTTPHandler(server *mcp.Server, logger *slog.Logger) http.Handler {
+	return mcp.NewStreamableHTTPHandler(
+		func(*http.Request) *mcp.Server { return server },
+		&mcp.StreamableHTTPOptions{
+			Stateless:    true,
+			JSONResponse: true,
+			Logger:       logger,
+		},
+	)
+}
+
+// startMCPHTTPServer spins up the public Streamable HTTP MCP listener
+// when MCPHTTPListen is non-empty. Mirrors startDebugServer's
+// goroutine / done-channel pattern so the caller (runServe) can
+// coordinate shutdown uniformly across both listeners. Returns nil
+// when the listener is disabled so the caller can skip its wait step.
+func startMCPHTTPServer(
+	ctx context.Context, rt *Runtime, mcpServer *mcp.Server,
+) <-chan struct{} {
+	if rt.Config.Server.MCPHTTPListen == "" {
+		return nil
+	}
+
+	server := &http.Server{
+		Addr:              rt.Config.Server.MCPHTTPListen,
+		Handler:           NewMCPHTTPHandler(mcpServer, rt.Logger),
+		ReadHeaderTimeout: mcpHTTPReadHeaderTimeout,
+		ReadTimeout:       mcpHTTPReadTimeout,
+		WriteTimeout:      mcpHTTPWriteTimeout,
+		IdleTimeout:       mcpHTTPIdleTimeout,
+		MaxHeaderBytes:    mcpHTTPMaxHeaderBytes,
+	}
+
+	serverDone := make(chan struct{})
+	done := make(chan struct{})
+
+	go func() {
+		defer close(serverDone)
+
+		rt.Logger.Info("starting MCP HTTP listener",
+			slog.String("addr", rt.Config.Server.MCPHTTPListen))
+
+		err := server.ListenAndServe()
+		if err != nil && !errors.Is(err, http.ErrServerClosed) {
+			rt.Logger.Error("MCP HTTP listener failed",
+				slog.String("error", err.Error()))
+		}
+	}()
+
+	go func() {
+		defer close(done)
+
+		watchAndShutdownMCPHTTP(ctx, rt, server, serverDone)
+	}()
+
+	return done
+}
+
+// watchAndShutdownMCPHTTP is the MCP-HTTP counterpart to
+// watchAndShutdown. Split from the debug variant because the grace
+// window differs: MCP requests (team_builder) can legitimately take
+// tens of seconds, so the MCP listener gets a longer drain budget.
+//
+//nolint:contextcheck // fresh ctx is required; parent is already cancelled by the time we run
+func watchAndShutdownMCPHTTP(
+	ctx context.Context, rt *Runtime, server *http.Server, serverDone <-chan struct{},
+) {
+	select {
+	case <-ctx.Done():
+	case <-serverDone:
+		// Listener exited on its own; still call Shutdown to
+		// release any partially-acquired resources.
+	}
+
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), mcpHTTPShutdownGrace)
+	defer cancel()
+
+	err := server.Shutdown(shutdownCtx)
+	if err != nil {
+		rt.Logger.Warn("MCP HTTP server shutdown error",
 			slog.String("error", err.Error()))
 	}
 }

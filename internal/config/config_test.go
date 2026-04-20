@@ -28,6 +28,9 @@ func TestLoad_Defaults(t *testing.T) {
 	if cfg.Server.HTTPPort != 0 {
 		t.Errorf("Server.HTTPPort = %d, want 0 (disabled)", cfg.Server.HTTPPort)
 	}
+	if cfg.Server.MCPHTTPListen != "" {
+		t.Errorf("Server.MCPHTTPListen = %q, want empty (disabled)", cfg.Server.MCPHTTPListen)
+	}
 	if cfg.Log.Level != "info" {
 		t.Errorf("Log.Level = %q, want \"info\"", cfg.Log.Level)
 	}
@@ -89,6 +92,7 @@ engine:
 func TestLoad_EnvOverride(t *testing.T) {
 	t.Setenv("POGO_PVP_LOG_LEVEL", "warn")
 	t.Setenv("POGO_PVP_SERVER_HTTP_PORT", "9999")
+	t.Setenv("POGO_PVP_SERVER_MCP_HTTP_LISTEN", "0.0.0.0:8080")
 
 	cfg, err := config.Load("")
 	if err != nil {
@@ -100,6 +104,10 @@ func TestLoad_EnvOverride(t *testing.T) {
 	}
 	if cfg.Server.HTTPPort != 9999 {
 		t.Errorf("Server.HTTPPort = %d, want 9999 (from env)", cfg.Server.HTTPPort)
+	}
+	if cfg.Server.MCPHTTPListen != "0.0.0.0:8080" {
+		t.Errorf("Server.MCPHTTPListen = %q, want \"0.0.0.0:8080\" (from env)",
+			cfg.Server.MCPHTTPListen)
 	}
 }
 
@@ -145,6 +153,94 @@ func TestValidate_InvalidLogFormat(t *testing.T) {
 	err = cfg.Validate()
 	if !errors.Is(err, config.ErrInvalidConfig) {
 		t.Errorf("Validate() = %v, want wrapping ErrInvalidConfig", err)
+	}
+}
+
+// TestValidate_InvalidMCPHTTPListen drives the Phase 1 round-1
+// review finding: net.SplitHostPort alone accepts several strings
+// (":", "localhost:bad", "host:99999") that then fail opaquely at
+// net.Listen. Each subcase must surface ErrInvalidConfig at load
+// time so misconfigurations don't silently boot.
+func TestValidate_InvalidMCPHTTPListen(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name  string
+		value string
+	}{
+		{"missing_port", "not-a-valid-listen-address"},
+		{"bare_colon", ":"},
+		{"non_numeric_port", "localhost:bad"},
+		{"port_above_max", "127.0.0.1:99999"},
+		{"negative_port", "127.0.0.1:-1"},
+		{"port_zero", "127.0.0.1:0"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			cfg, err := config.Load("")
+			if err != nil {
+				t.Fatalf("Load: %v", err)
+			}
+
+			cfg.Server.MCPHTTPListen = tc.value
+
+			err = cfg.Validate()
+			if !errors.Is(err, config.ErrInvalidConfig) {
+				t.Errorf("Validate(%q) = %v, want wrapping ErrInvalidConfig", tc.value, err)
+			}
+		})
+	}
+}
+
+// TestValidate_AcceptableMCPHTTPListen locks the forms that must
+// survive validation. All are canonical Go listen-address spellings;
+// dropping any of them is a breaking config regression.
+func TestValidate_AcceptableMCPHTTPListen(t *testing.T) {
+	t.Parallel()
+
+	cases := []string{
+		":8080",
+		"0.0.0.0:8080",
+		"127.0.0.1:18080",
+		"[::]:8080",
+		"[::1]:8080",
+	}
+
+	for _, value := range cases {
+		t.Run(value, func(t *testing.T) {
+			t.Parallel()
+
+			cfg, err := config.Load("")
+			if err != nil {
+				t.Fatalf("Load: %v", err)
+			}
+
+			cfg.Server.MCPHTTPListen = value
+
+			err = cfg.Validate()
+			if err != nil {
+				t.Errorf("Validate(%q) = %v, want nil", value, err)
+			}
+		})
+	}
+}
+
+func TestValidate_EmptyMCPHTTPListenIsValid(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := config.Load("")
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	cfg.Server.MCPHTTPListen = ""
+
+	err = cfg.Validate()
+	if err != nil {
+		t.Errorf("Validate() = %v, want nil (empty is the disabled form)", err)
 	}
 }
 

@@ -144,6 +144,40 @@ func TestReadmeToolCountConsistent(t *testing.T) {
 	}
 }
 
+// TestReadmeDocumentsMCPHTTPListener pins the Phase 1 (public HTTP
+// transport) README section: the opt-in env var, the Streamable HTTP
+// nature, the separation from the loopback debug server, and the
+// warning that middleware (rate-limit / max-body / per-call timeout)
+// lands in later phases so Phase 1 must only be exposed behind a
+// trusted proxy. All three are load-bearing pieces of operator
+// guidance — dropping any one leaves a future reader with a
+// dangerously incomplete picture.
+func TestReadmeDocumentsMCPHTTPListener(t *testing.T) {
+	t.Parallel()
+
+	readme := readRepoFile(t, "README.md")
+
+	requiredPhrases := []string{
+		"POGO_PVP_SERVER_MCP_HTTP_LISTEN",
+		"Streamable HTTP",
+		"trusted reverse proxy",
+		// Phase 1 gaps: each of the three missing middleware pieces
+		// must be called out by name so a future rewrite can't
+		// silently swallow any individual item.
+		"rate-limit",
+		"request-size cap",
+		"tool-call timeout",
+		// DNS-rebinding caveat.
+		"DNS-rebinding protection",
+	}
+
+	for _, phrase := range requiredPhrases {
+		if !strings.Contains(readme, phrase) {
+			t.Errorf("README.md missing required phrase %q (Phase 1 MCP HTTP doc drift)", phrase)
+		}
+	}
+}
+
 // TestReadmeDocumentsTargetLevelAndCPCapNuance pins the Phase R4.8
 // doc-gap fix: the README must explicitly document the semantics of
 // the `target_level` parameter (omit / 0 vs positive) on team tools

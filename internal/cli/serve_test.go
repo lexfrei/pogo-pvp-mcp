@@ -13,6 +13,7 @@ import (
 
 	"github.com/lexfrei/pogo-pvp-mcp/internal/config"
 	"github.com/lexfrei/pogo-pvp-mcp/internal/gamemaster"
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 // newServeTestRuntime builds a minimal Runtime pointing the
@@ -129,10 +130,96 @@ func TestStartDebugServer_DoesNotLeakOnListenFailure(t *testing.T) {
 	}
 }
 
+// newMinimalMCPServer returns an empty mcp.Server suitable for
+// lifecycle tests that exercise startMCPHTTPServer's wiring without
+// depending on any tool registration. The http_transport_test.go
+// file covers the handler-behaviour side via buildWiredServer.
+func newMinimalMCPServer(t *testing.T) *mcp.Server {
+	t.Helper()
+
+	return mcp.NewServer(&mcp.Implementation{
+		Name:    serverName,
+		Version: "lifecycle-test",
+	}, nil)
+}
+
+// TestStartMCPHTTPServer_DisabledReturnsNil pins the opt-out path:
+// with MCPHTTPListen empty the helper must return a nil channel so
+// the caller's wait step skips cleanly — the symmetric guard to
+// TestStartDebugServer_DisabledReturnsNil.
+func TestStartMCPHTTPServer_DisabledReturnsNil(t *testing.T) {
+	t.Parallel()
+
+	rt := newServeTestRuntime(t, 0)
+	rt.Config.Server.MCPHTTPListen = ""
+
+	done := startMCPHTTPServer(t.Context(), rt, newMinimalMCPServer(t))
+	if done != nil {
+		t.Error("startMCPHTTPServer returned non-nil channel for empty MCPHTTPListen")
+	}
+}
+
+// TestStartMCPHTTPServer_ShutsDownOnContextCancel verifies the happy-
+// path lifecycle: listener binds, accepts TCP, and exits within the
+// grace window when the parent ctx is cancelled.
+func TestStartMCPHTTPServer_ShutsDownOnContextCancel(t *testing.T) {
+	t.Parallel()
+
+	port := pickFreePort(t)
+	rt := newServeTestRuntime(t, 0)
+	rt.Config.Server.MCPHTTPListen = fmt.Sprintf("127.0.0.1:%d", port)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	done := startMCPHTTPServer(ctx, rt, newMinimalMCPServer(t))
+
+	waitForTCPReady(t, port)
+
+	cancel()
+
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("startMCPHTTPServer did not close done within 3s of ctx cancel")
+	}
+}
+
+// TestStartMCPHTTPServer_DoesNotLeakOnListenFailure confirms the
+// startMCPHTTPServer mirror of the debug server's leak guard: if
+// ListenAndServe fails immediately (EADDRINUSE), done must still
+// close without waiting on the parent ctx. Catches regressions
+// that would otherwise leak a goroutine blocked on ctx.Done when
+// the listener never established.
+func TestStartMCPHTTPServer_DoesNotLeakOnListenFailure(t *testing.T) {
+	t.Parallel()
+
+	port := pickFreePort(t)
+
+	// Hold the port so the startMCPHTTPServer ListenAndServe fails
+	// immediately with EADDRINUSE.
+	var lc net.ListenConfig
+
+	blocker, err := lc.Listen(t.Context(), "tcp", fmt.Sprintf("127.0.0.1:%d", port))
+	if err != nil {
+		t.Fatalf("blocker listen: %v", err)
+	}
+	defer blocker.Close()
+
+	rt := newServeTestRuntime(t, 0)
+	rt.Config.Server.MCPHTTPListen = fmt.Sprintf("127.0.0.1:%d", port)
+
+	done := startMCPHTTPServer(t.Context(), rt, newMinimalMCPServer(t))
+
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("done did not close within 3s after ListenAndServe error — goroutine leak?")
+	}
+}
+
 // TestWaitForBackgroundShutdown_NilDebugReturnsAfterRefresh checks
 // the refresh-only path: when the debug server was never started,
 // wait must not hang on a nil channel.
-func TestWaitForBackgroundShutdown_NilDebugReturnsAfterRefresh(t *testing.T) {
+func TestWaitForBackgroundShutdown_NilOptionalChansReturnsAfterRefresh(t *testing.T) {
 	t.Parallel()
 
 	rt := newServeTestRuntime(t, 0)
@@ -142,14 +229,17 @@ func TestWaitForBackgroundShutdown_NilDebugReturnsAfterRefresh(t *testing.T) {
 	doneCh := make(chan struct{})
 
 	go func() {
-		waitForBackgroundShutdown(rt, refreshDone, nil)
+		// Both debugDone and mcpHTTPDone nil — the optional listeners
+		// are disabled. waitForBackgroundShutdown must return
+		// immediately after the mandatory refresh loop signals done.
+		waitForBackgroundShutdown(rt, refreshDone, nil, nil)
 		close(doneCh)
 	}()
 
 	select {
 	case <-doneCh:
 	case <-time.After(time.Second):
-		t.Fatal("waitForBackgroundShutdown hung on nil debug channel")
+		t.Fatal("waitForBackgroundShutdown hung on nil optional channels")
 	}
 }
 
@@ -201,6 +291,31 @@ func pickFreePort(t *testing.T) int {
 	}
 
 	return port
+}
+
+// waitForTCPReady dials 127.0.0.1:port repeatedly until a connection
+// succeeds or the deadline elapses. Used by the MCP HTTP lifecycle
+// tests where GET /healthz is not available (the MCP endpoint does
+// not expose that path — it speaks JSON-RPC over POST).
+func waitForTCPReady(t *testing.T, port int) {
+	t.Helper()
+
+	deadline := time.Now().Add(2 * time.Second)
+	addr := fmt.Sprintf("127.0.0.1:%d", port)
+	dialer := &net.Dialer{Timeout: 100 * time.Millisecond}
+
+	for time.Now().Before(deadline) {
+		conn, err := dialer.DialContext(t.Context(), "tcp", addr)
+		if err == nil {
+			_ = conn.Close()
+
+			return
+		}
+
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	t.Fatalf("port %d never became ready", port)
 }
 
 // waitForPortReady polls the debug endpoint until the server starts
