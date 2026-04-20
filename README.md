@@ -121,7 +121,9 @@ Env vars: `POGO_PVP_SERVER_TOOL_TIMEOUT_DEFAULT`, `POGO_PVP_SERVER_TOOL_TIMEOUT_
 
 ## Claude Desktop integration
 
-Add the server to `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS) or `%APPDATA%\Claude\claude_desktop_config.json` (Windows):
+Add the server to `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS) or `%APPDATA%\Claude\claude_desktop_config.json` (Windows). Two options — pick whichever matches how you ship the binary.
+
+### Native binary
 
 ```json
 {
@@ -134,7 +136,48 @@ Add the server to `~/Library/Application Support/Claude/claude_desktop_config.js
 }
 ```
 
-Restart Claude Desktop. The twenty-two `pvp_*` tools will appear in the tool list. If a tool returns "gamemaster not loaded", run `pogo-pvp-mcp fetch-gm` once to warm the cache.
+### Docker image (recommended)
+
+Build the image once from the sibling `pogo-pvp-engine` checkout:
+
+```bash
+scripts/build-image.sh            # tags pogo-pvp-mcp:dev
+scripts/build-image.sh v1.2.3     # tags pogo-pvp-mcp:v1.2.3
+```
+
+Prime the gamemaster cache into a named volume so subsequent
+`docker run`s skip the upstream fetch on every cold start:
+
+```bash
+docker volume create pogo-pvp-mcp-cache
+docker run --rm \
+  --volume pogo-pvp-mcp-cache:/home/nobody/.cache/pogo-pvp-mcp \
+  pogo-pvp-mcp:dev fetch-gm
+```
+
+Then wire Claude Desktop at the `docker` binary:
+
+```json
+{
+  "mcpServers": {
+    "pogo-pvp": {
+      "command": "/opt/homebrew/bin/docker",
+      "args": [
+        "run",
+        "--interactive",
+        "--rm",
+        "--volume",
+        "pogo-pvp-mcp-cache:/home/nobody/.cache/pogo-pvp-mcp",
+        "pogo-pvp-mcp:dev"
+      ]
+    }
+  }
+}
+```
+
+`--interactive` keeps stdio attached (the MCP transport is stdio-over-pipe); `--rm` drops the exited container so rapid Claude Desktop restarts don't accumulate `Exited` containers; the volume preserves the gamemaster + rankings cache across launches so the tool doesn't re-fetch upstream on every initialize.
+
+Restart Claude Desktop. The twenty-two `pvp_*` tools appear in the tool list. If a tool returns "gamemaster not loaded", re-run the `docker run ... fetch-gm` priming command or delete the volume and let the server bootstrap on next launch.
 
 ## Container image
 
@@ -142,7 +185,7 @@ A `Containerfile` ships in the repo root; tagged builds produce multi-arch (linu
 
 The container `EXPOSE`s two ports: `8080` for the public MCP HTTP endpoint (enable via `POGO_PVP_SERVER_MCP_HTTP_LISTEN=:8080`) and `8787` for the debug surface (`server.http_port`; keep on the container-internal loopback, never map to the host's public interface).
 
-Note: the image build depends on `github.com/lexfrei/pogo-pvp-engine` being resolvable by `go mod download` — during the engine-sibling development window (while the `replace` directive in `go.mod` points at a local `../pogo-pvp-engine` checkout), the Containerfile will not build cleanly. It becomes buildable once the engine repository is published and tagged.
+The Containerfile uses a BuildKit **named build-context** to import the sibling `pogo-pvp-engine` source so the `go.mod` replace directive is satisfied inside the image without publishing the engine repo. `scripts/build-image.sh` wires the context up for you (`docker buildx build --build-context engine=../pogo-pvp-engine ...`) and rewrites the replace directive to an in-container path (`/build/pogo-pvp-engine`) before `go mod download`. The image builds cleanly against a sibling checkout today; the original "waiting for engine release" blocker is gone.
 
 ## Public deployment (reverse proxy example)
 
