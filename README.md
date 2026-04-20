@@ -170,6 +170,7 @@ it on `$PATH` (on macOS Apple Silicon that's typically
       "args": [
         "run",
         "--interactive",
+        "--init",
         "--rm",
         "--volume",
         "pogo-pvp-mcp-cache:/home/nobody/.cache/pogo-pvp-mcp",
@@ -180,7 +181,7 @@ it on `$PATH` (on macOS Apple Silicon that's typically
 }
 ```
 
-`--interactive` keeps stdio attached (the MCP transport is stdio-over-pipe); `--rm` removes the container on process exit so Claude Desktop restarts don't leave stopped containers behind; the named volume preserves the gamemaster + rankings cache across launches so the tool doesn't re-fetch upstream on every `initialize`.
+`--interactive` keeps stdio attached (the MCP transport is stdio-over-pipe); `--init` inserts a minimal init process that reaps zombies and propagates signals cleanly so `SIGTERM` / `SIGINT` from Claude Desktop terminates the MCP process without relying on the Go binary's PID-1 signal handling; `--rm` removes the container on process exit so Claude Desktop restarts don't leave stopped containers behind; the named volume preserves the gamemaster + rankings cache across launches so the tool doesn't re-fetch upstream on every `initialize`.
 
 Restart Claude Desktop. The twenty-two `pvp_*` tools appear in the tool list. If a tool returns "gamemaster not loaded", re-run the `docker run ... fetch-gm` priming command or delete the volume and let the server bootstrap on next launch.
 
@@ -190,7 +191,7 @@ A `Containerfile` ships in the repo root; tagged builds produce multi-arch (linu
 
 The container `EXPOSE`s two ports: `8080` for the public MCP HTTP endpoint (enable via `POGO_PVP_SERVER_MCP_HTTP_LISTEN=:8080`) and `8787` for the debug surface (`server.http_port`; keep on the container-internal loopback, never map to the host's public interface).
 
-The Containerfile uses a BuildKit **named build-context** to import the sibling `pogo-pvp-engine` source so the `go.mod` replace directive is satisfied inside the image without publishing the engine repo. `scripts/build-image.sh` wires the context up for you (`docker buildx build --build-context engine=../pogo-pvp-engine ...`) and rewrites the replace directive to an in-container path (`/build/pogo-pvp-engine`) before `go mod download`. The image builds cleanly against a sibling checkout today; the original "waiting for engine release" blocker is gone.
+The Containerfile uses a BuildKit **named build-context** to import the sibling `pogo-pvp-engine` source so the `go.mod` replace directive is satisfied inside the image without publishing the engine repo. `scripts/build-image.sh` wires the context up for you (`docker buildx build --build-context engine=../pogo-pvp-engine ...`) and rewrites the replace directive to an in-container path (`/build/pogo-pvp-engine`) before `go mod download`. **Prerequisite**: a checkout of `github.com/lexfrei/pogo-pvp-engine` at the peer directory the script expects (default `../pogo-pvp-engine`; override via `ENGINE_PATH`). Without it the build errors before `COPY --from=engine` resolves. The release workflow mirrors this by checking the engine repo out via `actions/checkout`, so tag-push builds succeed once the engine repo is publicly accessible on GitHub.
 
 ## Public deployment (reverse proxy example)
 

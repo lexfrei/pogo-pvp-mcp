@@ -38,9 +38,17 @@ jobs:
       # BuildKit named build-context (replace directive in go.mod
       # points at ../pogo-pvp-engine on the developer laptop). CI
       # checks the sibling repo out into a peer path and wires it
-      # through the `build-contexts:` key below. Remove this step
-      # once the engine repo is published + tagged and the
-      # Containerfile can fall back to `go mod download` from proxy.
+      # through the `build-contexts:` key below.
+      #
+      # PREREQUISITE: `lexfrei/pogo-pvp-engine` must exist on GitHub
+      # and be readable by the default GITHUB_TOKEN before the first
+      # tag is pushed from this repo. If the engine is private, the
+      # default token is not sufficient — add `token: ${{ secrets.ENGINE_PAT }}`
+      # to this checkout step with a PAT that has repo-read access.
+      #
+      # Remove this step once the engine is published to
+      # proxy.golang.org and the Containerfile can `go mod download`
+      # the engine module normally.
       - name: Checkout engine
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:

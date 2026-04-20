@@ -45,6 +45,25 @@ if [[ ! -d "$ENGINE_PATH" ]]; then
     exit 1
 fi
 
+# Fail upfront on the common footgun of pointing ENGINE_PATH at the
+# wrong checkout — BuildKit would otherwise blow up mid-build with a
+# confusing "module github.com/lexfrei/pogo-pvp-engine not found"
+# deep in `go mod download`.
+ENGINE_GO_MOD="${ENGINE_PATH}/go.mod"
+if [[ ! -f "$ENGINE_GO_MOD" ]]; then
+    echo "ENGINE_PATH does not contain a go.mod: $ENGINE_PATH" >&2
+    echo "Expected the root of a github.com/lexfrei/pogo-pvp-engine checkout." >&2
+    exit 1
+fi
+
+ENGINE_MODULE_LINE="$(grep --max-count=1 '^module ' "$ENGINE_GO_MOD" || true)"
+if [[ "$ENGINE_MODULE_LINE" != "module github.com/lexfrei/pogo-pvp-engine" ]]; then
+    echo "ENGINE_PATH go.mod declares the wrong module: $ENGINE_MODULE_LINE" >&2
+    echo "Expected: module github.com/lexfrei/pogo-pvp-engine" >&2
+    echo "Check out the correct repository or fix ENGINE_PATH." >&2
+    exit 1
+fi
+
 echo "Building ${IMAGE}:${TAG}" >&2
 echo "  ENGINE_PATH=${ENGINE_PATH}" >&2
 echo "  VERSION=${VERSION}" >&2

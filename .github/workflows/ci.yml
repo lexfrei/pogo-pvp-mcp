@@ -18,23 +18,9 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
-      # go.mod replace points at ../pogo-pvp-engine on the developer
-      # laptop; CI checks the engine into a workspace-local path and
-      # rewrites the replace to point there. Drop this step (and the
-      # go mod edit below) once the engine is published to
-      # proxy.golang.org.
-      - name: Checkout engine
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
-        with:
-          repository: lexfrei/pogo-pvp-engine
-          path: .engine-src
-
       - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6
         with:
           go-version-file: go.mod
-
-      - name: Rewrite engine replace directive
-        run: go mod edit -replace=github.com/lexfrei/pogo-pvp-engine=./.engine-src
 
       - name: golangci-lint
         uses: golangci/golangci-lint-action@1e7e51e771db61008b38414a730f564565cf7c20 # v9
@@ -47,18 +33,9 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
-      - name: Checkout engine
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
-        with:
-          repository: lexfrei/pogo-pvp-engine
-          path: .engine-src
-
       - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6
         with:
           go-version-file: go.mod
-
-      - name: Rewrite engine replace directive
-        run: go mod edit -replace=github.com/lexfrei/pogo-pvp-engine=./.engine-src
 
       - name: Run tests
         run: go test -race -count=1 ./...
@@ -69,18 +46,9 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
-      - name: Checkout engine
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
-        with:
-          repository: lexfrei/pogo-pvp-engine
-          path: .engine-src
-
       - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6
         with:
           go-version-file: go.mod
-
-      - name: Rewrite engine replace directive
-        run: go mod edit -replace=github.com/lexfrei/pogo-pvp-engine=./.engine-src
 
       - name: Build binary
         run: go build -o /dev/null ./cmd/pogo-pvp-mcp
