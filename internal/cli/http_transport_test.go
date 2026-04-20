@@ -1,6 +1,7 @@
 package cli_test
 
 import (
+	"encoding/json"
 	"net/http/httptest"
 	"testing"
 
@@ -87,6 +88,70 @@ func TestMCPHTTPHandler_ListToolsOverHTTP(t *testing.T) {
 	}
 }
 
+// TestMCPHTTPHandler_ConcurrentWithInMemorySession proves the same
+// *mcp.Server instance can serve an HTTP client and a second
+// in-process client (the stdio analogue via NewInMemoryTransports)
+// at the same time. Production wiring runs stdio and HTTP
+// transports off one server construction — a regression where the
+// SDK serialises session state globally would surface here as a
+// deadlock or cross-session interference.
+func TestMCPHTTPHandler_ConcurrentWithInMemorySession(t *testing.T) {
+	t.Parallel()
+
+	ctx := t.Context()
+	mcpServer := buildWiredServer(t)
+
+	// HTTP transport on its own httptest server.
+	handler := cli.NewMCPHTTPHandler(mcpServer, nil)
+	httpServer := httptest.NewServer(handler)
+	t.Cleanup(httpServer.Close)
+
+	httpClient := mcp.NewClient(&mcp.Implementation{Name: "http", Version: "t"}, nil)
+	httpSession, err := httpClient.Connect(ctx,
+		&mcp.StreamableClientTransport{Endpoint: httpServer.URL}, nil)
+	if err != nil {
+		t.Fatalf("httpClient.Connect: %v", err)
+	}
+	defer httpSession.Close()
+
+	// In-memory transport on the SAME mcp.Server pointer.
+	serverT, clientT := mcp.NewInMemoryTransports()
+
+	_, err = mcpServer.Connect(ctx, serverT, nil)
+	if err != nil {
+		t.Fatalf("server.Connect: %v", err)
+	}
+
+	memClient := mcp.NewClient(&mcp.Implementation{Name: "mem", Version: "t"}, nil)
+	memSession, err := memClient.Connect(ctx, clientT, nil)
+	if err != nil {
+		t.Fatalf("memClient.Connect: %v", err)
+	}
+	defer memSession.Close()
+
+	// Issue ListTools on both sessions concurrently. Both must
+	// succeed within a reasonable deadline; a server-wide mutex
+	// would surface here as one blocking the other forever.
+	errCh := make(chan error, 2)
+
+	go func() {
+		_, err := httpSession.ListTools(ctx, nil)
+		errCh <- err
+	}()
+
+	go func() {
+		_, err := memSession.ListTools(ctx, nil)
+		errCh <- err
+	}()
+
+	for i := range 2 {
+		err := <-errCh
+		if err != nil {
+			t.Errorf("concurrent ListTools[%d]: %v", i, err)
+		}
+	}
+}
+
 // TestMCPHTTPHandler_CallToolOverHTTP pins round-trip behaviour: the
 // transport must accept a tool invocation and return the decoded
 // result over HTTP. This covers the hot-path behaviour public LLM
@@ -115,7 +180,7 @@ func TestMCPHTTPHandler_CallToolOverHTTP(t *testing.T) {
 	result, err := session.CallTool(ctx, &mcp.CallToolParams{
 		Name: "pvp_rank",
 		Arguments: map[string]any{
-			"species": "medicham",
+			"species": integrationFixtureSpecies,
 			"iv":      []int{0, 15, 15},
 			"league":  "great",
 		},
@@ -125,6 +190,43 @@ func TestMCPHTTPHandler_CallToolOverHTTP(t *testing.T) {
 	}
 
 	if result.IsError {
-		t.Errorf("CallTool returned IsError=true: %+v", result.Content)
+		t.Fatalf("CallTool returned IsError=true: %+v", result.Content)
+	}
+
+	// Parse the structured content to confirm the handler actually
+	// returned a RankResult payload. A blackbox check on !IsError
+	// alone would silently accept a no-op handler returning an empty
+	// success.
+	if result.StructuredContent == nil {
+		t.Fatalf("StructuredContent = nil, want RankResult JSON payload")
+	}
+
+	raw, err := json.Marshal(result.StructuredContent)
+	if err != nil {
+		t.Fatalf("marshal StructuredContent: %v", err)
+	}
+
+	var payload struct {
+		Species string  `json:"species"`
+		CP      int     `json:"cp"`
+		Level   float64 `json:"level"`
+	}
+
+	err = json.Unmarshal(raw, &payload)
+	if err != nil {
+		t.Fatalf("unmarshal RankResult: %v (raw=%s)", err, raw)
+	}
+
+	if payload.Species != integrationFixtureSpecies {
+		t.Errorf("Species = %q, want %q (round-trip via HTTP must preserve input)",
+			payload.Species, integrationFixtureSpecies)
+	}
+
+	if payload.CP <= 0 || payload.CP > 1500 {
+		t.Errorf("CP = %d, want (0, 1500] for medicham under great league", payload.CP)
+	}
+
+	if payload.Level < 1 || payload.Level > 50 {
+		t.Errorf("Level = %.1f, want within [1, 50]", payload.Level)
 	}
 }

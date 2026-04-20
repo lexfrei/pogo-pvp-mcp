@@ -160,8 +160,15 @@ func TestReadmeDocumentsMCPHTTPListener(t *testing.T) {
 	requiredPhrases := []string{
 		"POGO_PVP_SERVER_MCP_HTTP_LISTEN",
 		"Streamable HTTP",
-		"Phase 1 ships without rate-limit",
 		"trusted reverse proxy",
+		// Phase 1 gaps: each of the three missing middleware pieces
+		// must be called out by name so a future rewrite can't
+		// silently swallow any individual item.
+		"rate-limit",
+		"request-size cap",
+		"tool-call timeout",
+		// DNS-rebinding caveat.
+		"DNS-rebinding protection",
 	}
 
 	for _, phrase := range requiredPhrases {

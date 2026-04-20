@@ -64,9 +64,12 @@ const debugServerReadHeaderTimeout = 10 * time.Second
 // generous enough for proxies adding modest delay.
 const mcpHTTPReadHeaderTimeout = 5 * time.Second
 
-// mcpHTTPReadTimeout is the full body-read deadline. Public MCP
-// payloads are bounded (Phase 3 adds http.MaxBytesReader at 64 KiB),
-// so 30s is far more than any legitimate client needs.
+// mcpHTTPReadTimeout is the full body-read deadline. Phase 1 ships
+// without a body-size cap (Phase 3 adds http.MaxBytesReader at
+// 64 KiB), so this timeout is the only backstop against a malicious
+// client sending an arbitrarily long stream of bytes. 30s is far
+// more than any legitimate MCP client needs; tighten if Phase 3 adds
+// a smaller cap that makes the ceiling negligible.
 const mcpHTTPReadTimeout = 30 * time.Second
 
 // mcpHTTPWriteTimeout is the response-write deadline. Bumped above

@@ -173,6 +173,7 @@ func TestValidate_InvalidMCPHTTPListen(t *testing.T) {
 		{"non_numeric_port", "localhost:bad"},
 		{"port_above_max", "127.0.0.1:99999"},
 		{"negative_port", "127.0.0.1:-1"},
+		{"port_zero", "127.0.0.1:0"},
 	}
 
 	for _, tc := range cases {

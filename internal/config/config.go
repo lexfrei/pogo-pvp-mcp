@@ -258,11 +258,12 @@ var errListenAddressInvalid = errors.New("listen address invalid")
 // ("host:port", ":port", "[ipv6]:port") and reports whether it is
 // acceptable for net.Listen. Checks (beyond net.SplitHostPort):
 //
-//   - Port must be non-empty and a decimal integer in [0, maxPort].
-//     Port 0 is permitted at net.Listen time (kernel picks), but
-//     explicit 0 in config is nonsense (the listener would rebind
-//     every restart), so we additionally reject 0 here to align
-//     with the operator's intent when they hand-set the field.
+//   - Port must be non-empty and a decimal integer in the half-open
+//     range (0, maxPort]. Port 0 is permitted at net.Listen time
+//     (kernel picks), but explicit 0 in config is nonsense (the
+//     listener would rebind every restart), so we additionally
+//     reject 0 here to align with the operator's intent when they
+//     hand-set the field.
 //
 // Host is deliberately not validated beyond SplitHostPort's parse —
 // DNS names and IPv6 literals both round-trip through SplitHostPort,
