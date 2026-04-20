@@ -16,6 +16,7 @@ import (
 	"github.com/lexfrei/pogo-pvp-mcp/internal/debug"
 	"github.com/lexfrei/pogo-pvp-mcp/internal/gamemaster"
 	"github.com/lexfrei/pogo-pvp-mcp/internal/httpmw"
+	"github.com/lexfrei/pogo-pvp-mcp/internal/mcpmw"
 	"github.com/lexfrei/pogo-pvp-mcp/internal/rankings"
 	"github.com/lexfrei/pogo-pvp-mcp/internal/tools"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -147,6 +148,7 @@ func runServe(parent context.Context, rt *Runtime) error {
 	}
 
 	server := buildMCPServer(managers.Gamemaster, managers.Rankings)
+	attachMCPMiddleware(server, rt)
 	refreshDone := startRefreshLoop(ctx, rt, managers.Gamemaster)
 	debugDone := startDebugServer(ctx, rt, managers.Gamemaster)
 
@@ -541,6 +543,20 @@ func NewMCPHTTPHandler(server *mcp.Server, logger *slog.Logger) http.Handler {
 			JSONResponse: true,
 			Logger:       logger,
 		},
+	)
+}
+
+// attachMCPMiddleware installs the Phase 2 SDK-level middleware on
+// the MCP server: structured logging for every method call +
+// per-method context timeouts. Ordering is outer → inner via the
+// SDK's AddReceivingMiddleware(m1, m2) = m1(m2(h)) convention, so
+// Logging wraps Timeout — the log entry captures the context-
+// deadline-exceeded error when Timeout fires. Applies to BOTH
+// stdio and the public HTTP transports (same *mcp.Server instance).
+func attachMCPMiddleware(server *mcp.Server, rt *Runtime) {
+	server.AddReceivingMiddleware(
+		mcpmw.Logging(rt.Logger),
+		mcpmw.Timeout(rt.Config.Server.ToolTimeoutDefault, rt.Config.Server.ToolTimeoutHeavy),
 	)
 }
 

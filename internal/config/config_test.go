@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/lexfrei/pogo-pvp-mcp/internal/config"
 )
@@ -44,6 +45,14 @@ func TestLoad_Defaults(t *testing.T) {
 	if len(cfg.Server.TrustedProxies) != 0 {
 		t.Errorf("Server.TrustedProxies = %v, want empty slice (default)",
 			cfg.Server.TrustedProxies)
+	}
+	if cfg.Server.ToolTimeoutDefault != 5*time.Second {
+		t.Errorf("Server.ToolTimeoutDefault = %v, want 5s (default)",
+			cfg.Server.ToolTimeoutDefault)
+	}
+	if cfg.Server.ToolTimeoutHeavy != 30*time.Second {
+		t.Errorf("Server.ToolTimeoutHeavy = %v, want 30s (default)",
+			cfg.Server.ToolTimeoutHeavy)
 	}
 	if cfg.Log.Level != "info" {
 		t.Errorf("Log.Level = %q, want \"info\"", cfg.Log.Level)
@@ -306,6 +315,43 @@ func TestValidate_MaxRequestBytesNonNegative(t *testing.T) {
 	}
 
 	cfg.Server.MaxRequestBytes = -1
+
+	err = cfg.Validate()
+	if !errors.Is(err, config.ErrInvalidConfig) {
+		t.Errorf("Validate() = %v, want wrapping ErrInvalidConfig", err)
+	}
+}
+
+// TestValidate_ToolTimeoutDefaultNonNegative pins the Phase 2
+// rule: timeouts may be zero (= tier disabled) but never negative.
+// A negative duration would coerce to an immediately-elapsed ctx
+// and every call of that tier would fail with DeadlineExceeded.
+func TestValidate_ToolTimeoutDefaultNonNegative(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := config.Load("")
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	cfg.Server.ToolTimeoutDefault = -1 * time.Second
+
+	err = cfg.Validate()
+	if !errors.Is(err, config.ErrInvalidConfig) {
+		t.Errorf("Validate() = %v, want wrapping ErrInvalidConfig", err)
+	}
+}
+
+// TestValidate_ToolTimeoutHeavyNonNegative covers the heavy sibling.
+func TestValidate_ToolTimeoutHeavyNonNegative(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := config.Load("")
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	cfg.Server.ToolTimeoutHeavy = -5 * time.Second
 
 	err = cfg.Validate()
 	if !errors.Is(err, config.ErrInvalidConfig) {

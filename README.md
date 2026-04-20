@@ -105,9 +105,17 @@ Phase 3 adds the net/http middleware chain around the MCP handler (order outer �
 
 **Phantom rate-limit pitfall**: when `trusted_proxies` covers the proxy IP but the proxy does NOT forward an `X-Forwarded-For` header (or all XFF entries are themselves trusted), every downstream user collapses to a single rate-limit bucket keyed on the proxy IP. Symptom: legitimate traffic rate-limits itself long before the configured RPS. Fix: configure your reverse proxy to set / forward `X-Forwarded-For` on requests to the MCP endpoint.
 
-Still missing until Phase 2 lands: **tool-call timeout** (per-method context deadline). Long-running tools can currently tie up a connection for the full 60s HTTP WriteTimeout regardless of caller patience.
 
 **DNS-rebinding protection (SDK built-in)**: the MCP SDK rejects requests that arrive via a loopback listener (`127.0.0.1`, `[::1]`) with a non-loopback `Host` header — a 403 is returned. When binding to `127.0.0.1` for local development, keep the client's `Host` header as `127.0.0.1:PORT` (or drop it). Proxied deployments where `Host` matches the public FQDN and the listener is on `0.0.0.0` are unaffected.
+
+## MCP-level controls (stdio AND HTTP)
+
+These wrappers apply to every MCP method on the server regardless of transport — Claude Desktop over stdio gets the same coverage as a remote LLM over HTTP.
+
+- **Per-method timeout**: heavy methods (`pvp_team_builder`, `pvp_team_analysis`, `pvp_threat_coverage`, `pvp_counter_finder`, `pvp_rank_batch`) get `server.tool_timeout_heavy` (default `30s`); everything else gets `server.tool_timeout_default` (default `5s`). Zero/negative disables the wrapper for that tier.
+- **Structured logging**: every call emits `mcp method ok` or `mcp method failed` with `method`, `tool`, `duration_ms`, and on failure `error` + `timed_out` (true iff the error wraps `context.DeadlineExceeded`). Honours the server's `POGO_PVP_LOG_FORMAT` (text|json).
+
+Env vars: `POGO_PVP_SERVER_TOOL_TIMEOUT_DEFAULT`, `POGO_PVP_SERVER_TOOL_TIMEOUT_HEAVY`.
 
 ## Claude Desktop integration
 
