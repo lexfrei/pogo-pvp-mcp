@@ -4,11 +4,20 @@
 # container with a non-root user, CA certs for the upstream pvpoke
 # HTTPS fetch, and the statically-linked binary.
 #
-# NOTE: the build depends on github.com/lexfrei/pogo-pvp-engine being
-# resolvable by `go mod download`, i.e. published + tagged on GitHub.
-# During the engine-sibling development window (replace directive in
-# go.mod points at ../pogo-pvp-engine) this Containerfile will not
-# build cleanly. README documents the prerequisite.
+# Engine dependency: the go.mod replace directive points at
+# ../pogo-pvp-engine on the developer host. At image-build time the
+# engine source must be supplied via a named BuildKit context so the
+# builder stage can COPY it into a container path; then go mod edit
+# rewrites the replace to that in-container path. This removes the
+# old "waiting for engine release" blocker — the image builds
+# cleanly today against the sibling checkout.
+#
+# Build invocation (see scripts/build-image.sh):
+#
+#   docker buildx build \
+#     --build-context engine=../pogo-pvp-engine \
+#     --tag pogo-pvp-mcp:dev \
+#     .
 
 # Image digest deliberately omitted while we're not yet cutting
 # releases; renovate/dependabot will pin once the first ghcr.io tag
@@ -26,10 +35,28 @@ RUN echo 'nobody:x:65534:65534:Nobody:/home/nobody:' > /tmp/passwd && \
 
 WORKDIR /build
 
+# Copy the sibling engine source from the `engine` named build-context
+# BEFORE the go.mod / go.sum copy so the replace-directive rewrite
+# can point at a path that exists at go-mod-download time.
+COPY --from=engine . /build/pogo-pvp-engine
+
 COPY go.mod go.sum ./
-RUN go mod download
+
+# Rewrite the replace directive from the host-relative ../pogo-pvp-engine
+# to the in-container absolute path. `go mod edit -replace` is
+# idempotent and overrides the existing directive; `go mod download`
+# then sees a valid local module.
+RUN go mod edit -replace=github.com/lexfrei/pogo-pvp-engine=/build/pogo-pvp-engine && \
+    go mod download
 
 COPY . .
+
+# COPY . . clobbered the go.mod we just edited (the host's go.mod
+# still has the ../pogo-pvp-engine replace). Re-apply the in-
+# container replace before go build — the second edit is cheap and
+# removes the need for a .containerignore entry just for go.mod.
+RUN go mod edit -replace=github.com/lexfrei/pogo-pvp-engine=/build/pogo-pvp-engine
+
 RUN CGO_ENABLED=0 go build \
     -ldflags "-s -w \
         -X github.com/lexfrei/pogo-pvp-mcp/internal/cli.serverVersion=${VERSION} \

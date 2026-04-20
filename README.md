@@ -121,7 +121,9 @@ Env vars: `POGO_PVP_SERVER_TOOL_TIMEOUT_DEFAULT`, `POGO_PVP_SERVER_TOOL_TIMEOUT_
 
 ## Claude Desktop integration
 
-Add the server to `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS) or `%APPDATA%\Claude\claude_desktop_config.json` (Windows):
+Add the server to `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS) or `%APPDATA%\Claude\claude_desktop_config.json` (Windows). Two options — pick whichever matches how you ship the binary.
+
+### Native binary
 
 ```json
 {
@@ -134,15 +136,62 @@ Add the server to `~/Library/Application Support/Claude/claude_desktop_config.js
 }
 ```
 
-Restart Claude Desktop. The twenty-two `pvp_*` tools will appear in the tool list. If a tool returns "gamemaster not loaded", run `pogo-pvp-mcp fetch-gm` once to warm the cache.
+### Docker image (recommended)
+
+Build the image once from the sibling `pogo-pvp-engine` checkout:
+
+```bash
+scripts/build-image.sh            # tags pogo-pvp-mcp:dev
+scripts/build-image.sh v1.2.3     # tags pogo-pvp-mcp:v1.2.3
+```
+
+Optionally prime the gamemaster cache into a named volume so the
+first Claude Desktop launch doesn't have to fetch upstream (Docker
+creates the volume on first `--volume` reference, so this step is
+skippable — the server will bootstrap on first launch if the cache
+is empty):
+
+```bash
+docker run --rm \
+  --volume pogo-pvp-mcp-cache:/home/nobody/.cache/pogo-pvp-mcp \
+  pogo-pvp-mcp:dev fetch-gm
+```
+
+Then wire Claude Desktop at the `docker` binary. Replace `docker`
+with the absolute path on your machine if Claude Desktop can't find
+it on `$PATH` (on macOS Apple Silicon that's typically
+`/opt/homebrew/bin/docker`; Intel Macs / Linux use `/usr/local/bin/docker` or `/usr/bin/docker`):
+
+```json
+{
+  "mcpServers": {
+    "pogo-pvp": {
+      "command": "docker",
+      "args": [
+        "run",
+        "--interactive",
+        "--init",
+        "--rm",
+        "--volume",
+        "pogo-pvp-mcp-cache:/home/nobody/.cache/pogo-pvp-mcp",
+        "pogo-pvp-mcp:dev"
+      ]
+    }
+  }
+}
+```
+
+`--interactive` keeps stdio attached (the MCP transport is stdio-over-pipe); `--init` inserts a minimal init process that reaps zombies and propagates signals cleanly so `SIGTERM` / `SIGINT` from Claude Desktop terminates the MCP process without relying on the Go binary's PID-1 signal handling; `--rm` removes the container on process exit so Claude Desktop restarts don't leave stopped containers behind; the named volume preserves the gamemaster + rankings cache across launches so the tool doesn't re-fetch upstream on every `initialize`.
+
+Restart Claude Desktop. The twenty-two `pvp_*` tools appear in the tool list. If a tool returns "gamemaster not loaded", re-run the `docker run ... fetch-gm` priming command or delete the volume and let the server bootstrap on next launch.
 
 ## Container image
 
-A `Containerfile` ships in the repo root; tagged builds produce multi-arch (linux/amd64 + linux/arm64, cosign-signed) images at `ghcr.io/${GITHUB_REPOSITORY}:vX.Y.Z`. Until the GitHub repo is renamed from `pvpoke-mcp` to `pogo-pvp-mcp`, the effective image coordinate is `ghcr.io/lexfrei/pvpoke-mcp:vX.Y.Z`; after the rename it flips to `ghcr.io/lexfrei/pogo-pvp-mcp:vX.Y.Z` without any workflow change (the release workflow reads `${{ github.repository }}`).
+A `Containerfile` ships in the repo root; tagged builds produce multi-arch (linux/amd64 + linux/arm64, cosign-signed) images at `ghcr.io/${GITHUB_REPOSITORY}:vX.Y.Z`. Until the GitHub repo is renamed from `pvpoke-mcp` to `pogo-pvp-mcp`, the effective image coordinate is `ghcr.io/lexfrei/pvpoke-mcp:vX.Y.Z`; after the rename it flips to `ghcr.io/lexfrei/pogo-pvp-mcp:vX.Y.Z` without any workflow change (the release workflow reads `${{ github.repository }}`). The release workflow also checks out `lexfrei/pogo-pvp-engine` into a peer path and wires it through BuildKit's `build-contexts` so tag pushes build cleanly against the sibling repo until the engine is published to the Go module proxy.
 
 The container `EXPOSE`s two ports: `8080` for the public MCP HTTP endpoint (enable via `POGO_PVP_SERVER_MCP_HTTP_LISTEN=:8080`) and `8787` for the debug surface (`server.http_port`; keep on the container-internal loopback, never map to the host's public interface).
 
-Note: the image build depends on `github.com/lexfrei/pogo-pvp-engine` being resolvable by `go mod download` — during the engine-sibling development window (while the `replace` directive in `go.mod` points at a local `../pogo-pvp-engine` checkout), the Containerfile will not build cleanly. It becomes buildable once the engine repository is published and tagged.
+The Containerfile uses a BuildKit **named build-context** to import the sibling `pogo-pvp-engine` source so the `go.mod` replace directive is satisfied inside the image without publishing the engine repo. `scripts/build-image.sh` wires the context up for you (`docker buildx build --build-context engine=../pogo-pvp-engine ...`) and rewrites the replace directive to an in-container path (`/build/pogo-pvp-engine`) before `go mod download`. **Prerequisite**: a checkout of `github.com/lexfrei/pogo-pvp-engine` at the peer directory the script expects (default `../pogo-pvp-engine`; override via `ENGINE_PATH`). Without it the build errors before `COPY --from=engine` resolves. The release workflow mirrors this by checking the engine repo out via `actions/checkout`, so tag-push builds succeed once the engine repo is publicly accessible on GitHub.
 
 ## Public deployment (reverse proxy example)
 
