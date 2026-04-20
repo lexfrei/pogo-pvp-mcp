@@ -938,9 +938,7 @@ func precomputeRatingMatrix(
 			defer func() { <-sem }()
 
 			rowFails := fillRatingMatrixRow(ctx, poolCombatants[rowIdx], meta, result.Entries[rowIdx])
-			if rowFails > 0 {
-				failuresAll.Add(int64(rowFails))
-			}
+			failuresAll.Add(int64(rowFails))
 		}(i)
 	}
 
