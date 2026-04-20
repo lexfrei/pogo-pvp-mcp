@@ -87,17 +87,30 @@ type Config struct {
 //
 // MCPHTTPListen governs the PUBLIC MCP endpoint (Streamable HTTP). It
 // is bound on whatever address the operator chooses (":8080" or
-// "0.0.0.0:8080" typically). Rate limit, max body size, and real IP
-// resolution will be protected by a net/http middleware chain added
-// in a follow-up phase; Phase 1 ships without those controls, so
-// operators running this listener today should only expose it behind
-// a trusted reverse proxy that enforces equivalent protections.
-// Empty = disabled; stdio remains the only transport.
+// "0.0.0.0:8080" typically) and is protected by the Phase 3 net/http
+// middleware chain (recover → realIP → rateLimit → maxBytes). Empty
+// = disabled; stdio remains the only transport.
+//
+// Phase 3 controls:
+//
+//   - TrustedProxies: CIDR list of trusted reverse proxies. When a
+//     request arrives from a trusted source address, the first
+//     X-Forwarded-For entry is treated as the effective client IP
+//     (used for rate-limit keying and logging). Empty = ignore XFF.
+//   - RateLimitRPS / RateLimitBurst: per-client-IP token-bucket
+//     parameters. RPS=0 disables rate limiting entirely (safe for
+//     dev; never use in prod).
+//   - MaxRequestBytes: body-size cap via http.MaxBytesReader. 0 =
+//     disabled (safe for dev).
 type ServerConfig struct {
-	Transport     string `mapstructure:"transport"`
-	HTTPHost      string `mapstructure:"http_host"`
-	HTTPPort      int    `mapstructure:"http_port"`
-	MCPHTTPListen string `mapstructure:"mcp_http_listen"`
+	Transport       string   `mapstructure:"transport"`
+	HTTPHost        string   `mapstructure:"http_host"`
+	HTTPPort        int      `mapstructure:"http_port"`
+	MCPHTTPListen   string   `mapstructure:"mcp_http_listen"`
+	TrustedProxies  []string `mapstructure:"trusted_proxies"`
+	RateLimitRPS    int      `mapstructure:"rate_limit_rps"`
+	RateLimitBurst  int      `mapstructure:"rate_limit_burst"`
+	MaxRequestBytes int64    `mapstructure:"max_request_bytes"`
 }
 
 // LogConfig toggles slog output level and format.
@@ -164,6 +177,10 @@ func applyDefaults(view *viper.Viper) {
 	view.SetDefault("server.http_host", "127.0.0.1")
 	view.SetDefault("server.http_port", 0)
 	view.SetDefault("server.mcp_http_listen", "")
+	view.SetDefault("server.trusted_proxies", []string{})
+	view.SetDefault("server.rate_limit_rps", defaultRateLimitRPS)
+	view.SetDefault("server.rate_limit_burst", defaultRateLimitBurst)
+	view.SetDefault("server.max_request_bytes", defaultMaxRequestBytes)
 
 	view.SetDefault("log.level", "info")
 	view.SetDefault("log.format", "text")
@@ -196,6 +213,23 @@ var validLogFormats = []string{"text", "json"}
 // maxPort is the top of the TCP port range.
 const maxPort = 65535
 
+// defaultRateLimitRPS is the per-client-IP request rate. Low enough
+// to stop naive abusers from exhausting team_builder capacity; high
+// enough that a legitimate LLM client session (dozens of tool calls
+// per user turn) is never rate-limited.
+const defaultRateLimitRPS = 10
+
+// defaultRateLimitBurst is the token-bucket burst budget. Headroom
+// for a legitimate client to send its tools/list + several tool
+// calls in a single burst before settling into the RPS pace.
+const defaultRateLimitBurst = 20
+
+// defaultMaxRequestBytes caps the public MCP HTTP body size. MCP
+// requests are small — 64 KiB is more than enough for a pool of 50
+// combatants with full Options blocks; malicious oversized posts are
+// cut off before they reach the handler.
+const defaultMaxRequestBytes int64 = 64 * 1024
+
 // Validate reports whether every field is consistent. Callers usually
 // receive this via [Load]; hand calls exist for tests that mutate a
 // loaded [Config] in-place.
@@ -210,6 +244,22 @@ func (c *Config) Validate() error {
 
 // validateServerAndLog covers the transport/log/port enum checks.
 func (c *Config) validateServerAndLog() error {
+	err := c.validateTransportAndDebug()
+	if err != nil {
+		return err
+	}
+
+	err = c.validateMCPHTTPPhase3()
+	if err != nil {
+		return err
+	}
+
+	return c.validateLog()
+}
+
+// validateTransportAndDebug covers the stdio / debug HTTP surface:
+// transport enum + debug listener port range.
+func (c *Config) validateTransportAndDebug() error {
 	if !slices.Contains(validTransports, c.Server.Transport) {
 		return fmt.Errorf("%w: server.transport=%q, want one of %v",
 			ErrInvalidConfig, c.Server.Transport, validTransports)
@@ -220,6 +270,14 @@ func (c *Config) validateServerAndLog() error {
 			ErrInvalidConfig, c.Server.HTTPPort, maxPort)
 	}
 
+	return nil
+}
+
+// validateMCPHTTPPhase3 covers the public MCP HTTP listener plus the
+// Phase 3 middleware controls (rate limit, body cap, trusted
+// proxies). Each control has a "0 / empty = disabled" form; negative
+// is rejected.
+func (c *Config) validateMCPHTTPPhase3() error {
 	if c.Server.MCPHTTPListen != "" {
 		err := validateListenAddress(c.Server.MCPHTTPListen)
 		if err != nil {
@@ -228,6 +286,42 @@ func (c *Config) validateServerAndLog() error {
 		}
 	}
 
+	if c.Server.RateLimitRPS < 0 {
+		return fmt.Errorf("%w: server.rate_limit_rps=%d must be non-negative",
+			ErrInvalidConfig, c.Server.RateLimitRPS)
+	}
+
+	if c.Server.RateLimitBurst < 0 {
+		return fmt.Errorf("%w: server.rate_limit_burst=%d must be non-negative",
+			ErrInvalidConfig, c.Server.RateLimitBurst)
+	}
+
+	if c.Server.MaxRequestBytes < 0 {
+		return fmt.Errorf("%w: server.max_request_bytes=%d must be non-negative",
+			ErrInvalidConfig, c.Server.MaxRequestBytes)
+	}
+
+	// CIDR validation is the same one httpmw.ParseTrustedProxies
+	// runs at startup — we replay it here so misconfigurations fail
+	// at config load rather than on first public request. Both
+	// validators TrimSpace the entry first so a leading/trailing
+	// space does not split the two into "valid at startup, invalid
+	// at load" or vice versa. Keeping net.ParseCIDR inline (vs.
+	// calling httpmw.ParseTrustedProxies) avoids an import cycle
+	// and keeps config free of runtime deps.
+	for _, cidr := range c.Server.TrustedProxies {
+		_, _, err := net.ParseCIDR(strings.TrimSpace(cidr))
+		if err != nil {
+			return fmt.Errorf("%w: server.trusted_proxies=%q: %w",
+				ErrInvalidConfig, cidr, err)
+		}
+	}
+
+	return nil
+}
+
+// validateLog checks the slog handler selection.
+func (c *Config) validateLog() error {
 	if !slices.Contains(validLogLevels, c.Log.Level) {
 		return fmt.Errorf("%w: log.level=%q, want one of %v",
 			ErrInvalidConfig, c.Log.Level, validLogLevels)

@@ -31,6 +31,20 @@ func TestLoad_Defaults(t *testing.T) {
 	if cfg.Server.MCPHTTPListen != "" {
 		t.Errorf("Server.MCPHTTPListen = %q, want empty (disabled)", cfg.Server.MCPHTTPListen)
 	}
+	if cfg.Server.RateLimitRPS != 10 {
+		t.Errorf("Server.RateLimitRPS = %d, want 10 (default)", cfg.Server.RateLimitRPS)
+	}
+	if cfg.Server.RateLimitBurst != 20 {
+		t.Errorf("Server.RateLimitBurst = %d, want 20 (default)", cfg.Server.RateLimitBurst)
+	}
+	if cfg.Server.MaxRequestBytes != 64*1024 {
+		t.Errorf("Server.MaxRequestBytes = %d, want %d (64 KiB default)",
+			cfg.Server.MaxRequestBytes, 64*1024)
+	}
+	if len(cfg.Server.TrustedProxies) != 0 {
+		t.Errorf("Server.TrustedProxies = %v, want empty slice (default)",
+			cfg.Server.TrustedProxies)
+	}
 	if cfg.Log.Level != "info" {
 		t.Errorf("Log.Level = %q, want \"info\"", cfg.Log.Level)
 	}
@@ -241,6 +255,103 @@ func TestValidate_EmptyMCPHTTPListenIsValid(t *testing.T) {
 	err = cfg.Validate()
 	if err != nil {
 		t.Errorf("Validate() = %v, want nil (empty is the disabled form)", err)
+	}
+}
+
+// TestValidate_RateLimitRPSNonNegative pins the Phase 3 rule: RPS
+// and burst may be zero (= disabled) but never negative. Negative
+// would silently fail downstream where rate.Limit coerces it into
+// the "no tokens ever" regime and every request gets 429.
+func TestValidate_RateLimitRPSNonNegative(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := config.Load("")
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	cfg.Server.RateLimitRPS = -1
+
+	err = cfg.Validate()
+	if !errors.Is(err, config.ErrInvalidConfig) {
+		t.Errorf("Validate() = %v, want wrapping ErrInvalidConfig", err)
+	}
+}
+
+// TestValidate_RateLimitBurstNonNegative covers the burst sibling.
+func TestValidate_RateLimitBurstNonNegative(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := config.Load("")
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	cfg.Server.RateLimitBurst = -5
+
+	err = cfg.Validate()
+	if !errors.Is(err, config.ErrInvalidConfig) {
+		t.Errorf("Validate() = %v, want wrapping ErrInvalidConfig", err)
+	}
+}
+
+// TestValidate_MaxRequestBytesNonNegative pins the cap field: 0 =
+// disabled is valid; negative is nonsense.
+func TestValidate_MaxRequestBytesNonNegative(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := config.Load("")
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	cfg.Server.MaxRequestBytes = -1
+
+	err = cfg.Validate()
+	if !errors.Is(err, config.ErrInvalidConfig) {
+		t.Errorf("Validate() = %v, want wrapping ErrInvalidConfig", err)
+	}
+}
+
+// TestValidate_TrustedProxyWhitespaceTolerated pins that a CIDR
+// entry with surrounding whitespace is accepted verbatim at config
+// load, matching httpmw.ParseTrustedProxies which also TrimSpaces
+// before net.ParseCIDR. An inconsistency here would produce
+// "invalid at config load, fine at runtime parse" for a YAML file
+// the user put spaces around and expected to work.
+func TestValidate_TrustedProxyWhitespaceTolerated(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := config.Load("")
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	cfg.Server.TrustedProxies = []string{"  10.0.0.0/8  "}
+
+	err = cfg.Validate()
+	if err != nil {
+		t.Errorf("Validate() = %v, want nil (TrimSpace must match httpmw.ParseTrustedProxies)", err)
+	}
+}
+
+// TestValidate_InvalidTrustedProxyCIDR pins that a malformed CIDR
+// entry fails at config load rather than silently accepting every
+// X-Forwarded-For (because no trust entries match). Empty slice is
+// valid (the safe default — trust nobody).
+func TestValidate_InvalidTrustedProxyCIDR(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := config.Load("")
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	cfg.Server.TrustedProxies = []string{"not-a-cidr"}
+
+	err = cfg.Validate()
+	if !errors.Is(err, config.ErrInvalidConfig) {
+		t.Errorf("Validate() = %v, want wrapping ErrInvalidConfig", err)
 	}
 }
 

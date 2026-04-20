@@ -15,6 +15,7 @@ import (
 
 	"github.com/lexfrei/pogo-pvp-mcp/internal/debug"
 	"github.com/lexfrei/pogo-pvp-mcp/internal/gamemaster"
+	"github.com/lexfrei/pogo-pvp-mcp/internal/httpmw"
 	"github.com/lexfrei/pogo-pvp-mcp/internal/rankings"
 	"github.com/lexfrei/pogo-pvp-mcp/internal/tools"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -148,7 +149,14 @@ func runServe(parent context.Context, rt *Runtime) error {
 	server := buildMCPServer(managers.Gamemaster, managers.Rankings)
 	refreshDone := startRefreshLoop(ctx, rt, managers.Gamemaster)
 	debugDone := startDebugServer(ctx, rt, managers.Gamemaster)
-	mcpHTTPDone := startMCPHTTPServer(ctx, rt, server)
+
+	mcpHTTPDone, err := startMCPHTTPServer(ctx, rt, server)
+	if err != nil {
+		stop()
+		waitForBackgroundShutdown(rt, refreshDone, debugDone, nil)
+
+		return fmt.Errorf("start MCP HTTP listener: %w", err)
+	}
 
 	rt.Logger.Info("starting stdio transport",
 		slog.String("transport", rt.Config.Server.Transport),
@@ -536,21 +544,60 @@ func NewMCPHTTPHandler(server *mcp.Server, logger *slog.Logger) http.Handler {
 	)
 }
 
+// buildMCPHTTPMiddlewareChain composes the Phase 3 protective
+// middleware (recover → realIP → rateLimit → maxBytes) around the
+// SDK's StreamableHTTPHandler. The rate limiter is returned
+// alongside so the caller can Stop it during shutdown (goroutine
+// hygiene — the janitor outlives the http.Server without it).
+func buildMCPHTTPMiddlewareChain(
+	rt *Runtime, mcpServer *mcp.Server,
+) (http.Handler, *httpmw.RateLimiter, error) {
+	trusted, err := httpmw.ParseTrustedProxies(rt.Config.Server.TrustedProxies)
+	if err != nil {
+		return nil, nil, fmt.Errorf("parse trusted proxies: %w", err)
+	}
+
+	limiter := httpmw.NewRateLimiter(
+		rt.Config.Server.RateLimitRPS,
+		rt.Config.Server.RateLimitBurst,
+	)
+
+	handler := httpmw.Chain(
+		NewMCPHTTPHandler(mcpServer, rt.Logger),
+		httpmw.Recover(rt.Logger),
+		httpmw.RealIP(trusted),
+		limiter.Middleware,
+		httpmw.MaxBytes(rt.Config.Server.MaxRequestBytes),
+	)
+
+	return handler, limiter, nil
+}
+
 // startMCPHTTPServer spins up the public Streamable HTTP MCP listener
 // when MCPHTTPListen is non-empty. Mirrors startDebugServer's
 // goroutine / done-channel pattern so the caller (runServe) can
 // coordinate shutdown uniformly across both listeners. Returns nil
-// when the listener is disabled so the caller can skip its wait step.
+// when the listener is disabled so the caller can skip its wait
+// step. Propagates config-parse failures from the middleware chain
+// (e.g. malformed TrustedProxies CIDR) as a startup error.
 func startMCPHTTPServer(
 	ctx context.Context, rt *Runtime, mcpServer *mcp.Server,
-) <-chan struct{} {
+) (<-chan struct{}, error) {
 	if rt.Config.Server.MCPHTTPListen == "" {
-		return nil
+		// Disabled listener: no goroutine to wait on, no error to
+		// surface. waitForBackgroundShutdown skips on nil channel.
+		//nolint:nilnil // disabled listener is intentionally (nil, nil) — the caller has no work to wait for and no startup failure to report.
+		return nil, nil
+	}
+
+	handler, limiter, err := buildMCPHTTPMiddlewareChain(rt, mcpServer)
+	if err != nil {
+		return nil, err
 	}
 
 	server := &http.Server{
 		Addr:              rt.Config.Server.MCPHTTPListen,
-		Handler:           NewMCPHTTPHandler(mcpServer, rt.Logger),
+		Handler:           handler,
 		ReadHeaderTimeout: mcpHTTPReadHeaderTimeout,
 		ReadTimeout:       mcpHTTPReadTimeout,
 		WriteTimeout:      mcpHTTPWriteTimeout,
@@ -565,22 +612,25 @@ func startMCPHTTPServer(
 		defer close(serverDone)
 
 		rt.Logger.Info("starting MCP HTTP listener",
-			slog.String("addr", rt.Config.Server.MCPHTTPListen))
+			slog.String("addr", rt.Config.Server.MCPHTTPListen),
+			slog.Int("rate_limit_rps", rt.Config.Server.RateLimitRPS),
+			slog.Int64("max_request_bytes", rt.Config.Server.MaxRequestBytes))
 
-		err := server.ListenAndServe()
-		if err != nil && !errors.Is(err, http.ErrServerClosed) {
+		serveErr := server.ListenAndServe()
+		if serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) {
 			rt.Logger.Error("MCP HTTP listener failed",
-				slog.String("error", err.Error()))
+				slog.String("error", serveErr.Error()))
 		}
 	}()
 
 	go func() {
 		defer close(done)
+		defer limiter.Stop()
 
 		watchAndShutdownMCPHTTP(ctx, rt, server, serverDone)
 	}()
 
-	return done
+	return done, nil
 }
 
 // watchAndShutdownMCPHTTP is the MCP-HTTP counterpart to

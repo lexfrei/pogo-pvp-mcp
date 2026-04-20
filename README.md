@@ -94,7 +94,18 @@ Behaviour:
 - **Timeouts**: ReadHeader 5s, Read 30s, Write 60s, Idle 90s, MaxHeaderBytes 64 KiB. Graceful shutdown drains in 60s on `SIGTERM`.
 - **Separate from debug**: the loopback debug server (`server.http_port`) stays on `127.0.0.1` with its auth-free `/healthz` / `/refresh` endpoints. The two listeners are orthogonal.
 
-**Phase 1 ships without `rate-limit`, `request-size cap`, or `tool-call timeout` middleware**. Until Phases 2–3 land, run this listener only behind a trusted reverse proxy that enforces those controls upstream, or keep it bound to a private network. Direct exposure to the public internet is premature.
+Phase 3 adds the net/http middleware chain around the MCP handler (order outer → inner: `recover → realIP → rateLimit → maxBytes`). Each layer is configurable:
+
+| Field (env var) | Default | 0 / empty means |
+| --- | --- | --- |
+| `server.trusted_proxies` (`POGO_PVP_SERVER_TRUSTED_PROXIES`) | `[]` (trust nobody) | `X-Forwarded-For` always ignored; `RemoteAddr` is the client |
+| `server.rate_limit_rps` (`POGO_PVP_SERVER_RATE_LIMIT_RPS`) | `10` requests/sec per client IP | `0` disables rate limiting entirely — dev only |
+| `server.rate_limit_burst` (`POGO_PVP_SERVER_RATE_LIMIT_BURST`) | `20` burst budget | `0` silently clamped to `1` when RPS > 0 — `burst=0` would reject every first request |
+| `server.max_request_bytes` (`POGO_PVP_SERVER_MAX_REQUEST_BYTES`) | `65536` (64 KiB) | `0` disables the body cap — dev only |
+
+**Phantom rate-limit pitfall**: when `trusted_proxies` covers the proxy IP but the proxy does NOT forward an `X-Forwarded-For` header (or all XFF entries are themselves trusted), every downstream user collapses to a single rate-limit bucket keyed on the proxy IP. Symptom: legitimate traffic rate-limits itself long before the configured RPS. Fix: configure your reverse proxy to set / forward `X-Forwarded-For` on requests to the MCP endpoint.
+
+Still missing until Phase 2 lands: **tool-call timeout** (per-method context deadline). Long-running tools can currently tie up a connection for the full 60s HTTP WriteTimeout regardless of caller patience.
 
 **DNS-rebinding protection (SDK built-in)**: the MCP SDK rejects requests that arrive via a loopback listener (`127.0.0.1`, `[::1]`) with a non-loopback `Host` header — a 403 is returned. When binding to `127.0.0.1` for local development, keep the client's `Host` header as `127.0.0.1:PORT` (or drop it). Proxied deployments where `Host` matches the public FQDN and the listener is on `0.0.0.0` are unaffected.
 
