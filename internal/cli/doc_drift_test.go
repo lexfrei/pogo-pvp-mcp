@@ -144,6 +144,47 @@ func TestReadmeToolCountConsistent(t *testing.T) {
 	}
 }
 
+// TestReadmeEnumeratesAutoEvolveActions pins the exact set of
+// auto_evolve_action values on PoolMemberStatus. walkEvolutionChain
+// only emits skipReasonBranching / skipReasonOverCap / "", so the
+// JSON contract admits exactly {kept, evolved, skipped_branching,
+// skipped_over_cap}. An earlier revision shipped a fifth
+// `skipped_unrecognised` constant that was unreachable in code yet
+// documented as valid — this test fires on any `skipped_*` token
+// that isn't one of the canonical two, catching the drift before
+// a client builds an exhaustive switch on a spurious value.
+func TestReadmeEnumeratesAutoEvolveActions(t *testing.T) {
+	t.Parallel()
+
+	for _, path := range []string{"README.md", "CLAUDE.md"} {
+		src := readRepoFile(t, path)
+
+		// Canonical four must all appear.
+		canonical := []string{
+			"`kept`", "`evolved`", "`skipped_branching`", "`skipped_over_cap`",
+		}
+		for _, token := range canonical {
+			if !strings.Contains(src, token) {
+				t.Errorf("%s missing canonical auto_evolve_action value %s", path, token)
+			}
+		}
+
+		// Stale / phantom values that must NOT appear.
+		stale := []string{
+			"`skipped_unrecognised`",
+			"`skipped_unrecog`",
+			"`skipped_unknown`",
+			"`skipped_other`",
+		}
+		for _, token := range stale {
+			if strings.Contains(src, token) {
+				t.Errorf("%s still references stale auto_evolve_action value %s; "+
+					"walkEvolutionChain cannot produce it", path, token)
+			}
+		}
+	}
+}
+
 // TestReadmeDocumentsR5PoolProvenance pins the Phase R5 additions
 // to the team_builder contract: branching auto_evolve alternatives
 // on the cost breakdown + the top-level pool_members status array.
