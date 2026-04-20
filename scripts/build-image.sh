@@ -9,6 +9,13 @@
 # replaces the old "waiting for engine release" blocker — the
 # sibling-repo checkout is the source of truth.
 #
+# Developer-only script: builds a single-arch image for the host
+# and loads it into the local daemon via `--load`. CI publishes
+# multi-arch images (linux/amd64 + linux/arm64) with push-by-digest
+# via `docker/build-push-action` in .github/workflows/release.yml;
+# `--load` is incompatible with multi-arch outputs so the two code
+# paths deliberately diverge.
+#
 # Usage:
 #   scripts/build-image.sh                      # tag pogo-pvp-mcp:dev
 #   scripts/build-image.sh v1.2.3               # tag pogo-pvp-mcp:v1.2.3
