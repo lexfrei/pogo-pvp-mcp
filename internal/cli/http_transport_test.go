@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/lexfrei/pogo-pvp-mcp/internal/cli"
+	"github.com/lexfrei/pogo-pvp-mcp/internal/config"
 	"github.com/lexfrei/pogo-pvp-mcp/internal/httpmw"
 	"github.com/lexfrei/pogo-pvp-mcp/internal/mcpmw"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -161,6 +162,130 @@ func TestMCPHTTPHandler_Phase2MiddlewareLogsEveryCall(t *testing.T) {
 		if !strings.Contains(got, want) {
 			t.Errorf("server log missing %q; full log:\n%s", want, got)
 		}
+	}
+}
+
+// newTestRuntime returns a minimal cli.Runtime with only the fields
+// needed by BuildMCPHTTPMiddlewareChain — rate-limit / body-cap /
+// trusted-proxies config + a throwaway slog.Logger. Avoids plumbing
+// a gamemaster manager the middleware-only tests don't touch.
+func newTestRuntime() *cli.Runtime {
+	cfg := &config.Config{
+		Server: config.ServerConfig{
+			MaxRequestBytes: 65536,
+			// Rate limit disabled for the integration tests;
+			// individual rate-limit behaviour is covered in
+			// internal/httpmw/ratelimit_test.go.
+		},
+	}
+
+	return &cli.Runtime{Config: cfg, Logger: slog.Default()}
+}
+
+// TestBuildMCPHTTPMiddlewareChain_SecurityHeadersPresent invokes
+// the EXACT production-chain builder that serve.go wires into the
+// public listener, asserting the Phase 5 security headers land on
+// the response. A silent drop of httpmw.SecurityHeaders() from
+// BuildMCPHTTPMiddlewareChain would fail this test — this is the
+// doc-drift / regression guard that the hand-rolled chain version
+// could not give.
+func TestBuildMCPHTTPMiddlewareChain_SecurityHeadersPresent(t *testing.T) {
+	t.Parallel()
+
+	mcpServer := buildWiredServer(t)
+	rt := newTestRuntime()
+
+	handler, limiter, err := cli.BuildMCPHTTPMiddlewareChain(rt, mcpServer)
+	if err != nil {
+		t.Fatalf("BuildMCPHTTPMiddlewareChain: %v", err)
+	}
+	t.Cleanup(limiter.Stop)
+
+	ts := httptest.NewServer(handler)
+	t.Cleanup(ts.Close)
+
+	// POST with a valid MCP payload so the chain doesn't 400 early
+	// on the MCP SDK side — we need the response to come through
+	// the full middleware chain.
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, ts.URL,
+		strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{`+
+			`"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"s","version":"0"}}}`))
+	if err != nil {
+		t.Fatalf("NewRequestWithContext: %v", err)
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json, text/event-stream")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("Do: %v", err)
+	}
+	_ = resp.Body.Close()
+
+	expected := map[string]string{
+		"Strict-Transport-Security": "max-age=31536000; includeSubDomains",
+		"X-Content-Type-Options":    "nosniff",
+		"Referrer-Policy":           "no-referrer",
+		"Content-Security-Policy":   "default-src 'none'",
+	}
+
+	for name, want := range expected {
+		got := resp.Header.Get(name)
+		if got != want {
+			t.Errorf("header %s = %q, want %q (production chain must include SecurityHeaders)",
+				name, got, want)
+		}
+	}
+}
+
+// TestBuildMCPHTTPMiddlewareChain_SecurityHeadersOnRejectionResponse
+// pins that the security headers survive the MaxBytes rejection
+// path — a 413 response still carries HSTS etc. Catches the
+// security-headers-only-on-200 regression where the middleware
+// would write headers too late (after downstream error handlers).
+func TestBuildMCPHTTPMiddlewareChain_SecurityHeadersOnRejectionResponse(t *testing.T) {
+	t.Parallel()
+
+	mcpServer := buildWiredServer(t)
+	rt := newTestRuntime()
+	rt.Config.Server.MaxRequestBytes = 64 // tiny cap → any MCP call 413s
+
+	handler, limiter, err := cli.BuildMCPHTTPMiddlewareChain(rt, mcpServer)
+	if err != nil {
+		t.Fatalf("BuildMCPHTTPMiddlewareChain: %v", err)
+	}
+	t.Cleanup(limiter.Stop)
+
+	ts := httptest.NewServer(handler)
+	t.Cleanup(ts.Close)
+
+	body := strings.Repeat("x", 4096)
+
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, ts.URL,
+		strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("NewRequestWithContext: %v", err)
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("Do: %v", err)
+	}
+	_ = resp.Body.Close()
+
+	if resp.StatusCode != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status = %d, want 413 (setup precondition)", resp.StatusCode)
+	}
+
+	if resp.Header.Get("Strict-Transport-Security") == "" {
+		t.Errorf("HSTS missing from 413 response — security headers must land before the rejection write")
+	}
+
+	if resp.Header.Get("Content-Security-Policy") == "" {
+		t.Errorf("CSP missing from 413 response — security headers must land before the rejection write")
 	}
 }
 

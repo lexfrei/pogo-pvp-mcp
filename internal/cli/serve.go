@@ -560,12 +560,12 @@ func attachMCPMiddleware(server *mcp.Server, rt *Runtime) {
 	)
 }
 
-// buildMCPHTTPMiddlewareChain composes the Phase 3 protective
-// middleware (recover → realIP → rateLimit → maxBytes) around the
+// BuildMCPHTTPMiddlewareChain composes the Phase 3 protective
+// middleware (recover → securityHeaders → realIP → rateLimit → maxBytes) around the
 // SDK's StreamableHTTPHandler. The rate limiter is returned
 // alongside so the caller can Stop it during shutdown (goroutine
 // hygiene — the janitor outlives the http.Server without it).
-func buildMCPHTTPMiddlewareChain(
+func BuildMCPHTTPMiddlewareChain(
 	rt *Runtime, mcpServer *mcp.Server,
 ) (http.Handler, *httpmw.RateLimiter, error) {
 	trusted, err := httpmw.ParseTrustedProxies(rt.Config.Server.TrustedProxies)
@@ -581,6 +581,7 @@ func buildMCPHTTPMiddlewareChain(
 	handler := httpmw.Chain(
 		NewMCPHTTPHandler(mcpServer, rt.Logger),
 		httpmw.Recover(rt.Logger),
+		httpmw.SecurityHeaders(),
 		httpmw.RealIP(trusted),
 		limiter.Middleware,
 		httpmw.MaxBytes(rt.Config.Server.MaxRequestBytes),
@@ -606,7 +607,7 @@ func startMCPHTTPServer(
 		return nil, nil
 	}
 
-	handler, limiter, err := buildMCPHTTPMiddlewareChain(rt, mcpServer)
+	handler, limiter, err := BuildMCPHTTPMiddlewareChain(rt, mcpServer)
 	if err != nil {
 		return nil, err
 	}

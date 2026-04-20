@@ -94,7 +94,7 @@ Behaviour:
 - **Timeouts**: ReadHeader 5s, Read 30s, Write 60s, Idle 90s, MaxHeaderBytes 64 KiB. Graceful shutdown drains in 60s on `SIGTERM`.
 - **Separate from debug**: the loopback debug server (`server.http_port`) stays on `127.0.0.1` with its auth-free `/healthz` / `/refresh` endpoints. The two listeners are orthogonal.
 
-Phase 3 adds the net/http middleware chain around the MCP handler (order outer → inner: `recover → realIP → rateLimit → maxBytes`). Each layer is configurable:
+Phase 3 adds the net/http middleware chain around the MCP handler (order outer → inner: `recover → securityHeaders → realIP → rateLimit → maxBytes`). `securityHeaders` always runs with the Phase 5 baseline set (see "Phase 5 security headers" below); the remaining layers are configurable:
 
 | Field (env var) | Default | 0 / empty means |
 | --- | --- | --- |
@@ -104,6 +104,8 @@ Phase 3 adds the net/http middleware chain around the MCP handler (order outer �
 | `server.max_request_bytes` (`POGO_PVP_SERVER_MAX_REQUEST_BYTES`) | `65536` (64 KiB) | `0` disables the body cap — dev only |
 
 **Phantom rate-limit pitfall**: when `trusted_proxies` covers the proxy IP but the proxy does NOT forward an `X-Forwarded-For` header (or all XFF entries are themselves trusted), every downstream user collapses to a single rate-limit bucket keyed on the proxy IP. Symptom: legitimate traffic rate-limits itself long before the configured RPS. Fix: configure your reverse proxy to set / forward `X-Forwarded-For` on requests to the MCP endpoint.
+
+Every response also carries the Phase 5 baseline security headers: `Strict-Transport-Security` (1-year HSTS), `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer`, `Content-Security-Policy: default-src 'none'`. TLS itself is terminated at the reverse proxy; HSTS is the browser-side reinforcement.
 
 
 **DNS-rebinding protection (SDK built-in)**: the MCP SDK rejects requests that arrive via a loopback listener (`127.0.0.1`, `[::1]`) with a non-loopback `Host` header — a 403 is returned. When binding to `127.0.0.1` for local development, keep the client's `Host` header as `127.0.0.1:PORT` (or drop it). Proxied deployments where `Host` matches the public FQDN and the listener is on `0.0.0.0` are unaffected.
@@ -138,7 +140,42 @@ Restart Claude Desktop. The twenty-two `pvp_*` tools will appear in the tool lis
 
 A `Containerfile` ships in the repo root; tagged builds produce multi-arch (linux/amd64 + linux/arm64, cosign-signed) images at `ghcr.io/${GITHUB_REPOSITORY}:vX.Y.Z`. Until the GitHub repo is renamed from `pvpoke-mcp` to `pogo-pvp-mcp`, the effective image coordinate is `ghcr.io/lexfrei/pvpoke-mcp:vX.Y.Z`; after the rename it flips to `ghcr.io/lexfrei/pogo-pvp-mcp:vX.Y.Z` without any workflow change (the release workflow reads `${{ github.repository }}`).
 
+The container `EXPOSE`s two ports: `8080` for the public MCP HTTP endpoint (enable via `POGO_PVP_SERVER_MCP_HTTP_LISTEN=:8080`) and `8787` for the debug surface (`server.http_port`; keep on the container-internal loopback, never map to the host's public interface).
+
 Note: the image build depends on `github.com/lexfrei/pogo-pvp-engine` being resolvable by `go mod download` — during the engine-sibling development window (while the `replace` directive in `go.mod` points at a local `../pogo-pvp-engine` checkout), the Containerfile will not build cleanly. It becomes buildable once the engine repository is published and tagged.
+
+## Public deployment (reverse proxy example)
+
+Example nginx fragment for terminating TLS at a proxy and forwarding to the container's MCP HTTP endpoint. `trusted_proxies` on the MCP side must cover the proxy's IP so `X-Forwarded-For` is honoured; `X-Forwarded-For` MUST be forwarded by the proxy (otherwise every downstream user collapses into one rate-limit bucket — see "Phantom rate-limit pitfall" above):
+
+```nginx
+server {
+    listen 443 ssl http2;
+    server_name mcp.example.com;
+
+    ssl_certificate     /etc/letsencrypt/live/mcp.example.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/mcp.example.com/privkey.pem;
+
+    location / {
+        proxy_pass         http://127.0.0.1:8080;
+        proxy_http_version 1.1;
+        proxy_set_header   Host              $host;
+        proxy_set_header   X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header   X-Forwarded-Proto $scheme;
+        proxy_read_timeout 90s;
+    }
+}
+```
+
+Matching MCP env:
+
+```bash
+POGO_PVP_SERVER_MCP_HTTP_LISTEN=127.0.0.1:8080
+POGO_PVP_SERVER_TRUSTED_PROXIES=127.0.0.0/8
+POGO_PVP_SERVER_RATE_LIMIT_RPS=10
+POGO_PVP_SERVER_RATE_LIMIT_BURST=20
+POGO_PVP_LOG_FORMAT=json
+```
 
 ## Disclaimer
 

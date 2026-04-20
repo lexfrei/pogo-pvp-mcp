@@ -49,5 +49,15 @@ COPY --from=builder --chown=65534:65534 /home/nobody/.cache /home/nobody/.cache
 ENV XDG_CACHE_HOME=/home/nobody/.cache
 
 USER 65534
+
+# Document the ports the operator is expected to map. Neither is
+# mandatory at runtime — both default to 0 / empty meaning "disabled".
+#   8080: public MCP HTTP (Streamable HTTP). Enable via
+#         POGO_PVP_SERVER_MCP_HTTP_LISTEN=:8080
+#   8787: debug HTTP (/healthz, /refresh, /debug/gamemaster).
+#         Loopback-only inside the container; exposing it publicly
+#         is a security mistake (see README).
+EXPOSE 8080 8787
+
 ENTRYPOINT ["/pogo-pvp-mcp"]
 CMD ["serve"]
