@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/lexfrei/pogo-pvp-mcp/internal/config"
@@ -1982,7 +1983,7 @@ func TestTeamBuilderTool_AutoEvolveBranchingSkipped(t *testing.T) {
 	handler := tool.Handler()
 
 	pool := []tools.Combatant{
-		{Species: "eevee", IV: [3]int{15, 15, 15}, Level: 20, FastMove: "FAST1", ChargedMoves: []string{"CH1"}},
+		{Species: speciesEevee, IV: [3]int{15, 15, 15}, Level: 20, FastMove: "FAST1", ChargedMoves: []string{"CH1"}},
 		baseCombatant("b"),
 		baseCombatant("c"),
 	}
@@ -2005,7 +2006,7 @@ func TestTeamBuilderTool_AutoEvolveBranchingSkipped(t *testing.T) {
 	var eeveePresent bool
 
 	for i := range result.Teams[0].Members {
-		if result.Teams[0].Members[i].Species == "eevee" {
+		if result.Teams[0].Members[i].Species == speciesEevee {
 			eeveePresent = true
 			eeveeBreakdown = &result.Teams[0].CostBreakdowns[i]
 
@@ -2021,6 +2022,291 @@ func TestTeamBuilderTool_AutoEvolveBranchingSkipped(t *testing.T) {
 	if !slices.Contains(eeveeBreakdown.Flags, "auto_evolve_skipped_branching:eevee") {
 		t.Errorf("auto_evolve_skipped_branching:eevee flag missing in Flags=%v",
 			eeveeBreakdown.Flags)
+	}
+
+	// Phase R5 finding #5: branching skip must also surface per-
+	// branch alternatives with CP predictions + league-fit flag
+	// so the caller doesn't need a second gamemaster round-trip.
+	if len(eeveeBreakdown.AutoEvolveAlternatives) != 3 {
+		t.Fatalf("AutoEvolveAlternatives len = %d, want 3 (vaporeon / jolteon / flareon); got %+v",
+			len(eeveeBreakdown.AutoEvolveAlternatives), eeveeBreakdown.AutoEvolveAlternatives)
+	}
+
+	alts := make(map[string]tools.EvolveAlternative, len(eeveeBreakdown.AutoEvolveAlternatives))
+	for _, alt := range eeveeBreakdown.AutoEvolveAlternatives {
+		alts[alt.To] = alt
+	}
+
+	for _, want := range []string{speciesVaporeon, speciesJolteon, "flareon"} {
+		alt, ok := alts[want]
+		if !ok {
+			t.Errorf("alternative %q missing from AutoEvolveAlternatives", want)
+
+			continue
+		}
+
+		if alt.PredictedCP <= 0 {
+			t.Errorf("alternative %q PredictedCP = %d, want > 0", want, alt.PredictedCP)
+		}
+	}
+}
+
+// TestTeamBuilderTool_AutoEvolveBranchingAlternativesLeagueFit pins
+// the league_fit flag semantics: the flag reflects whether the
+// child species fits the league CP cap at level 1 (floor CP check,
+// matching walkEvolutionChain). Vaporeon + jolteon + flareon all
+// have base-stat lines that the fixture keeps under 1500 CP at the
+// floor, so all three must report league_fit=true in Great League.
+// A regression that miscomputed the floor CP would silently flip
+// this to false.
+func TestTeamBuilderTool_AutoEvolveBranchingAlternativesLeagueFit(t *testing.T) {
+	t.Parallel()
+
+	const rankingsPayload = `[
+  {"speciesId": "eevee", "speciesName": "Eevee", "rating": 500,
+   "moveset": ["FAST1", "CH1"],
+   "stats": {"product": 2100, "atk": 100, "def": 100, "hp": 150}},
+  {"speciesId": "b", "speciesName": "B", "rating": 600,
+   "moveset": ["FAST1", "CH1"],
+   "stats": {"product": 2000, "atk": 100, "def": 120, "hp": 150}},
+  {"speciesId": "c", "speciesName": "C", "rating": 650,
+   "moveset": ["FAST1", "CH1"],
+   "stats": {"product": 2050, "atk": 105, "def": 125, "hp": 145}}
+]`
+
+	tool := newTeamBuilderToolFromFixture(t, autoEvolveBranchingFixture, rankingsPayload)
+	handler := tool.Handler()
+
+	pool := []tools.Combatant{
+		{Species: speciesEevee, IV: [3]int{15, 15, 15}, Level: 20, FastMove: "FAST1", ChargedMoves: []string{"CH1"}},
+		baseCombatant("b"),
+		baseCombatant("c"),
+	}
+
+	_, result, err := handler(t.Context(), nil, tools.TeamBuilderParams{
+		Pool:       pool,
+		League:     leagueGreat,
+		AutoEvolve: true,
+	})
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+
+	if len(result.Teams) == 0 {
+		t.Fatal("no teams returned")
+	}
+
+	for i := range result.Teams[0].Members {
+		if result.Teams[0].Members[i].Species != speciesEevee {
+			continue
+		}
+
+		for _, alt := range result.Teams[0].CostBreakdowns[i].AutoEvolveAlternatives {
+			if !alt.LeagueFit {
+				t.Errorf("alt %q LeagueFit = false, want true (fixture base stats fit GL at L1)",
+					alt.To)
+			}
+		}
+
+		return
+	}
+
+	t.Fatalf("eevee not in the returned team")
+}
+
+// TestTeamBuilderTool_ParallelSharedPoolNoRace pins the R5
+// defensive-clone claim on Combatant.originalIndex's godoc: two
+// parallel handler invocations sharing one []Combatant pool must
+// not trip the race detector, because handle() clones params.Pool
+// before stamping originalIndex / running autoEvolvePool. A
+// regression that reverted to in-place caller mutation would
+// surface as a write/write race on pool[i].originalIndex here
+// under -race.
+func TestTeamBuilderTool_ParallelSharedPoolNoRace(t *testing.T) {
+	t.Parallel()
+
+	tool := newTeamBuilderTool(t)
+	handler := tool.Handler()
+
+	pool := []tools.Combatant{
+		baseCombatant("a"),
+		baseCombatant("b"),
+		baseCombatant("c"),
+	}
+
+	var wg sync.WaitGroup
+
+	wg.Add(2)
+
+	for range 2 {
+		go func() {
+			defer wg.Done()
+
+			_, _, handlerErr := handler(t.Context(), nil, tools.TeamBuilderParams{
+				Pool:   pool,
+				League: leagueGreat,
+			})
+			if handlerErr != nil {
+				t.Errorf("handler: %v", handlerErr)
+			}
+		}()
+	}
+
+	wg.Wait()
+}
+
+// TestTeamBuilderTool_PoolIndicesAlignWithPoolMembers pins the R5
+// round-1 review blocker: TeamBuilderTeam.PoolIndices and
+// TeamBuilderResult.PoolMembers must share one coordinate system
+// (original-pool). Without the remapPoolIndicesToOriginal step,
+// PoolIndices would point into the ban-filtered pool while
+// PoolMembers indexes the original — a cross-reference like
+// PoolMembers[team.PoolIndices[k]].Species would silently return
+// the wrong entry. Banned leading species in the fixture exposes
+// the mismatch cleanly.
+func TestTeamBuilderTool_PoolIndicesAlignWithPoolMembers(t *testing.T) {
+	t.Parallel()
+
+	tool := newTeamBuilderTool(t)
+	handler := tool.Handler()
+
+	// 4-member pool with "a" banned so the filtered pool is
+	// [b, c, c14] with indices shifting: filtered[0]=original[1]=b,
+	// filtered[1]=original[2]=c, filtered[2]=original[3]=c14. A
+	// regression that skipped remapPoolIndicesToOriginal would
+	// hand back filtered indices 0..2, but PoolMembers slot 0 is
+	// the banned "a" — cross-reference mismatch.
+	pool := []tools.Combatant{
+		baseCombatant("a"), // banned; filtered pool starts at b.
+		baseCombatant("b"),
+		baseCombatant("c"),
+		{
+			Species: "c", IV: [3]int{14, 14, 15}, Level: 40,
+			FastMove: "FAST1", ChargedMoves: []string{"CH1"},
+		},
+	}
+
+	_, result, err := handler(t.Context(), nil, tools.TeamBuilderParams{
+		Pool:   pool,
+		League: leagueGreat,
+		Banned: []string{"a"},
+	})
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+
+	if len(result.Teams) == 0 {
+		t.Fatal("no teams returned")
+	}
+
+	team := result.Teams[0]
+	if len(team.Members) != 3 {
+		t.Fatalf("members = %d, want 3", len(team.Members))
+	}
+
+	for k, poolIdx := range team.PoolIndices {
+		if poolIdx < 0 || poolIdx >= len(result.PoolMembers) {
+			t.Errorf("team.PoolIndices[%d]=%d out of PoolMembers range len=%d",
+				k, poolIdx, len(result.PoolMembers))
+
+			continue
+		}
+
+		want := team.Members[k].Species
+		got := result.PoolMembers[poolIdx].ResolvedSpecies
+
+		if got != want {
+			t.Errorf("PoolMembers[team.PoolIndices[%d]=%d].ResolvedSpecies = %q, want %q "+
+				"(one coordinate system)", k, poolIdx, got, want)
+		}
+	}
+}
+
+// TestTeamBuilderTool_PoolMembersDebugInfo pins Finding #6 — the
+// per-pool-entry status snapshot attached to the TeamBuilderResult.
+// One kept entry, one auto_evolve branching skip, one banned entry.
+// Every slot in PoolMembers must point back to its original index,
+// report the right AutoEvolveAction, and flip InReturnedTeam
+// correctly based on team selection.
+func TestTeamBuilderTool_PoolMembersDebugInfo(t *testing.T) {
+	t.Parallel()
+
+	const rankingsPayload = `[
+  {"speciesId": "eevee", "speciesName": "Eevee", "rating": 500,
+   "moveset": ["FAST1", "CH1"],
+   "stats": {"product": 2100, "atk": 100, "def": 100, "hp": 150}},
+  {"speciesId": "b", "speciesName": "B", "rating": 600,
+   "moveset": ["FAST1", "CH1"],
+   "stats": {"product": 2000, "atk": 100, "def": 120, "hp": 150}},
+  {"speciesId": "c", "speciesName": "C", "rating": 650,
+   "moveset": ["FAST1", "CH1"],
+   "stats": {"product": 2050, "atk": 105, "def": 125, "hp": 145}}
+]`
+
+	tool := newTeamBuilderToolFromFixture(t, autoEvolveBranchingFixture, rankingsPayload)
+	handler := tool.Handler()
+
+	pool := []tools.Combatant{
+		baseCombatant("b"), // kept, should appear in team
+		{Species: speciesEevee, IV: [3]int{15, 15, 15}, Level: 20, FastMove: "FAST1", ChargedMoves: []string{"CH1"}}, // branching skip
+		baseCombatant("c"),        // kept, appears in team
+		baseCombatant("vaporeon"), // banned
+	}
+
+	_, result, err := handler(t.Context(), nil, tools.TeamBuilderParams{
+		Pool:       pool,
+		League:     leagueGreat,
+		AutoEvolve: true,
+		Banned:     []string{"vaporeon"},
+	})
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+
+	if len(result.PoolMembers) != len(pool) {
+		t.Fatalf("PoolMembers len = %d, want %d (one row per input entry)",
+			len(result.PoolMembers), len(pool))
+	}
+
+	// Index must match input order — PoolMembers[i].Index == i.
+	for i, pm := range result.PoolMembers {
+		if pm.Index != i {
+			t.Errorf("PoolMembers[%d].Index = %d, want %d", i, pm.Index, i)
+		}
+	}
+
+	// Pool[0] = b: kept, appears in team (no banned, no auto_evolve chain).
+	if got := result.PoolMembers[0].AutoEvolveAction; got != tools.AutoEvolveActionKept {
+		t.Errorf("PoolMembers[0] action = %q, want %q", got, tools.AutoEvolveActionKept)
+	}
+
+	if !result.PoolMembers[0].InReturnedTeam {
+		t.Errorf("PoolMembers[0] (b) InReturnedTeam = false, want true")
+	}
+
+	// Pool[1] = eevee: branching skip.
+	if got := result.PoolMembers[1].AutoEvolveAction; got != tools.AutoEvolveActionSkippedBranching {
+		t.Errorf("PoolMembers[1] (eevee) action = %q, want %q",
+			got, tools.AutoEvolveActionSkippedBranching)
+	}
+
+	if result.PoolMembers[1].OriginalSpecies != speciesEevee {
+		t.Errorf("PoolMembers[1] OriginalSpecies = %q, want %q",
+			result.PoolMembers[1].OriginalSpecies, speciesEevee)
+	}
+
+	if result.PoolMembers[1].ResolvedSpecies != speciesEevee {
+		t.Errorf("PoolMembers[1] ResolvedSpecies = %q, want %q (branching skip keeps base form)",
+			result.PoolMembers[1].ResolvedSpecies, speciesEevee)
+	}
+
+	// Pool[3] = vaporeon: banned.
+	if !result.PoolMembers[3].Banned {
+		t.Errorf("PoolMembers[3] (vaporeon) Banned = false, want true")
+	}
+
+	if result.PoolMembers[3].InReturnedTeam {
+		t.Errorf("PoolMembers[3] (vaporeon) InReturnedTeam = true, want false (banned → filtered out)")
 	}
 }
 
