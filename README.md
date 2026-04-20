@@ -186,8 +186,7 @@ The server operates exclusively on factual game data (stat lines, movesets, CPM 
 ## Roadmap
 
 - Full battle-simulation-based ranker (engine-side) so `pvp_meta` stops depending on pre-computed pvpoke JSONs.
-- CMP / shadow scaling in the battle engine.
-- Parallel `pvp_team_builder` worker pool for large pools.
+- CMP (charge-move-priority) scaling in the battle engine. (Shadow ATK × 1.2 / DEF ÷ 1.2 already landed in Phase R4.7.)
 
 ## License
 

@@ -4,8 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"runtime"
 	"slices"
 	"sort"
+	"sync"
+	"sync/atomic"
 
 	pogopvp "github.com/lexfrei/pogo-pvp-engine"
 	"github.com/lexfrei/pogo-pvp-mcp/internal/gamemaster"
@@ -891,6 +894,14 @@ type ratingMatrix struct {
 // all three shield scenarios (0/0, 1/1, 2/2) exactly once, storing
 // the per-scenario rating for reuse across every triple that uses
 // pool_i. ctx cancellation short-circuits the computation.
+//
+// Rows are computed concurrently by a worker pool of size
+// runtime.NumCPU(). Each pool-member row is fully independent (no
+// shared state across i in the inner loops), so the only
+// synchronisation needed is the semaphore channel + an atomic
+// counter for cross-row Failures. Deterministic result: writes land
+// at a row-specific slot, so the final matrix layout is identical
+// to the sequential version regardless of completion order.
 func precomputeRatingMatrix(
 	ctx context.Context, poolCombatants, meta []pogopvp.Combatant,
 ) ratingMatrix {
@@ -898,38 +909,85 @@ func precomputeRatingMatrix(
 		Entries: make([][][scenarioCount]ratingMatrixEntry, len(poolCombatants)),
 	}
 
-	for i := range poolCombatants {
-		result.Entries[i] = make([][scenarioCount]ratingMatrixEntry, len(meta))
+	if len(poolCombatants) == 0 {
+		return result
+	}
 
+	workers := min(runtime.NumCPU(), len(poolCombatants))
+
+	sem := make(chan struct{}, workers)
+
+	var (
+		wg          sync.WaitGroup
+		failuresAll atomic.Int64
+	)
+
+	for i := range poolCombatants {
 		if ctx.Err() != nil {
-			return result
+			break
 		}
 
-		for oppIdx := range meta {
-			for scenarioIdx := range scenarioCount {
-				attacker := poolCombatants[i]
-				defender := meta[oppIdx]
-				attacker.Shields = scenarioIdx
-				defender.Shields = scenarioIdx
+		result.Entries[i] = make([][scenarioCount]ratingMatrixEntry, len(meta))
 
-				rating, err := ratingFor(&attacker, &defender)
-				if err != nil {
-					result.Failures++
-					result.Entries[i][oppIdx][scenarioIdx] = ratingMatrixEntry{
-						Rating: rating, OK: false,
-					}
+		wg.Add(1)
 
-					continue
-				}
+		sem <- struct{}{} // acquire worker slot
 
-				result.Entries[i][oppIdx][scenarioIdx] = ratingMatrixEntry{
-					Rating: rating, OK: true,
-				}
+		go func(rowIdx int) {
+			defer wg.Done()
+			defer func() { <-sem }()
+
+			rowFails := fillRatingMatrixRow(ctx, poolCombatants[rowIdx], meta, result.Entries[rowIdx])
+			failuresAll.Add(int64(rowFails))
+		}(i)
+	}
+
+	wg.Wait()
+
+	result.Failures = int(failuresAll.Load())
+
+	return result
+}
+
+// fillRatingMatrixRow runs every (attacker, meta[oppIdx], scenario)
+// simulation for one pool member and writes the results into row.
+// Returns the number of simulate failures so the caller can
+// aggregate them across rows atomically. Extracted from
+// precomputeRatingMatrix so the parallel wrapper stays readable and
+// the per-row logic is independently testable via the public handler
+// path.
+func fillRatingMatrixRow(
+	ctx context.Context,
+	attackerBase pogopvp.Combatant,
+	meta []pogopvp.Combatant,
+	row [][scenarioCount]ratingMatrixEntry,
+) int {
+	var fails int
+
+	for oppIdx := range meta {
+		if ctx.Err() != nil {
+			return fails
+		}
+
+		for scenarioIdx := range scenarioCount {
+			attacker := attackerBase
+			defender := meta[oppIdx]
+			attacker.Shields = scenarioIdx
+			defender.Shields = scenarioIdx
+
+			rating, err := ratingFor(&attacker, &defender)
+			if err != nil {
+				fails++
+				row[oppIdx][scenarioIdx] = ratingMatrixEntry{Rating: rating, OK: false}
+
+				continue
 			}
+
+			row[oppIdx][scenarioIdx] = ratingMatrixEntry{Rating: rating, OK: true}
 		}
 	}
 
-	return result
+	return fails
 }
 
 // scoreTripleFromMatrix averages the ratings for three pool members
