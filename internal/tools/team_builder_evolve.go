@@ -69,6 +69,14 @@ func autoEvolveMember(snapshot *pogopvp.Gamemaster, spec *Combatant, cpCap int) 
 		spec.autoEvolvedFrom = originalID
 		spec.autoEvolveSkip = reason
 
+		// Branching skip: enumerate each direct child evolution and
+		// report predicted CP + league fit at the pool member's
+		// current level. Empty for other skip reasons (over-cap etc.).
+		if reason == skipReasonBranching {
+			spec.autoEvolveAlternatives = enumerateBranchAlternatives(
+				snapshot, &species, spec.Level, spec.IV, cpCap)
+		}
+
 		return
 	}
 
@@ -84,6 +92,69 @@ func autoEvolveMember(snapshot *pogopvp.Gamemaster, spec *Combatant, cpCap int) 
 	// Vileplume's learnable list).
 	spec.FastMove = ""
 	spec.ChargedMoves = nil
+}
+
+// skipReasonBranching is the flag string emitted on
+// spec.autoEvolveSkip when the evolution chain branches at a level
+// that requires caller intent (e.g. eevee → vaporeon / jolteon /
+// flareon). Hoisted to a const so the branching-alternatives logic
+// in autoEvolveMember can switch on it without string duplication.
+const skipReasonBranching = "auto_evolve_skipped_branching"
+
+// skipReasonOverCap is the flag string emitted on
+// spec.autoEvolveSkip when the first-hop evolution busts the league
+// cap at level 1. Symmetric counterpart to skipReasonBranching;
+// classifyAutoEvolveAction switches on both.
+const skipReasonOverCap = "auto_evolve_over_cap"
+
+// enumerateBranchAlternatives walks the direct children of base,
+// projecting each child's CP at the pool member's current level and
+// flagging whether that CP fits the league cap. The check mirrors
+// walkEvolutionChain's level-1 floor semantics for league_fit so a
+// child that would fit at L1 but bust at the current level still
+// reports league_fit=true (catch-able at L1 + power down to fit);
+// operationally the caller wants "is this a viable league choice
+// at all", not "will it fit at the current level specifically".
+func enumerateBranchAlternatives(
+	snapshot *pogopvp.Gamemaster, base *pogopvp.Species,
+	currentLevel float64, ivs [3]int, cpCap int,
+) []EvolveAlternative {
+	ivSpread, err := pogopvp.NewIV(ivs[0], ivs[1], ivs[2])
+	if err != nil {
+		return nil
+	}
+
+	// CPM at current level for the predicted_cp projection — this
+	// is what the player would see on the evolved form immediately
+	// after evolving from the caught base at the current level.
+	cpmCurrent, err := pogopvp.CPMAt(currentLevel)
+	if err != nil {
+		return nil
+	}
+
+	cpmFloor, err := pogopvp.CPMAt(pogopvp.MinLevel)
+	if err != nil {
+		return nil
+	}
+
+	out := make([]EvolveAlternative, 0, len(base.Evolutions))
+
+	for _, childID := range base.Evolutions {
+		child, ok := snapshot.Pokemon[childID]
+		if !ok {
+			continue
+		}
+
+		floorCP := pogopvp.ComputeCP(child.BaseStats, ivSpread, cpmFloor)
+
+		out = append(out, EvolveAlternative{
+			To:          childID,
+			PredictedCP: pogopvp.ComputeCP(child.BaseStats, ivSpread, cpmCurrent),
+			LeagueFit:   floorCP <= cpCap,
+		})
+	}
+
+	return out
 }
 
 // walkEvolutionChain follows Species.Evolutions forward until one of:
@@ -121,7 +192,7 @@ func walkEvolutionChain(
 		}
 
 		if len(current.Evolutions) > 1 {
-			return nil, "auto_evolve_skipped_branching"
+			return nil, skipReasonBranching
 		}
 
 		nextID := current.Evolutions[0]
@@ -136,7 +207,7 @@ func walkEvolutionChain(
 				return lastFit, ""
 			}
 
-			return nil, "auto_evolve_over_cap"
+			return nil, skipReasonOverCap
 		}
 
 		lastFit = &next

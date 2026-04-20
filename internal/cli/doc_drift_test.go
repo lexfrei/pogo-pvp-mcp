@@ -144,6 +144,32 @@ func TestReadmeToolCountConsistent(t *testing.T) {
 	}
 }
 
+// TestReadmeDocumentsR5PoolProvenance pins the Phase R5 additions
+// to the team_builder contract: branching auto_evolve alternatives
+// on the cost breakdown + the top-level pool_members status array.
+// A silent drop of either field would otherwise reintroduce the
+// operator pain documented in findings #5/#6.
+func TestReadmeDocumentsR5PoolProvenance(t *testing.T) {
+	t.Parallel()
+
+	readme := readRepoFile(t, "README.md")
+
+	requiredPhrases := []string{
+		// Finding #5 — branching alternatives.
+		"auto_evolve_alternatives",
+		// Finding #6 — pool_members status array fields.
+		"pool_members",
+		"auto_evolve_action",
+		"in_returned_team",
+	}
+
+	for _, phrase := range requiredPhrases {
+		if !strings.Contains(readme, phrase) {
+			t.Errorf("README.md missing required phrase %q (R5 pool-provenance doc drift)", phrase)
+		}
+	}
+}
+
 // TestReadmeDocumentsProductionChainOrder pins the exact outer →
 // inner chain order recited by the README (and production code).
 // A future refactor that e.g. drops SecurityHeaders from the chain

@@ -133,6 +133,26 @@ type MemberCostBreakdown struct {
 	StardustMultiplier       float64  `json:"stardust_multiplier"`
 	SecondMoveCostMultiplier float64  `json:"second_move_cost_multiplier"`
 	Flags                    []string `json:"flags,omitempty"`
+	// AutoEvolveAlternatives is populated when the auto-evolve pass
+	// refuses to promote because the chain branches (e.g. eevee →
+	// vaporeon / jolteon / flareon). Each entry carries the child
+	// species id, its predicted CP at the pool member's current
+	// level (evolution preserves level in Pokémon GO), and whether
+	// that level-1 floor fits the league cap. Candy / item cost
+	// deliberately omitted — those require PokéMiners data and live
+	// in a dedicated pvp_evolution_cost tool. Empty slice on non-
+	// branching skips and on successful promotions.
+	AutoEvolveAlternatives []EvolveAlternative `json:"auto_evolve_alternatives,omitempty"`
+}
+
+// EvolveAlternative describes one branch the auto-evolve pass
+// rejected because it could not pick unilaterally. Surface format
+// is intentionally minimal — the caller can pass To through
+// pvp_evolution_cost for per-step candy / item needs.
+type EvolveAlternative struct {
+	To          string `json:"to"`
+	PredictedCP int    `json:"predicted_cp"`
+	LeagueFit   bool   `json:"league_fit"`
 }
 
 // ErrMemberInvalidForLeague is returned when a pool member's
@@ -164,9 +184,14 @@ type TeamBuilderTeam struct {
 	PoolIndices    []int                 `json:"pool_indices"`
 	TeamScore      float64               `json:"team_score"`
 	ParetoLabel    string                `json:"pareto_label"`
-	AggregateCost  int                   `json:"aggregate_stardust_cost"`
-	BudgetExceeded bool                  `json:"budget_exceeded,omitempty"`
-	BudgetExcess   int                   `json:"budget_excess,omitempty"`
+	// AggregateCost is the sum of PowerupStardustCost +
+	// SecondMoveStardustCost over every team member's
+	// CostBreakdowns entry. Candy / XL-candy / ETM inventory is
+	// NOT rolled in here — those are reported per-member in the
+	// breakdown and summed by the caller if needed.
+	AggregateCost  int  `json:"aggregate_stardust_cost"`
+	BudgetExceeded bool `json:"budget_exceeded,omitempty"`
+	BudgetExcess   int  `json:"budget_excess,omitempty"`
 }
 
 // TeamBuilderResult is the JSON output for pvp_team_builder.
@@ -177,15 +202,46 @@ type TeamBuilderTeam struct {
 // triple (no tie-midpoint fallback); a non-zero value just means the
 // score sample for some triples was smaller than meta × scenarios
 // would suggest.
+//
+// PoolMembers describes what the engine did with each input pool
+// entry: kept as-is, promoted via auto_evolve, skipped branching,
+// over-cap, or dropped by the banned filter. Helps callers debug
+// "why isn't my Togetic in any returned team" without re-reading
+// the flags scattered across per-member breakdowns.
 type TeamBuilderResult struct {
-	League             string            `json:"league"`
-	Cup                string            `json:"cup"`
-	CPCap              int               `json:"cp_cap"`
-	PoolSize           int               `json:"pool_size"`
-	Evaluated          int               `json:"evaluated_combinations"`
-	SimulationFailures int               `json:"simulation_failures"`
-	Teams              []TeamBuilderTeam `json:"teams"`
+	League             string             `json:"league"`
+	Cup                string             `json:"cup"`
+	CPCap              int                `json:"cp_cap"`
+	PoolSize           int                `json:"pool_size"`
+	Evaluated          int                `json:"evaluated_combinations"`
+	SimulationFailures int                `json:"simulation_failures"`
+	Teams              []TeamBuilderTeam  `json:"teams"`
+	PoolMembers        []PoolMemberStatus `json:"pool_members,omitempty"`
 }
+
+// PoolMemberStatus is one row in TeamBuilderResult.PoolMembers: a
+// per-pool-entry status report describing the engine's decision on
+// that specific member. Keyed by Index (position in the caller's
+// input Pool, preserved across auto_evolve / ban filtering).
+type PoolMemberStatus struct {
+	Index            int    `json:"index"`
+	OriginalSpecies  string `json:"original_species"`
+	ResolvedSpecies  string `json:"resolved_species"`
+	AutoEvolveAction string `json:"auto_evolve_action"`
+	Banned           bool   `json:"banned,omitempty"`
+	InReturnedTeam   bool   `json:"in_returned_team"`
+}
+
+// AutoEvolve action constants used as PoolMemberStatus.AutoEvolve
+// Action values. Hoisted so callers building their own tooling can
+// switch on exact strings without guessing.
+const (
+	AutoEvolveActionKept               = "kept"
+	AutoEvolveActionEvolved            = "evolved"
+	AutoEvolveActionSkippedBranching   = "skipped_branching"
+	AutoEvolveActionSkippedOverCap     = "skipped_over_cap"
+	AutoEvolveActionSkippedUnrecogSkip = "skipped_unrecognised"
+)
 
 // TeamBuilderTool wraps the gamemaster and rankings managers.
 type TeamBuilderTool struct {
@@ -251,6 +307,17 @@ func (tool *TeamBuilderTool) handle(
 		return nil, TeamBuilderResult{}, fmt.Errorf("team_builder cancelled: %w", err)
 	}
 
+	// Clone params.Pool up front so later preHandleValidation steps
+	// (autoEvolvePool in particular) don't mutate caller memory. The
+	// clone also gets originalIndex stamped on each entry so the
+	// ban-filter + filterPool downstream copies still trace back to
+	// the input position for pool-member status reporting (Finding
+	// #6). Cheap: pool is bounded by MaxPoolSize=50.
+	params.Pool = append([]Combatant(nil), params.Pool...)
+	for i := range params.Pool {
+		params.Pool[i].originalIndex = i
+	}
+
 	inputs, snapshot, err := tool.preHandleValidation(ctx, &params)
 	if err != nil {
 		return nil, TeamBuilderResult{}, err
@@ -275,6 +342,8 @@ func (tool *TeamBuilderTool) handle(
 
 	attachCostBreakdownsFromPool(result.Teams, poolBreakdowns)
 
+	poolMembers := buildPoolMemberStatuses(params.Pool, params.Banned, inputs.pool, result.Teams)
+
 	return nil, TeamBuilderResult{
 		League:             inputs.league,
 		Cup:                inputs.cup,
@@ -283,7 +352,88 @@ func (tool *TeamBuilderTool) handle(
 		Evaluated:          result.Evaluated,
 		SimulationFailures: result.Failures,
 		Teams:              result.Teams,
+		PoolMembers:        poolMembers,
 	}, nil
+}
+
+// buildPoolMemberStatuses returns a per-pool-entry status snapshot
+// that describes the engine's auto-evolve decision, any ban-filter
+// exclusion, and whether the member appeared in any returned team.
+// originalPool carries the caller's entries (post-auto-evolve
+// mutation — autoEvolvedFrom still records the pre-evolve id).
+// filteredPool is the ban-filtered slice PoolIndices points at;
+// cross-referencing filteredPool[idx].originalIndex back into
+// originalPool lets us set InReturnedTeam without guessing from
+// species+IV matches.
+func buildPoolMemberStatuses(
+	originalPool []Combatant, banned []string,
+	filteredPool []Combatant, teams []TeamBuilderTeam,
+) []PoolMemberStatus {
+	bannedSet := make(map[string]struct{}, len(banned))
+	for _, id := range banned {
+		bannedSet[id] = struct{}{}
+	}
+
+	inReturned := make(map[int]bool, len(filteredPool))
+
+	for teamIdx := range teams {
+		for _, poolIdx := range teams[teamIdx].PoolIndices {
+			if poolIdx < 0 || poolIdx >= len(filteredPool) {
+				continue
+			}
+
+			inReturned[filteredPool[poolIdx].originalIndex] = true
+		}
+	}
+
+	out := make([]PoolMemberStatus, 0, len(originalPool))
+
+	for i := range originalPool {
+		spec := &originalPool[i]
+
+		originalID := spec.Species
+		if spec.autoEvolvedFrom != "" {
+			originalID = spec.autoEvolvedFrom
+		}
+
+		// struct{}{} is the zero-value AND present-value of the set;
+		// comma-ok is the only way to distinguish present from absent.
+		_, bannedByOrig := bannedSet[originalID]
+		_, bannedByResolved := bannedSet[spec.Species]
+
+		out = append(out, PoolMemberStatus{
+			Index:            i,
+			OriginalSpecies:  originalID,
+			ResolvedSpecies:  spec.Species,
+			AutoEvolveAction: classifyAutoEvolveAction(spec),
+			Banned:           bannedByOrig || bannedByResolved,
+			InReturnedTeam:   inReturned[i],
+		})
+	}
+
+	return out
+}
+
+// classifyAutoEvolveAction maps the runtime-only autoEvolvedFrom +
+// autoEvolveSkip state onto the exported AutoEvolveAction* constants
+// used in PoolMemberStatus.
+func classifyAutoEvolveAction(spec *Combatant) string {
+	if spec.autoEvolvedFrom == "" {
+		return AutoEvolveActionKept
+	}
+
+	if spec.autoEvolveSkip == "" {
+		return AutoEvolveActionEvolved
+	}
+
+	switch spec.autoEvolveSkip {
+	case skipReasonBranching:
+		return AutoEvolveActionSkippedBranching
+	case skipReasonOverCap:
+		return AutoEvolveActionSkippedOverCap
+	default:
+		return AutoEvolveActionSkippedUnrecogSkip
+	}
 }
 
 // preHandleValidation bundles the cheap pre-simulation work that

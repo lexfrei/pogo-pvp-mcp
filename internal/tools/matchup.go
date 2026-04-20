@@ -91,10 +91,19 @@ type Combatant struct {
 	ChargedMoves []string         `json:"charged_moves,omitempty" jsonschema:"charged move ids; omit to use recommended"`
 	Options      CombatantOptions `json:"options,omitzero" jsonschema:"modifier flags: shadow/lucky/purified"`
 
-	resolvedSpeciesID    string
-	shadowVariantMissing bool
-	autoEvolvedFrom      string
-	autoEvolveSkip       string
+	resolvedSpeciesID      string
+	shadowVariantMissing   bool
+	autoEvolvedFrom        string
+	autoEvolveSkip         string
+	autoEvolveAlternatives []EvolveAlternative
+	// originalIndex records the 0-based position this entry held in
+	// the caller's input pool before any auto-evolve / filter /
+	// ban pass mutated it. Stamped on a COPY of the caller's pool
+	// inside team_builder.handle so concurrent parallel-subtests
+	// that share a TeamBuilderParams struct do not race on shared
+	// backing memory (see R5 finding #6 — earlier implementation
+	// mutated caller input and tripped -race detector).
+	originalIndex int
 }
 
 // ResolvedCombatant echoes back the species + moveset actually used

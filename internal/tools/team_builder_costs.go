@@ -141,6 +141,14 @@ func computeMemberCost(
 
 	breakdown.Flags = append(breakdown.Flags, autoEvolveFlagsFor(spec)...)
 
+	// Phase R5 finding #5: surface branch alternatives so the caller
+	// can propose a specific evolution path to the user without re-
+	// querying the gamemaster. Populated only on branching skips;
+	// zero-value / successful promotions keep this nil.
+	if len(spec.autoEvolveAlternatives) > 0 {
+		breakdown.AutoEvolveAlternatives = spec.autoEvolveAlternatives
+	}
+
 	return breakdown
 }
 
