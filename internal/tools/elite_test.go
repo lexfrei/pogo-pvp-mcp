@@ -541,6 +541,64 @@ func TestRank_OptimalHasEliteDetected(t *testing.T) {
 	}
 }
 
+// TestCounterFinder_DisallowEliteIgnoredForTarget pins r7 finding
+// #13 on the elite axis: a target with an elite move (Quagsire
+// AQUA_TAIL — what the enemy actually uses in the ladder) must
+// pass through even when disallow_elite=true. The flag is for
+// the caller's own pool, never the opponent's build.
+func TestCounterFinder_DisallowEliteIgnoredForTarget(t *testing.T) {
+	t.Parallel()
+
+	tool := newCounterFinderTool(t, eliteFixtureGamemaster, `[]`)
+	handler := tool.Handler()
+
+	_, _, err := handler(t.Context(), nil, tools.CounterFinderParams{
+		Target: tools.Combatant{
+			Species: speciesQuagsire, IV: [3]int{15, 15, 15}, Level: 40,
+			FastMove: "MUD_SHOT", ChargedMoves: []string{moveAquaTail},
+		},
+		FromPool: []tools.Combatant{
+			{
+				Species: "azumarill", IV: [3]int{15, 15, 15}, Level: 40,
+				FastMove: "BUBBLE", ChargedMoves: []string{"ICE_BEAM"},
+			},
+		},
+		League:        leagueGreat,
+		DisallowElite: true,
+	})
+	if errors.Is(err, tools.ErrEliteConflict) {
+		t.Errorf("error = %v, want NO ErrEliteConflict (target must pass as-is, disallow_elite gates pool only)", err)
+	}
+}
+
+// TestCounterFinder_DisallowEliteRejectsFromPoolMember is the
+// companion elite sibling. Parallel to the existing legacy from-
+// pool gate test, ensures the guard still applies where it should.
+func TestCounterFinder_DisallowEliteRejectsFromPoolMember(t *testing.T) {
+	t.Parallel()
+
+	tool := newCounterFinderTool(t, eliteFixtureGamemaster, `[]`)
+	handler := tool.Handler()
+
+	_, _, err := handler(t.Context(), nil, tools.CounterFinderParams{
+		Target: tools.Combatant{
+			Species: "azumarill", IV: [3]int{15, 15, 15}, Level: 40,
+			FastMove: "BUBBLE", ChargedMoves: []string{"ICE_BEAM"},
+		},
+		FromPool: []tools.Combatant{
+			{
+				Species: speciesQuagsire, IV: [3]int{15, 15, 15}, Level: 40,
+				FastMove: "MUD_SHOT", ChargedMoves: []string{moveAquaTail},
+			},
+		},
+		League:        leagueGreat,
+		DisallowElite: true,
+	})
+	if !errors.Is(err, tools.ErrEliteConflict) {
+		t.Errorf("error = %v, want wrapping ErrEliteConflict (pool member uses elite AQUA_TAIL)", err)
+	}
+}
+
 // TestRank_RankingsByCupCarriesHasElite pins that the per-cup
 // Moveset rows emit HasElite=true when the recommended moveset is
 // elite — the parallel axis to TestRank_OptimalHasEliteDetected.

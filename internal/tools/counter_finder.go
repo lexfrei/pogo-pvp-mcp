@@ -196,13 +196,17 @@ func (tool *CounterFinderTool) prepareCounterFinder(
 
 	scenarios := resolveTeamDefaults(params.Shields, 0).Scenarios
 
-	err = assertNoRestrictedInCombatant(snapshot, &params.Target, params.DisallowLegacy, params.DisallowElite)
-	if err != nil {
-		return nil, fmt.Errorf("target: %w", err)
-	}
-
+	// Target describes the ENEMY, not the caller's own Pokémon.
+	// Applying disallow_legacy / disallow_elite to the target would
+	// reject real ladder builds (e.g. Serperior with FRENZY_PLANT,
+	// Lapras with its elite chargeds) that the opponent actively
+	// uses, producing a weakened-enemy counter list — the opposite
+	// of what the caller wants. Flags apply only to the from_pool /
+	// meta-fallback candidates downstream (the Pokémon the caller
+	// will field in response). Target moveset is auto-filled from
+	// pvpoke's recommendation as-is, no category filter.
 	err = applyMovesetDefaults(ctx, tool.rankings, &params.Target, cpCap, params.Cup,
-		snapshot, params.DisallowLegacy, params.DisallowElite)
+		snapshot, false, false)
 	if err != nil {
 		return nil, fmt.Errorf("target moveset: %w", err)
 	}
