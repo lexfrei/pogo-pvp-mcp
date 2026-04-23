@@ -441,6 +441,185 @@ func TestTeamBuilder_DisallowEliteRejectsResolvedElite(t *testing.T) {
 	}
 }
 
+// budgetETMFixture extends eliteFixtureGamemaster with a second
+// species (azumarill) that also has an elite charged move, so the
+// three-member pool needed by team_builder can contain 2+ elite
+// charged moves — enough to exercise the real ETM reject gate.
+// eliteFixtureGamemaster alone only has one elite-armed species,
+// giving max 1 elite move per team; EliteChargedTM=0 is treated
+// as "off" (consistent with StardustLimit), so we need 2+ to
+// actually trip the gate.
+const budgetETMFixture = `{
+  "id": "gamemaster",
+  "timestamp": "2026-04-23 00:00:00",
+  "pokemon": [
+    {
+      "dex": 308, "speciesId": "medicham", "speciesName": "Medicham",
+      "baseStats": {"atk": 121, "def": 152, "hp": 155},
+      "types": ["fighting", "psychic"],
+      "fastMoves": ["COUNTER"], "chargedMoves": ["ICE_PUNCH", "DYNAMIC_PUNCH"],
+      "eliteMoves": ["DYNAMIC_PUNCH"],
+      "released": true
+    },
+    {
+      "dex": 195, "speciesId": "quagsire", "speciesName": "Quagsire",
+      "baseStats": {"atk": 152, "def": 143, "hp": 216},
+      "types": ["water", "ground"],
+      "fastMoves": ["MUD_SHOT"], "chargedMoves": ["AQUA_TAIL", "STONE_EDGE", "MUD_BOMB"],
+      "eliteMoves": ["AQUA_TAIL"],
+      "released": true
+    },
+    {
+      "dex": 184, "speciesId": "azumarill", "speciesName": "Azumarill",
+      "baseStats": {"atk": 112, "def": 152, "hp": 225},
+      "types": ["water", "fairy"],
+      "fastMoves": ["BUBBLE"], "chargedMoves": ["ICE_BEAM", "HYDRO_PUMP", "PLAY_ROUGH"],
+      "eliteMoves": ["HYDRO_PUMP"],
+      "released": true
+    }
+  ],
+  "moves": [
+    {"moveId": "COUNTER", "name": "Counter", "type": "fighting",
+     "power": 8, "energy": 0, "energyGain": 7, "cooldown": 1000, "turns": 2},
+    {"moveId": "ICE_PUNCH", "name": "Ice Punch", "type": "ice",
+     "power": 55, "energy": 40, "cooldown": 500},
+    {"moveId": "DYNAMIC_PUNCH", "name": "Dynamic Punch", "type": "fighting",
+     "power": 90, "energy": 50, "cooldown": 500},
+    {"moveId": "MUD_SHOT", "name": "Mud Shot", "type": "ground",
+     "power": 3, "energy": 0, "energyGain": 9, "cooldown": 500, "turns": 1},
+    {"moveId": "AQUA_TAIL", "name": "Aqua Tail", "type": "water",
+     "power": 50, "energy": 35, "cooldown": 500},
+    {"moveId": "STONE_EDGE", "name": "Stone Edge", "type": "rock",
+     "power": 100, "energy": 55, "cooldown": 500},
+    {"moveId": "MUD_BOMB", "name": "Mud Bomb", "type": "ground",
+     "power": 55, "energy": 40, "cooldown": 500},
+    {"moveId": "BUBBLE", "name": "Bubble", "type": "water",
+     "power": 12, "energy": 0, "energyGain": 14, "cooldown": 1500, "turns": 3},
+    {"moveId": "ICE_BEAM", "name": "Ice Beam", "type": "ice",
+     "power": 90, "energy": 55, "cooldown": 500},
+    {"moveId": "HYDRO_PUMP", "name": "Hydro Pump", "type": "water",
+     "power": 130, "energy": 75, "cooldown": 500},
+    {"moveId": "PLAY_ROUGH", "name": "Play Rough", "type": "fairy",
+     "power": 90, "energy": 60, "cooldown": 500}
+  ]
+}`
+
+// TestTeamBuilder_BudgetETMChargedDropsOverBudget pins R7.P3:
+// a pool with 3 members each explicitly using their species' elite
+// charged move produces teams with 3 elite charged moves total.
+// BudgetSpec.EliteChargedTM=1 rejects such teams; =3 keeps them.
+func TestTeamBuilder_BudgetETMChargedDropsOverBudget(t *testing.T) {
+	t.Parallel()
+
+	const ranksJSON = `[
+  {"speciesId": "quagsire", "speciesName": "Quagsire", "rating": 700,
+   "moveset": ["MUD_SHOT", "STONE_EDGE", "MUD_BOMB"],
+   "stats": {"product": 2100, "atk": 100, "def": 130, "hp": 180}},
+  {"speciesId": "azumarill", "speciesName": "Azumarill", "rating": 680,
+   "moveset": ["BUBBLE", "ICE_BEAM", "PLAY_ROUGH"],
+   "stats": {"product": 2000, "atk": 80, "def": 150, "hp": 200}},
+  {"speciesId": "medicham", "speciesName": "Medicham", "rating": 650,
+   "moveset": ["COUNTER", "ICE_PUNCH"],
+   "stats": {"product": 2050, "atk": 106, "def": 139, "hp": 141}}
+]`
+
+	tool := newTeamBuilderToolFromFixture(t, budgetETMFixture, ranksJSON)
+	handler := tool.Handler()
+
+	pool := []tools.Combatant{
+		{
+			Species: "quagsire", IV: [3]int{15, 15, 15}, Level: 40,
+			FastMove: "MUD_SHOT", ChargedMoves: []string{moveAquaTail},
+		},
+		{
+			Species: "azumarill", IV: [3]int{15, 15, 15}, Level: 40,
+			FastMove: "BUBBLE", ChargedMoves: []string{"HYDRO_PUMP"},
+		},
+		{
+			Species: speciesMedicham, IV: [3]int{15, 15, 15}, Level: 40,
+			FastMove: "COUNTER", ChargedMoves: []string{"DYNAMIC_PUNCH"},
+		},
+	}
+
+	// Budget EliteChargedTM=1: team needs 3, gate rejects.
+	_, tight, err := handler(t.Context(), nil, tools.TeamBuilderParams{
+		Pool:   pool,
+		League: leagueGreat,
+		Budget: &tools.BudgetSpec{EliteChargedTM: 1},
+	})
+	if err != nil {
+		t.Fatalf("handler tight: %v", err)
+	}
+	if len(tight.Teams) != 0 {
+		t.Errorf("Teams len = %d, want 0 (EliteChargedTM=1 with 3 elite moves in pool must reject)",
+			len(tight.Teams))
+	}
+
+	// Budget EliteChargedTM=3: gate fits, team kept.
+	_, loose, err := handler(t.Context(), nil, tools.TeamBuilderParams{
+		Pool:   pool,
+		League: leagueGreat,
+		Budget: &tools.BudgetSpec{EliteChargedTM: 3},
+	})
+	if err != nil {
+		t.Fatalf("handler loose: %v", err)
+	}
+	if len(loose.Teams) == 0 {
+		t.Fatal("Teams empty; EliteChargedTM=3 must allow a 3-elite-move team")
+	}
+}
+
+// TestTeamBuilder_BudgetETMZeroTreatedAsOff pins the convention
+// that EliteChargedTM=0 / EliteFastTM=0 is treated as "gate not
+// configured" (same as StardustLimit=0). A team with elite moves
+// must still come through — R7.P3 docs this explicitly for
+// consistency with the stardust gate.
+func TestTeamBuilder_BudgetETMZeroTreatedAsOff(t *testing.T) {
+	t.Parallel()
+
+	const ranksJSON = `[
+  {"speciesId": "quagsire", "speciesName": "Quagsire", "rating": 700,
+   "moveset": ["MUD_SHOT", "STONE_EDGE", "MUD_BOMB"],
+   "stats": {"product": 2100, "atk": 100, "def": 130, "hp": 180}},
+  {"speciesId": "azumarill", "speciesName": "Azumarill", "rating": 680,
+   "moveset": ["BUBBLE", "ICE_BEAM", "PLAY_ROUGH"],
+   "stats": {"product": 2000, "atk": 80, "def": 150, "hp": 200}},
+  {"speciesId": "medicham", "speciesName": "Medicham", "rating": 650,
+   "moveset": ["COUNTER", "ICE_PUNCH"],
+   "stats": {"product": 2050, "atk": 106, "def": 139, "hp": 141}}
+]`
+
+	tool := newTeamBuilderToolFromFixture(t, budgetETMFixture, ranksJSON)
+	handler := tool.Handler()
+
+	pool := []tools.Combatant{
+		{
+			Species: "quagsire", IV: [3]int{15, 15, 15}, Level: 40,
+			FastMove: "MUD_SHOT", ChargedMoves: []string{moveAquaTail},
+		},
+		{
+			Species: "azumarill", IV: [3]int{15, 15, 15}, Level: 40,
+			FastMove: "BUBBLE", ChargedMoves: []string{"HYDRO_PUMP"},
+		},
+		{
+			Species: speciesMedicham, IV: [3]int{15, 15, 15}, Level: 40,
+			FastMove: "COUNTER", ChargedMoves: []string{"DYNAMIC_PUNCH"},
+		},
+	}
+
+	_, result, err := handler(t.Context(), nil, tools.TeamBuilderParams{
+		Pool:   pool,
+		League: leagueGreat,
+		Budget: &tools.BudgetSpec{EliteChargedTM: 0, EliteFastTM: 0},
+	})
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+	if len(result.Teams) == 0 {
+		t.Fatal("Teams empty; EliteChargedTM=0 must behave as 'gate off' (consistent with StardustLimit=0)")
+	}
+}
+
 // TestCounterFinder_DisallowEliteFiltersMetaFallback is the elite
 // sibling of TestCounterFinder_DisallowLegacyFiltersMetaFallback.
 // With an empty from_pool the tool scans the top-N pvpoke meta; a

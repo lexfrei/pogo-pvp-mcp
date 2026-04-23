@@ -88,18 +88,31 @@ type TeamBuilderParams struct {
 // 10% over budget in the result with BudgetExceeded=true; 0 or
 // omitted drops them.
 //
-// EliteChargedTM / EliteFastTM / XLCandy / RareCandyXL are
-// accepted but NOT YET enforced. They're parsed so the JSON
-// contract is stable for the follow-up phase that adds ETM
-// tracking on the cost breakdown. For now they pass through
-// unused — callers can populate them today and the values will
-// start mattering in a later branch without a shape change.
+// R7.P3 added ETM enforcement: EliteChargedTM / EliteFastTM count
+// the player's available Elite TMs; a team whose resolved moveset
+// requires more ETMs than the budget allows is dropped (no
+// tolerance — ETMs are whole-unit inventory). One ETM per elite
+// move per team member: if a resolved ChargedMoves slot contains a
+// pvpoke eliteMoves entry, that counts as one EliteChargedTM
+// consumed; same for ElitEFastTM on a fast slot. Moves already
+// accessible without an ETM (standard learnable or pvpoke
+// legacyMoves — legacy is "permanently removed", the user either
+// has one or can't get one, so an ETM doesn't help) are free.
+// Counting is per team, so a resolved_moveset with AQUA_TAIL on
+// Quagsire in all three Pareto teams counts as 1 ETM per team,
+// not 3 across the run.
+//
+// XLCandy / RareCandyXL are parsed for contract stability but
+// still NOT enforced: pool_breakdown.PowerupCandyCost is deferred
+// to a future candy-cost branch (cross-source disagreement on
+// per-half-level tiers), so XL candy totals can't be computed
+// yet. Set them today to keep the input shape forward-compatible.
 type BudgetSpec struct {
 	StardustLimit     int     `json:"stardust,omitempty" jsonschema:"maximum total powerup + second-move stardust across the team"`
 	StardustTolerance float64 `json:"stardust_tolerance,omitempty" jsonschema:"fraction over budget still kept with budget_exceeded flag"`
-	EliteChargedTM    int     `json:"elite_charged_tm,omitempty" jsonschema:"ETM count available (not yet enforced)"`
-	EliteFastTM       int     `json:"elite_fast_tm,omitempty" jsonschema:"ETM count available (not yet enforced)"`
-	XLCandy           int     `json:"xl_candy,omitempty" jsonschema:"XL candy count available (not yet enforced)"`
+	EliteChargedTM    int     `json:"elite_charged_tm,omitempty" jsonschema:"Elite Charged TM inventory; teams needing more are dropped"`
+	EliteFastTM       int     `json:"elite_fast_tm,omitempty" jsonschema:"Elite Fast TM inventory; teams needing more are dropped"`
+	XLCandy           int     `json:"xl_candy,omitempty" jsonschema:"XL candy count available (not yet enforced — candy cost deferred)"`
 	RareCandyXL       bool    `json:"rare_candy_xl,omitempty" jsonschema:"rare XL candy flag (not yet enforced)"`
 }
 
@@ -412,7 +425,7 @@ func (tool *TeamBuilderTool) finaliseTeams(
 
 	poolBreakdowns := computePoolBreakdowns(snapshot, inputs.pool, inputs.cpCap, params.TargetLevel)
 
-	result.Teams = applyBudgetFilter(params, result.Teams, poolBreakdowns)
+	result.Teams = applyBudgetFilter(params, result.Teams, poolBreakdowns, snapshot)
 
 	result.Teams = result.Teams[:min(inputs.maxResults, len(result.Teams))]
 
