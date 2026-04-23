@@ -94,7 +94,7 @@ type TeamBuilderParams struct {
 // tolerance — ETMs are whole-unit inventory). One ETM per elite
 // move per team member: if a resolved ChargedMoves slot contains a
 // pvpoke eliteMoves entry, that counts as one EliteChargedTM
-// consumed; same for ElitEFastTM on a fast slot. Moves already
+// consumed; same for EliteFastTM on a fast slot. Moves already
 // accessible without an ETM (standard learnable or pvpoke
 // legacyMoves — legacy is "permanently removed", the user either
 // has one or can't get one, so an ETM doesn't help) are free.

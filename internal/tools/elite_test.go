@@ -457,8 +457,8 @@ const budgetETMFixture = `{
       "dex": 308, "speciesId": "medicham", "speciesName": "Medicham",
       "baseStats": {"atk": 121, "def": 152, "hp": 155},
       "types": ["fighting", "psychic"],
-      "fastMoves": ["COUNTER"], "chargedMoves": ["ICE_PUNCH", "DYNAMIC_PUNCH"],
-      "eliteMoves": ["DYNAMIC_PUNCH"],
+      "fastMoves": ["COUNTER", "PSYCHO_CUT"], "chargedMoves": ["ICE_PUNCH", "DYNAMIC_PUNCH"],
+      "eliteMoves": ["DYNAMIC_PUNCH", "PSYCHO_CUT"],
       "released": true
     },
     {
@@ -481,6 +481,8 @@ const budgetETMFixture = `{
   "moves": [
     {"moveId": "COUNTER", "name": "Counter", "type": "fighting",
      "power": 8, "energy": 0, "energyGain": 7, "cooldown": 1000, "turns": 2},
+    {"moveId": "PSYCHO_CUT", "name": "Psycho Cut", "type": "psychic",
+     "power": 3, "energy": 0, "energyGain": 9, "cooldown": 500, "turns": 1},
     {"moveId": "ICE_PUNCH", "name": "Ice Punch", "type": "ice",
      "power": 55, "energy": 40, "cooldown": 500},
     {"moveId": "DYNAMIC_PUNCH", "name": "Dynamic Punch", "type": "fighting",
@@ -566,6 +568,96 @@ func TestTeamBuilder_BudgetETMChargedDropsOverBudget(t *testing.T) {
 	}
 	if len(loose.Teams) == 0 {
 		t.Fatal("Teams empty; EliteChargedTM=3 must allow a 3-elite-move team")
+	}
+}
+
+// TestTeamBuilder_BudgetETMFastDropsOverBudget pins the fast-ETM
+// path specifically. Medicham in budgetETMFixture has PSYCHO_CUT
+// in its eliteMoves; a pool that uses it consumes 1 EliteFastTM
+// per team member. EliteFastTM=0 (gate off) keeps; EliteFastTM=1
+// with only one fast-elite user in the pool also keeps; if that
+// count ever climbed above budget, the gate would drop.
+func TestTeamBuilder_BudgetETMFastDropsOverBudget(t *testing.T) {
+	t.Parallel()
+
+	const ranksJSON = `[
+  {"speciesId": "quagsire", "speciesName": "Quagsire", "rating": 700,
+   "moveset": ["MUD_SHOT", "STONE_EDGE", "MUD_BOMB"],
+   "stats": {"product": 2100, "atk": 100, "def": 130, "hp": 180}},
+  {"speciesId": "azumarill", "speciesName": "Azumarill", "rating": 680,
+   "moveset": ["BUBBLE", "ICE_BEAM", "PLAY_ROUGH"],
+   "stats": {"product": 2000, "atk": 80, "def": 150, "hp": 200}},
+  {"speciesId": "medicham", "speciesName": "Medicham", "rating": 650,
+   "moveset": ["PSYCHO_CUT", "ICE_PUNCH"],
+   "stats": {"product": 2050, "atk": 106, "def": 139, "hp": 141}}
+]`
+
+	tool := newTeamBuilderToolFromFixture(t, budgetETMFixture, ranksJSON)
+	handler := tool.Handler()
+
+	// All three pool members use their elite FAST move (quagsire
+	// and azumarill have MUD_SHOT / BUBBLE, which are NOT elite in
+	// this fixture — only PSYCHO_CUT on medicham is. So medicham
+	// is the only fast-ETM consumer. Pool designed so the team
+	// needs exactly 1 EliteFastTM.)
+	pool := []tools.Combatant{
+		{
+			Species: "quagsire", IV: [3]int{15, 15, 15}, Level: 40,
+			FastMove: "MUD_SHOT", ChargedMoves: []string{"STONE_EDGE"},
+		},
+		{
+			Species: "azumarill", IV: [3]int{15, 15, 15}, Level: 40,
+			FastMove: "BUBBLE", ChargedMoves: []string{"ICE_BEAM"},
+		},
+		{
+			Species: speciesMedicham, IV: [3]int{15, 15, 15}, Level: 40,
+			FastMove: "PSYCHO_CUT", ChargedMoves: []string{"ICE_PUNCH"},
+		},
+	}
+
+	// Positive case: EliteFastTM=1 allows the 1-fast-elite team.
+	_, fit, err := handler(t.Context(), nil, tools.TeamBuilderParams{
+		Pool:   pool,
+		League: leagueGreat,
+		Budget: &tools.BudgetSpec{EliteFastTM: 1},
+	})
+	if err != nil {
+		t.Fatalf("handler fit: %v", err)
+	}
+	if len(fit.Teams) == 0 {
+		t.Fatal("Teams empty; EliteFastTM=1 with one fast-elite member must keep the team")
+	}
+
+	// Negative case: force all three members to use elite fast
+	// moves. Only medicham has one, so we duplicate the pool to
+	// force two medicham slots + one other — gives fastNeeded=2,
+	// EliteFastTM=1 rejects.
+	dupPool := []tools.Combatant{
+		{
+			Species: speciesMedicham, IV: [3]int{15, 15, 15}, Level: 40,
+			FastMove: "PSYCHO_CUT", ChargedMoves: []string{"ICE_PUNCH"},
+		},
+		{
+			Species: speciesMedicham, IV: [3]int{14, 15, 15}, Level: 40,
+			FastMove: "PSYCHO_CUT", ChargedMoves: []string{"ICE_PUNCH"},
+		},
+		{
+			Species: "quagsire", IV: [3]int{15, 15, 15}, Level: 40,
+			FastMove: "MUD_SHOT", ChargedMoves: []string{"STONE_EDGE"},
+		},
+	}
+
+	_, rejected, err := handler(t.Context(), nil, tools.TeamBuilderParams{
+		Pool:   dupPool,
+		League: leagueGreat,
+		Budget: &tools.BudgetSpec{EliteFastTM: 1},
+	})
+	if err != nil {
+		t.Fatalf("handler rejected: %v", err)
+	}
+	if len(rejected.Teams) != 0 {
+		t.Errorf("Teams len = %d, want 0 (two medicham elite-fast members exceed EliteFastTM=1)",
+			len(rejected.Teams))
 	}
 }
 
