@@ -746,7 +746,7 @@ type nonLegacyMoveSubsets struct {
 //
 //nolint:gocritic // unnamedResult: (subsets, rationale) documented on the doc line above
 func partitionNonLegacyMoves(species *pogopvp.Species) (nonLegacyMoveSubsets, string) {
-	return partitionNonRestricted(species,
+	return partitionNonRestricted(
 		nonLegacyMoves(species, species.FastMoves),
 		nonLegacyMoves(species, species.ChargedMoves),
 		"non-legacy")
@@ -758,7 +758,7 @@ func partitionNonLegacyMoves(species *pogopvp.Species) (nonLegacyMoveSubsets, st
 //
 //nolint:gocritic // unnamedResult: (subsets, rationale) documented on the doc line above
 func partitionNonEliteMoves(species *pogopvp.Species) (nonLegacyMoveSubsets, string) {
-	return partitionNonRestricted(species,
+	return partitionNonRestricted(
 		nonEliteMoves(species, species.FastMoves),
 		nonEliteMoves(species, species.ChargedMoves),
 		"non-elite")
@@ -770,7 +770,7 @@ func partitionNonEliteMoves(species *pogopvp.Species) (nonLegacyMoveSubsets, str
 //
 //nolint:gocritic // unnamedResult: (subsets, rationale) matches the callers' shape
 func partitionNonRestricted(
-	_ *pogopvp.Species, fasts, chargeds []string, label string,
+	fasts, chargeds []string, label string,
 ) (nonLegacyMoveSubsets, string) {
 	out := nonLegacyMoveSubsets{
 		fasts:    fasts,

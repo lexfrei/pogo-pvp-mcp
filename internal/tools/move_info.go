@@ -46,7 +46,8 @@ func NewMoveInfoTool(gm *gamemaster.Manager) *MoveInfoTool {
 }
 
 const moveInfoToolDescription = "Look up a move in the current gamemaster: type, power, energy, duration, " +
-	"plus the reverse index of every species on which this move is flagged legacy."
+	"plus disjoint reverse indices — legacy_on_species (permanently removed moves) and " +
+	"elite_on_species (Elite TM / Community Day moves)."
 
 // Tool returns the MCP registration.
 func (tool *MoveInfoTool) Tool() *mcp.Tool {

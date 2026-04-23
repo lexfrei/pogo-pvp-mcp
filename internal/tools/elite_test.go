@@ -392,6 +392,102 @@ func TestMoveInfo_EliteReverseIndex(t *testing.T) {
 	}
 }
 
+// TestTeamBuilder_DisallowEliteRejectsResolvedElite is the
+// auto-fill sibling of TestTeamBuilder_DisallowLegacyRejectsResolvedLegacy.
+// When the pvpoke recommendation contains an elite move and the
+// combatant leaves FastMove empty, the rejection must fire inside
+// applyMovesetDefaults via rejectResolvedElite — not only on
+// explicit moveset input.
+func TestTeamBuilder_DisallowEliteRejectsResolvedElite(t *testing.T) {
+	t.Parallel()
+
+	// Ranking fixture recommends AQUA_TAIL (elite on quagsire).
+	const ranksJSON = `[
+  {"speciesId": "quagsire", "speciesName": "Quagsire", "rating": 700,
+   "moveset": ["MUD_SHOT", "AQUA_TAIL", "STONE_EDGE"],
+   "matchups": [], "counters": [],
+   "stats": {"product": 2100, "atk": 100, "def": 130, "hp": 180}}
+]`
+
+	tool := newTeamBuilderToolFromFixture(t, eliteFixtureGamemaster, ranksJSON)
+	handler := tool.Handler()
+
+	// Quagsire with empty moveset → auto-fill pulls AQUA_TAIL from
+	// the rankings recommendation; DisallowElite must trip
+	// ErrEliteConflict before simulation.
+	pool := []tools.Combatant{
+		{Species: "quagsire", IV: [3]int{15, 15, 15}, Level: 40},
+		{
+			Species: "azumarill", IV: [3]int{15, 15, 15}, Level: 40,
+			FastMove: "BUBBLE", ChargedMoves: []string{"ICE_BEAM"},
+		},
+		{
+			Species: "medicham", IV: [3]int{15, 15, 15}, Level: 40,
+			FastMove: "COUNTER", ChargedMoves: []string{"ICE_PUNCH"},
+		},
+	}
+
+	_, _, err := handler(t.Context(), nil, tools.TeamBuilderParams{
+		Pool:          pool,
+		League:        leagueGreat,
+		DisallowElite: true,
+	})
+	if !errors.Is(err, tools.ErrEliteConflict) {
+		t.Errorf("error = %v, want wrapping ErrEliteConflict (auto-fill landed on elite AQUA_TAIL)", err)
+	}
+}
+
+// TestRank_OptimalHasEliteDetected pins the new Moveset.HasElite
+// aggregate: quagsire's recommended build in the fixture includes
+// AQUA_TAIL (elite on quagsire) so HasElite must be true while
+// HasLegacy stays false.
+func TestRank_OptimalHasEliteDetected(t *testing.T) {
+	t.Parallel()
+
+	const ranksJSON = `[
+  {"speciesId": "quagsire", "speciesName": "Quagsire", "rating": 800,
+   "moveset": ["MUD_SHOT", "AQUA_TAIL", "STONE_EDGE"],
+   "matchups": [], "counters": [],
+   "stats": {"product": 2100, "atk": 100, "def": 130, "hp": 180}}
+]`
+
+	tool := newRankToolFromFixture(t, eliteFixtureGamemaster, ranksJSON)
+	handler := tool.Handler()
+
+	_, result, err := handler(t.Context(), nil, tools.RankParams{
+		Species: "quagsire",
+		IV:      [3]int{0, 15, 15},
+		League:  leagueGreat,
+	})
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+
+	if result.OptimalMoveset == nil {
+		t.Fatal("OptimalMoveset = nil, want populated")
+	}
+	if !result.OptimalMoveset.HasElite {
+		t.Error("OptimalMoveset.HasElite = false, want true (AQUA_TAIL is elite on quagsire)")
+	}
+	if result.OptimalMoveset.HasLegacy {
+		t.Error("OptimalMoveset.HasLegacy = true, want false (no legacy moves on quagsire)")
+	}
+	if result.NonEliteMoveset == nil {
+		t.Fatal("NonEliteMoveset = nil, want populated when optimal has elite")
+	}
+	if result.NonEliteMoveset.Fast != "MUD_SHOT" {
+		t.Errorf("NonEliteMoveset.Fast = %q, want MUD_SHOT", result.NonEliteMoveset.Fast)
+	}
+	// Non-elite fallback should pick from {STONE_EDGE, MUD_BOMB},
+	// not AQUA_TAIL. Assert AQUA_TAIL is absent rather than pinning
+	// a specific choice (rating-tied fallbacks can swap).
+	for _, id := range result.NonEliteMoveset.Charged {
+		if id == moveAquaTail {
+			t.Errorf("NonEliteMoveset.Charged includes %s; want fallback without elite moves", moveAquaTail)
+		}
+	}
+}
+
 // TestTeamAnalysis_DisallowEliteExplicit mirrors the team_builder
 // test at the team_analysis layer — the client's reported 4-round
 // regression was for team_analysis specifically.

@@ -26,7 +26,7 @@ var ErrLegacyConflict = errors.New("legacy move present but disallow_legacy=true
 // limited-time research (Venusaur FRENZY_PLANT, Quagsire AQUA_TAIL).
 // Surfaced when a Combatant carries an elite move under
 // DisallowElite=true.
-var ErrEliteConflict = errors.New("elite TM / community day move present but disallow_elite=true")
+var ErrEliteConflict = errors.New("elite/community-day move present but disallow_elite=true")
 
 // MoveRef is the per-move JSON projection that pvp_meta, pvp_rank,
 // and pvp_species_info use when they need to surface the restricted
