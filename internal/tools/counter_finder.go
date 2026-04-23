@@ -23,7 +23,8 @@ type CounterFinderParams struct {
 	Shields        []int       `json:"shields,omitempty" jsonschema:"symmetric shield scenarios (omit for [1]); each 0..2"`
 	TopN           int         `json:"top_n,omitempty" jsonschema:"how many counters to return (default 5)"`
 	MetaTopN       int         `json:"meta_top_n,omitempty" jsonschema:"meta size when from_pool is empty (default 30)"`
-	DisallowLegacy bool        `json:"disallow_legacy,omitempty" jsonschema:"reject legacy moves; default false"`
+	DisallowLegacy bool        `json:"disallow_legacy,omitempty" jsonschema:"reject pvpoke legacyMoves (permanently removed)"`
+	DisallowElite  bool        `json:"disallow_elite,omitempty" jsonschema:"reject pvpoke eliteMoves (Elite TM / Community Day)"`
 }
 
 // CounterScenarioResult is the per-scenario detail inside a
@@ -195,13 +196,13 @@ func (tool *CounterFinderTool) prepareCounterFinder(
 
 	scenarios := resolveTeamDefaults(params.Shields, 0).Scenarios
 
-	err = assertNoLegacyInCombatant(snapshot, &params.Target, params.DisallowLegacy)
+	err = assertNoRestrictedInCombatant(snapshot, &params.Target, params.DisallowLegacy, params.DisallowElite)
 	if err != nil {
 		return nil, fmt.Errorf("target: %w", err)
 	}
 
 	err = applyMovesetDefaults(ctx, tool.rankings, &params.Target, cpCap, params.Cup,
-		snapshot, params.DisallowLegacy)
+		snapshot, params.DisallowLegacy, params.DisallowElite)
 	if err != nil {
 		return nil, fmt.Errorf("target moveset: %w", err)
 	}
@@ -235,14 +236,14 @@ func (tool *CounterFinderTool) resolveCandidates(
 	params *CounterFinderParams, cpCap, shields int,
 ) ([]pogopvp.Combatant, []Combatant, error) {
 	if len(params.FromPool) > 0 {
-		err := rejectTeamLegacy(snapshot, params.FromPool, params.DisallowLegacy)
+		err := rejectTeamRestricted(snapshot, params.FromPool, params.DisallowLegacy, params.DisallowElite)
 		if err != nil {
 			return nil, nil, err
 		}
 
 		for i := range params.FromPool {
 			err = applyMovesetDefaults(ctx, tool.rankings, &params.FromPool[i], cpCap, params.Cup,
-				snapshot, params.DisallowLegacy)
+				snapshot, params.DisallowLegacy, params.DisallowElite)
 			if err != nil {
 				return nil, nil, fmt.Errorf("from_pool[%d]: %w", i, err)
 			}
@@ -282,7 +283,11 @@ func (tool *CounterFinderTool) resolveMetaCandidates(
 	metaEntries := entries[:min(metaTopN, len(entries))]
 
 	if params.DisallowLegacy {
-		metaEntries = filterLegacyMetaEntries(snapshot, metaEntries)
+		metaEntries = filterRestrictedMetaEntries(snapshot, metaEntries, legacyCategory)
+	}
+
+	if params.DisallowElite {
+		metaEntries = filterRestrictedMetaEntries(snapshot, metaEntries, eliteCategory)
 	}
 
 	combatants, kept, _, err := buildMetaCombatants(snapshot, metaEntries, cpCap, shields)
@@ -290,47 +295,56 @@ func (tool *CounterFinderTool) resolveMetaCandidates(
 		return nil, nil, err
 	}
 
-	specs := make([]Combatant, 0, len(kept))
-	for i := range kept {
-		entry := kept[i]
+	return combatants, specsFromMetaEntries(kept), nil
+}
+
+// specsFromMetaEntries projects pvpoke ranking entries into the
+// tool's Combatant shape. Used by resolveMetaCandidates to echo
+// the auto-resolved species + moveset back in the counter-finder
+// response. Factored out to keep resolveMetaCandidates under funlen.
+func specsFromMetaEntries(entries []rankings.RankingEntry) []Combatant {
+	out := make([]Combatant, 0, len(entries))
+
+	for i := range entries {
+		entry := entries[i]
+
+		var fast string
+		if len(entry.Moveset) > 0 {
+			fast = entry.Moveset[0]
+		}
 
 		spec := Combatant{
-			Species: entry.SpeciesID,
-			FastMove: func() string {
-				if len(entry.Moveset) > 0 {
-					return entry.Moveset[0]
-				}
-
-				return ""
-			}(),
+			Species:  entry.SpeciesID,
+			FastMove: fast,
 		}
 
 		if len(entry.Moveset) > 1 {
 			spec.ChargedMoves = append(spec.ChargedMoves, entry.Moveset[1:]...)
 		}
 
-		specs = append(specs, spec)
+		out = append(out, spec)
 	}
 
-	return combatants, specs, nil
+	return out
 }
 
-// filterLegacyMetaEntries drops ranking entries whose pvpoke
-// recommended moveset contains a legacy move for the species, so
-// DisallowLegacy=true in the meta-fallback branch honours the same
-// contract as the explicit-pool branch (rejectTeamLegacy). Entries
-// whose species is missing from the snapshot are kept — the
-// downstream buildMetaCombatants will skip them with ErrUnknownSpecies
-// in line with the existing tolerance for gamemaster / rankings
-// cache skew.
-func filterLegacyMetaEntries(
-	snapshot *pogopvp.Gamemaster, entries []rankings.RankingEntry,
+// filterRestrictedMetaEntries drops ranking entries whose pvpoke
+// recommended moveset contains a move in the given restricted
+// category (legacy or elite) for the species. Used by the meta-
+// fallback branch of pvp_counter_finder to honour DisallowLegacy /
+// DisallowElite the same way the explicit-pool branch does via
+// rejectTeamRestricted. Entries whose species is missing from the
+// snapshot are kept — the downstream buildMetaCombatants will skip
+// them with ErrUnknownSpecies in line with the existing tolerance
+// for gamemaster / rankings cache skew.
+func filterRestrictedMetaEntries(
+	snapshot *pogopvp.Gamemaster, entries []rankings.RankingEntry, cat restrictedCategory,
 ) []rankings.RankingEntry {
 	out := make([]rankings.RankingEntry, 0, len(entries))
 
 	for i := range entries {
 		species, ok := snapshot.Pokemon[entries[i].SpeciesID]
-		if ok && anyLegacyMove(&species, entries[i].Moveset) {
+		if ok && movesetInRestrictedCategory(&species, entries[i].Moveset, cat) {
 			continue
 		}
 

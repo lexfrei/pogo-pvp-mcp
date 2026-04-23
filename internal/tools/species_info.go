@@ -23,9 +23,9 @@ type SpeciesInfoParams struct {
 
 // SpeciesInfoMoveRef is the per-move projection in SpeciesInfoResult's
 // FastMoves / ChargedMoves. Carries the engine Move fields clients
-// usually want — power, energy, type, duration — plus the Legacy
-// flag scoped to the parent species (legacy is per-species, not
-// per-move).
+// usually want — power, energy, type, duration — plus Legacy and
+// Elite flags scoped to the parent species (both categories are
+// per-species, not per-move).
 type SpeciesInfoMoveRef struct {
 	ID         string `json:"id"`
 	Type       string `json:"type"`
@@ -35,6 +35,7 @@ type SpeciesInfoMoveRef struct {
 	Cooldown   int    `json:"cooldown,omitempty"`
 	Turns      int    `json:"turns,omitempty"`
 	Legacy     bool   `json:"legacy"`
+	Elite      bool   `json:"elite"`
 }
 
 // SpeciesLeagueRank reports the species' overall rank in one of the
@@ -70,6 +71,7 @@ type SpeciesInfoResult struct {
 	FastMoves            []SpeciesInfoMoveRef `json:"fast_moves"`
 	ChargedMoves         []SpeciesInfoMoveRef `json:"charged_moves"`
 	LegacyMoves          []string             `json:"legacy_moves"`
+	EliteMoves           []string             `json:"elite_moves"`
 	Evolutions           []string             `json:"evolutions"`
 	PreEvolution         string               `json:"pre_evolution,omitempty"`
 	Tags                 []string             `json:"tags"`
@@ -159,6 +161,7 @@ func (tool *SpeciesInfoTool) handle(
 		FastMoves:            projectSpeciesMoves(snapshot, &species, species.FastMoves),
 		ChargedMoves:         projectSpeciesMoves(snapshot, &species, species.ChargedMoves),
 		LegacyMoves:          nonNilStrings(species.LegacyMoves),
+		EliteMoves:           nonNilStrings(species.EliteMoves),
 		Evolutions:           nonNilStrings(species.Evolutions),
 		PreEvolution:         species.PreEvolution,
 		Tags:                 nonNilStrings(species.Tags),
@@ -194,6 +197,7 @@ func projectSpeciesMoves(
 			Cooldown:   move.Cooldown,
 			Turns:      move.Turns,
 			Legacy:     pogopvp.IsLegacyMove(species, move.ID),
+			Elite:      pogopvp.IsEliteMove(species, move.ID),
 		})
 	}
 

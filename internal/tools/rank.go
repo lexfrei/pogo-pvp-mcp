@@ -139,6 +139,7 @@ type Moveset struct {
 	Fast      string   `json:"fast"`
 	Charged   []string `json:"charged"`
 	HasLegacy bool     `json:"has_legacy"`
+	HasElite  bool     `json:"has_elite"`
 }
 
 // NonLegacyMoveset describes the best-case build for this species
@@ -152,6 +153,18 @@ type Moveset struct {
 // shape was chosen or is empty (e.g. "species has no non-legacy charged
 // moves").
 type NonLegacyMoveset struct {
+	Fast        string   `json:"fast,omitempty"`
+	Charged     []string `json:"charged,omitempty"`
+	RatingDelta float64  `json:"rating_delta"`
+	Rationale   string   `json:"rationale,omitempty"`
+}
+
+// NonEliteMoveset is the elite-category sibling of NonLegacyMoveset:
+// the best-case build for this species that avoids every move in
+// the species' EliteMoves list (Elite TM / Community Day). Populated
+// only when OptimalMoveset.HasElite=true. RatingDelta semantics match
+// NonLegacyMoveset — negative = fallback weaker than elite optimal.
+type NonEliteMoveset struct {
 	Fast        string   `json:"fast,omitempty"`
 	Charged     []string `json:"charged,omitempty"`
 	RatingDelta float64  `json:"rating_delta"`
@@ -191,6 +204,7 @@ type RankResult struct {
 	CPCap                int               `json:"cp_cap"`
 	OptimalMoveset       *Moveset          `json:"optimal_moveset,omitempty"`
 	NonLegacyMoveset     *NonLegacyMoveset `json:"non_legacy_moveset,omitempty"`
+	NonEliteMoveset      *NonEliteMoveset  `json:"non_elite_moveset,omitempty"`
 	Hundo                *HundoComparison  `json:"comparison_to_hundo,omitempty"`
 	RankingsByCup        []CupRanking      `json:"rankings_by_cup,omitempty"`
 	ShadowVariantMissing bool              `json:"shadow_variant_missing,omitempty"`
@@ -266,6 +280,7 @@ func (tool *RankTool) handle(
 
 	result.OptimalMoveset = tool.lookupMoveset(ctx, inputs.cpCap, "", &inputs.species)
 	result.NonLegacyMoveset = tool.nonLegacyAlternative(ctx, &inputs, result.OptimalMoveset)
+	result.NonEliteMoveset = tool.nonEliteAlternative(ctx, &inputs, result.OptimalMoveset)
 	result.RankingsByCup = tool.buildRankingsByCup(ctx, &inputs)
 
 	err = ctx.Err()
@@ -300,19 +315,7 @@ func (tool *RankTool) lookupMoveset(
 			continue
 		}
 
-		if len(entry.Moveset) == 0 {
-			return nil
-		}
-
-		moveset := &Moveset{Fast: entry.Moveset[0]}
-		if len(entry.Moveset) > 1 {
-			moveset.Charged = append(moveset.Charged, entry.Moveset[1:]...)
-		}
-
-		moveset.HasLegacy = pogopvp.IsLegacyMove(species, moveset.Fast) ||
-			anyLegacyMove(species, moveset.Charged)
-
-		return moveset
+		return movesetFromEntry(species, &entry)
 	}
 
 	return nil
@@ -433,9 +436,9 @@ func lookupCupRanking(
 }
 
 // movesetFromEntry projects a rankings entry's Moveset slice into
-// the tool's Moveset shape with per-move legacy tagging. Returns
-// nil when the entry carries no moveset data so the caller can
-// omit the field.
+// the tool's Moveset shape with per-category aggregate tagging
+// (HasLegacy / HasElite). Returns nil when the entry carries no
+// moveset data so the caller can omit the field.
 func movesetFromEntry(species *pogopvp.Species, entry *rankings.RankingEntry) *Moveset {
 	if len(entry.Moveset) == 0 {
 		return nil
@@ -448,6 +451,8 @@ func movesetFromEntry(species *pogopvp.Species, entry *rankings.RankingEntry) *M
 
 	moveset.HasLegacy = pogopvp.IsLegacyMove(species, moveset.Fast) ||
 		anyLegacyMove(species, moveset.Charged)
+	moveset.HasElite = pogopvp.IsEliteMove(species, moveset.Fast) ||
+		anyEliteMove(species, moveset.Charged)
 
 	return moveset
 }
@@ -607,13 +612,74 @@ const nonLegacyMetaTopN = 20
 func (tool *RankTool) nonLegacyAlternative(
 	ctx context.Context, inputs *rankInputs, optimal *Moveset,
 ) *NonLegacyMoveset {
-	if optimal == nil || !optimal.HasLegacy {
+	common := tool.nonRestrictedAlternative(
+		ctx, inputs, optimal, optimal != nil && optimal.HasLegacy,
+		partitionNonLegacyMoves, "legacy",
+	)
+	if common == nil {
 		return nil
 	}
 
-	subsets, rationale := partitionNonLegacyMoves(&inputs.species)
+	return &NonLegacyMoveset{
+		Fast:        common.Fast,
+		Charged:     common.Charged,
+		RatingDelta: common.RatingDelta,
+		Rationale:   common.Rationale,
+	}
+}
+
+// nonEliteAlternative is the elite-category sibling: returns the
+// best non-elite moveset when optimal contains an Elite TM /
+// Community Day move, same rating-delta semantics as
+// nonLegacyAlternative. Returns nil when optimal is nil or has no
+// elite moves.
+func (tool *RankTool) nonEliteAlternative(
+	ctx context.Context, inputs *rankInputs, optimal *Moveset,
+) *NonEliteMoveset {
+	common := tool.nonRestrictedAlternative(
+		ctx, inputs, optimal, optimal != nil && optimal.HasElite,
+		partitionNonEliteMoves, "elite",
+	)
+	if common == nil {
+		return nil
+	}
+
+	return &NonEliteMoveset{
+		Fast:        common.Fast,
+		Charged:     common.Charged,
+		RatingDelta: common.RatingDelta,
+		Rationale:   common.Rationale,
+	}
+}
+
+// nonRestrictedMovesetCommon is the pre-JSON shape shared by the
+// legacy and elite fallback builders. Kept private; callers convert
+// to NonLegacyMoveset / NonEliteMoveset before exposing.
+type nonRestrictedMovesetCommon struct {
+	Fast        string
+	Charged     []string
+	RatingDelta float64
+	Rationale   string
+}
+
+// nonRestrictedAlternative is the shared body of
+// nonLegacyAlternative / nonEliteAlternative. partitioner picks
+// which category subset (non-legacy or non-elite) to enumerate
+// over, and label feeds rationale strings (e.g. "no scorable
+// non-legacy combination" vs "non-elite").
+func (tool *RankTool) nonRestrictedAlternative(
+	ctx context.Context, inputs *rankInputs, optimal *Moveset,
+	hasFlag bool,
+	partitioner func(*pogopvp.Species) (nonLegacyMoveSubsets, string),
+	label string,
+) *nonRestrictedMovesetCommon {
+	if optimal == nil || !hasFlag {
+		return nil
+	}
+
+	subsets, rationale := partitioner(&inputs.species)
 	if rationale != "" {
-		return &NonLegacyMoveset{Rationale: rationale}
+		return &nonRestrictedMovesetCommon{Rationale: rationale}
 	}
 
 	snapshot := tool.manager.Current()
@@ -623,8 +689,8 @@ func (tool *RankTool) nonLegacyAlternative(
 
 	meta, err := tool.nonLegacyMeta(ctx, inputs, snapshot)
 	if err != nil || len(meta) == 0 {
-		return &NonLegacyMoveset{
-			Rationale: "meta unavailable, cannot score non-legacy alternatives",
+		return &nonRestrictedMovesetCommon{
+			Rationale: "meta unavailable, cannot score non-" + label + " alternatives",
 		}
 	}
 
@@ -640,19 +706,22 @@ func (tool *RankTool) nonLegacyAlternative(
 		snapshot, inputs, spread.Level, subsets.fasts, subsets.chargeds, meta)
 
 	if best.fast == "" {
-		return &NonLegacyMoveset{Rationale: "no scorable non-legacy combination"}
+		return &nonRestrictedMovesetCommon{
+			Rationale: "no scorable non-" + label + " combination",
+		}
 	}
 
-	return &NonLegacyMoveset{
+	return &nonRestrictedMovesetCommon{
 		Fast:        best.fast,
 		Charged:     best.charged,
 		RatingDelta: best.score - optimalScore,
 	}
 }
 
-// nonLegacyMoveSubsets bundles the species' non-legacy fast and
-// charged move lists for the enumeration loop. Kept private so the
-// helper stays an implementation detail of nonLegacyAlternative.
+// nonLegacyMoveSubsets bundles the species' restricted-filtered
+// fast and charged move lists for the enumeration loop. Named
+// after legacy historically; the struct is now shared between
+// legacy and elite partitioners.
 type nonLegacyMoveSubsets struct {
 	fasts    []string
 	chargeds []string
@@ -665,17 +734,44 @@ type nonLegacyMoveSubsets struct {
 //
 //nolint:gocritic // unnamedResult: (subsets, rationale) documented on the doc line above
 func partitionNonLegacyMoves(species *pogopvp.Species) (nonLegacyMoveSubsets, string) {
+	return partitionNonRestricted(
+		nonLegacyMoves(species, species.FastMoves),
+		nonLegacyMoves(species, species.ChargedMoves),
+		"non-legacy")
+}
+
+// partitionNonEliteMoves mirrors partitionNonLegacyMoves for the
+// elite category. Shared shape via partitionNonRestricted keeps
+// the two paths in lockstep and avoids dupl.
+//
+//nolint:gocritic // unnamedResult: (subsets, rationale) documented on the doc line above
+func partitionNonEliteMoves(species *pogopvp.Species) (nonLegacyMoveSubsets, string) {
+	return partitionNonRestricted(
+		nonEliteMoves(species, species.FastMoves),
+		nonEliteMoves(species, species.ChargedMoves),
+		"non-elite")
+}
+
+// partitionNonRestricted constructs the subsets + rationale pair
+// from pre-filtered move lists. Shared by partitionNonLegacyMoves
+// and partitionNonEliteMoves.
+//
+//nolint:gocritic // unnamedResult: (subsets, rationale) matches the callers' shape
+func partitionNonRestricted(
+	fasts, chargeds []string, label string,
+) (nonLegacyMoveSubsets, string) {
 	out := nonLegacyMoveSubsets{
-		fasts:    nonLegacyMoves(species, species.FastMoves),
-		chargeds: nonLegacyMoves(species, species.ChargedMoves),
+		fasts:    fasts,
+		chargeds: chargeds,
 	}
 
-	if len(out.chargeds) == 0 {
-		return out, "species has no non-legacy charged moves"
-	}
-
-	if len(out.fasts) == 0 {
-		return out, "species has no non-legacy fast moves"
+	switch {
+	case len(out.fasts) == 0 && len(out.chargeds) == 0:
+		return out, "species has no " + label + " moves"
+	case len(out.chargeds) == 0:
+		return out, "species has no " + label + " charged moves"
+	case len(out.fasts) == 0:
+		return out, "species has no " + label + " fast moves"
 	}
 
 	return out, ""

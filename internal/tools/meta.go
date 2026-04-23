@@ -31,8 +31,9 @@ type MetaParams struct {
 // (lead / switch / closer / flex) based on where the species appears
 // in pvpoke's per-role rankings; omitted when the role fetch failed
 // or the species is not present in any of them. Moveset carries
-// per-move legacy flags so clients can tell pvpoke-recommended
-// community-day / event moves apart from regular learnables.
+// per-move Legacy / Elite flags so clients can tell pvpoke-recommended
+// permanently-removed moves (legacy) and Elite TM / Community Day
+// moves (elite) apart from regular learnables.
 type MetaEntry struct {
 	Rank        int       `json:"rank"`
 	SpeciesID   string    `json:"species"`
@@ -59,16 +60,17 @@ type MetaResult struct {
 
 // MetaTool wraps a rankings.Manager plus a gamemaster.Manager — the
 // former drives the top-N and role selection, the latter resolves
-// per-move legacy flags against each species' LegacyMoves. gm may
-// be nil in tests that don't care about legacy tagging; in that
-// case every Moveset entry gets Legacy=false.
+// per-move Legacy / Elite flags against each species' LegacyMoves /
+// EliteMoves. gm may be nil in tests that don't care about
+// restricted-move tagging; in that case every Moveset entry gets
+// Legacy=false and Elite=false.
 type MetaTool struct {
 	manager *rankings.Manager
 	gm      *gamemaster.Manager
 }
 
 // NewMetaTool constructs a MetaTool. ranks is required; gm may be
-// nil — legacy flags then fall through to false.
+// nil — Legacy / Elite flags then fall through to false.
 func NewMetaTool(manager *rankings.Manager, gm *gamemaster.Manager) *MetaTool {
 	return &MetaTool{manager: manager, gm: gm}
 }
@@ -260,8 +262,8 @@ func (tool *MetaTool) snapshotOrNil() *pogopvp.Gamemaster {
 
 // buildMetaEntries projects rankings slice rows into MetaEntry with
 // 1-based rank assignment. When snapshot is non-nil, Moveset entries
-// are tagged with their per-species legacy status via moveRefsFrom;
-// otherwise every Legacy flag falls through to false.
+// are tagged with per-species Legacy / Elite status via moveRefsFrom;
+// otherwise both flags fall through to false.
 func buildMetaEntries(
 	snapshot *pogopvp.Gamemaster, entries []rankings.RankingEntry,
 ) []MetaEntry {

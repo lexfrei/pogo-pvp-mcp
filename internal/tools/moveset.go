@@ -86,23 +86,23 @@ func ResolveMoveset(
 // well. When the resolver fails the spec is left untouched and the
 // error is returned so the caller can surface it.
 //
-// When disallowLegacy is true the resolved moveset is checked
-// against the species' LegacyMoves list; if any of the pvpoke-
-// recommended slots is legacy on this species the call fails with
-// ErrLegacyConflict rather than silently filling in a move the
-// caller explicitly rejected. The per-species lookup needs the
-// gamemaster snapshot; pass nil when the caller is not enforcing
-// the gate.
+// When disallowLegacy / disallowElite is true the resolved moveset
+// is checked against the species' LegacyMoves / EliteMoves list; if
+// any of the pvpoke-recommended slots hits the rejected category
+// the call fails with ErrLegacyConflict / ErrEliteConflict rather
+// than silently filling in a move the caller explicitly rejected.
+// The per-species lookup needs the gamemaster snapshot; pass nil
+// when the caller is not enforcing any gate.
 //
 // Shadow-aware: when spec.Options.Shadow is true the rankings and
-// legacy-move lookup use the resolved species id (e.g.
-// "medicham_shadow") so pvpoke's shadow-specific recommended
-// moveset and LegacyMoves list drive the result — not the base
-// species' published build.
+// restricted-move lookup use the resolved species id (e.g.
+// "medicham_shadow") so pvpoke's shadow-specific recommended moveset
+// and LegacyMoves / EliteMoves lists drive the result — not the
+// base species' published build.
 func applyMovesetDefaults(
 	ctx context.Context, ranks *rankings.Manager,
 	spec *Combatant, cpCap int, cup string,
-	snapshot *pogopvp.Gamemaster, disallowLegacy bool,
+	snapshot *pogopvp.Gamemaster, disallowLegacy, disallowElite bool,
 ) error {
 	if spec.FastMove != "" {
 		return nil
@@ -115,7 +115,7 @@ func applyMovesetDefaults(
 		return err
 	}
 
-	err = rejectResolvedLegacy(snapshot, lookupID, fast, charged, disallowLegacy)
+	err = rejectResolvedRestricted(snapshot, lookupID, fast, charged, disallowLegacy, disallowElite)
 	if err != nil {
 		return err
 	}

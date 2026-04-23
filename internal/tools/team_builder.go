@@ -70,7 +70,8 @@ type TeamBuilderParams struct {
 	Required       []string    `json:"required,omitempty" jsonschema:"species ids that must appear in the returned team"`
 	Banned         []string    `json:"banned,omitempty" jsonschema:"species ids to exclude from the pool"`
 	OptimizeFor    string      `json:"optimize_for,omitempty" jsonschema:"overall|0s|1s|2s|all_pareto (default overall)"`
-	DisallowLegacy bool        `json:"disallow_legacy,omitempty" jsonschema:"reject legacy moves; default false (legacy allowed)"`
+	DisallowLegacy bool        `json:"disallow_legacy,omitempty" jsonschema:"reject pvpoke legacyMoves (permanently removed)"`
+	DisallowElite  bool        `json:"disallow_elite,omitempty" jsonschema:"reject pvpoke eliteMoves (Elite TM / Community Day)"`
 	TargetLevel    float64     `json:"target_level,omitempty" jsonschema:"cost target; 0 = deepest fit under cap; positive = 0.5-grid level"`
 	AutoEvolve     bool        `json:"auto_evolve,omitempty" jsonschema:"walk each pool member to its terminal form under the cap"`
 	Budget         *BudgetSpec `json:"budget,omitempty" jsonschema:"optional stardust budget; over-budget teams dropped"`
@@ -539,7 +540,7 @@ func (tool *TeamBuilderTool) resolveTeamBuilderInputs(
 		return nil, err
 	}
 
-	err = rejectTeamLegacy(snapshot, params.Pool, params.DisallowLegacy)
+	err = rejectTeamRestricted(snapshot, params.Pool, params.DisallowLegacy, params.DisallowElite)
 	if err != nil {
 		return nil, err
 	}
@@ -566,7 +567,7 @@ func (tool *TeamBuilderTool) defaultPoolMovesets(
 
 	for i := range params.Pool {
 		err := applyMovesetDefaults(ctx, tool.rankings, &params.Pool[i],
-			cpCap, params.Cup, snapshot, params.DisallowLegacy)
+			cpCap, params.Cup, snapshot, params.DisallowLegacy, params.DisallowElite)
 		if err != nil {
 			return fmt.Errorf("pool[%d] moveset: %w", i, err)
 		}
