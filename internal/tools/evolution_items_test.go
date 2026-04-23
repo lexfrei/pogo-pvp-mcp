@@ -9,9 +9,69 @@ import "testing"
 
 const testItemSunStone = "sun_stone"
 
+// TestEvolutionRequirementFor_Table exhaustively pins every
+// reachable entry. The table is small (16 keys), human-maintained,
+// and Niantic changes these values rarely — so locking each entry
+// by ID + Item + Candy catches the typo-in-review-fix class of
+// regression that bit huntail/gorebyss/espeon/umbreon/magnezone/
+// probopass in the initial R6.7 commit.
+func TestEvolutionRequirementFor_Table(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		species string
+		item    string
+		candy   int
+	}{
+		// Gloom split.
+		{"vileplume", "", evolveCandy100},
+		{"bellossom", "sun_stone", evolveCandy100},
+		// Slowpoke split.
+		{"slowbro", "", evolveCandy50},
+		{"slowking", "king_rock", evolveCandy50},
+		// Poliwhirl split.
+		{"poliwrath", "", evolveCandy100},
+		{"politoed", "king_rock", evolveCandy100},
+		// Clamperl split (random pick, no item in GO).
+		{"huntail", "", evolveCandy50},
+		{"gorebyss", "", evolveCandy50},
+		// Eevee branches.
+		{"vaporeon", "", evolveCandy25},
+		{"jolteon", "", evolveCandy25},
+		{"flareon", "", evolveCandy25},
+		{"espeon", "", evolveCandy25},
+		{"umbreon", "", evolveCandy25},
+		{"leafeon", "mossy_lure", evolveCandy25},
+		{"glaceon", "glacial_lure", evolveCandy25},
+		{"sylveon", "", evolveCandy25},
+		// Tyrogue split.
+		{"hitmonlee", "", evolveCandy25},
+		{"hitmonchan", "", evolveCandy25},
+		{"hitmontop", "", evolveCandy25},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.species, func(t *testing.T) {
+			t.Parallel()
+
+			req := evolutionRequirementFor(tc.species)
+			if req == nil {
+				t.Fatalf("evolutionRequirementFor(%q) = nil, want populated", tc.species)
+			}
+			if req.Item != tc.item {
+				t.Errorf("Item = %q, want %q", req.Item, tc.item)
+			}
+			if req.Candy != tc.candy {
+				t.Errorf("Candy = %d, want %d", req.Candy, tc.candy)
+			}
+		})
+	}
+}
+
 // TestEvolutionRequirementFor_BellossomNeedsSunStone pins the
 // Sun-Stone branch Bulbapedia documents for gloom → bellossom.
-// Cost table snapshot 2026-04; adjust if Niantic changes tiers.
+// Keeping this as a named test (in addition to the table-driven
+// coverage) so a failure message surfaces the exact species name.
 func TestEvolutionRequirementFor_BellossomNeedsSunStone(t *testing.T) {
 	t.Parallel()
 
@@ -27,34 +87,26 @@ func TestEvolutionRequirementFor_BellossomNeedsSunStone(t *testing.T) {
 	}
 }
 
-// TestEvolutionRequirementFor_VileplumeNoItem confirms the sibling
-// branch is item-free so clients can distinguish the two paths
-// without assuming the item field is always populated.
-func TestEvolutionRequirementFor_VileplumeNoItem(t *testing.T) {
-	t.Parallel()
-
-	req := evolutionRequirementFor("vileplume")
-	if req == nil {
-		t.Fatal("evolutionRequirementFor(vileplume) = nil, want populated")
-	}
-	if req.Item != "" {
-		t.Errorf("Item = %q, want empty", req.Item)
-	}
-	if req.Candy != evolveCandy100 {
-		t.Errorf("Candy = %d, want %d", req.Candy, evolveCandy100)
-	}
-}
-
 // TestEvolutionRequirementFor_UnknownReturnsNil pins the fall-
 // through for species outside the curated branching table — the
 // caller must fall back to its own data source rather than assume
-// a default. Linear evolutions (ivysaur → venusaur) land here by
-// design, and species not shipped in GO (e.g. Scyther → Kleavor
-// never ships as an in-game evolution) also land here.
+// a default. Linear evolutions (ivysaur → venusaur, onix →
+// steelix) land here by design because the R6.7 scope covers only
+// branching chains; linear item-gated chains stay at Requirement
+// nil until a follow-up phase wires them onto MemberCostBreakdown
+// at the walkEvolutionChain path.
 func TestEvolutionRequirementFor_UnknownReturnsNil(t *testing.T) {
 	t.Parallel()
 
-	for _, id := range []string{"ivysaur", "venusaur", "ditto", "kleavor", "completely-bogus-species"} {
+	for _, id := range []string{
+		"ivysaur", "venusaur", "ditto", "kleavor",
+		"completely-bogus-species",
+		// Linear item-gated chains intentionally OUT of scope.
+		"scizor", "steelix", "kingdra", "porygon2", "porygon_z",
+		"rhyperior", "electivire", "magmortar",
+		"gliscor", "dusknoir", "togekiss",
+		"magnezone", "probopass", "sunflora",
+	} {
 		req := evolutionRequirementFor(id)
 		if req != nil {
 			t.Errorf("evolutionRequirementFor(%q) = %+v, want nil", id, req)
@@ -85,68 +137,5 @@ func TestEvolutionRequirementFor_ReturnsCopy(t *testing.T) {
 	if second.Item != testItemSunStone || second.Candy != evolveCandy100 {
 		t.Errorf("shared table mutated: second = %+v, want {%s, %d}",
 			second, testItemSunStone, evolveCandy100)
-	}
-}
-
-// TestEvolutionRequirementFor_ClamperlRandomPick pins the
-// Pokémon-GO-specific behaviour that diverges from mainline: both
-// huntail and gorebyss are pure RNG (no item) for 50 candy each.
-// Mainline's Deep Sea Tooth / Deep Sea Scale items do not exist in
-// GO.
-func TestEvolutionRequirementFor_ClamperlRandomPick(t *testing.T) {
-	t.Parallel()
-
-	for _, id := range []string{"huntail", "gorebyss"} {
-		req := evolutionRequirementFor(id)
-		if req == nil {
-			t.Fatalf("evolutionRequirementFor(%q) = nil, want populated (clamperl split is in-table)", id)
-		}
-		if req.Item != "" {
-			t.Errorf("%s Item = %q, want empty (pvpoke-GO: no item, random pick)", id, req.Item)
-		}
-		if req.Candy != evolveCandy50 {
-			t.Errorf("%s Candy = %d, want %d", id, req.Candy, evolveCandy50)
-		}
-		if req.Notes == "" {
-			t.Errorf("%s Notes empty; want the random-pick caveat", id)
-		}
-	}
-}
-
-// TestEvolutionRequirementFor_EspeonUmbreonCandy pins the 25-candy
-// contract for the buddy-km-gated eeveelutions. The 10 km walk +
-// time-of-day mechanic is the gate, but the candy is still charged
-// on top — zero would mean "no candy cost", which is wrong.
-func TestEvolutionRequirementFor_EspeonUmbreonCandy(t *testing.T) {
-	t.Parallel()
-
-	for _, id := range []string{"espeon", "umbreon"} {
-		req := evolutionRequirementFor(id)
-		if req == nil {
-			t.Fatalf("evolutionRequirementFor(%q) = nil, want populated", id)
-		}
-		if req.Candy != evolveCandy25 {
-			t.Errorf("%s Candy = %d, want %d (buddy-km mechanic is the gate, not a candy discount)",
-				id, req.Candy, evolveCandy25)
-		}
-	}
-}
-
-// TestEvolutionRequirementFor_MagnetonAndNosepass pins the
-// Magnetic-Lure gate for magnezone + probopass. Pre-review-round-2
-// the table mislabelled magnezone as sinnoh_stone and probopass as
-// mossy_lure (Leafeon's item). Both are in fact Magnetic Lure
-// evolutions (Niantic docs, Bulbapedia 2026-04 snapshot).
-func TestEvolutionRequirementFor_MagnetonAndNosepass(t *testing.T) {
-	t.Parallel()
-
-	for _, id := range []string{"magnezone", "probopass"} {
-		req := evolutionRequirementFor(id)
-		if req == nil {
-			t.Fatalf("evolutionRequirementFor(%q) = nil, want populated", id)
-		}
-		if req.Item != "magnetic_lure" {
-			t.Errorf("%s Item = %q, want magnetic_lure", id, req.Item)
-		}
 	}
 }

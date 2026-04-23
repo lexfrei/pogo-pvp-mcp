@@ -7,22 +7,32 @@ package tools
 // "should I evolve gloom to vileplume or bellossom, and what
 // does each cost?" need that data to make the recommendation.
 //
-// Source: Bulbapedia (authoritative for Niantic's GO mechanics)
-// snapshot 2026-04. Cross-referenced against PokéMiners
-// game-master dumps where available. Niantic changes these
-// requirements very rarely — the last adjustment was the 2024
-// eeveelution buddy-distance tweak. If the table drifts from
-// in-game reality, users should report via pvp_report_data_issue.
+// Source: Bulbapedia cross-referenced against pokemongohub.net +
+// gameinfo.io, snapshot 2026-04. Niantic changes these
+// requirements rarely; drift should be reported via
+// pvp_report_data_issue.
 //
-// Scope: branching evolutions where an item OR a non-trivial
-// mechanic selects the branch (gloom → vileplume OR bellossom).
-// Linear evolutions without item requirements (bulbasaur →
-// ivysaur → venusaur) are intentionally NOT in the table — they
-// don't need requirement disclosure because the enumerator
-// doesn't produce alternatives for them.
+// Scope: ONLY branching chains where pvpoke's gamemaster lists
+// more than one direct child of the base species AND the child
+// is shipped in Pokémon GO. That's the only path
+// enumerateBranchAlternatives (team_builder_evolve.go) calls
+// evolutionRequirementFor — linear chains take the
+// walkEvolutionChain branch instead and never hit this table.
+// Ship-scope chains today (R6.7):
+//   - gloom split  → vileplume (no item) / bellossom (Sun Stone)
+//   - slowpoke     → slowbro (no item) / slowking (King's Rock)
+//   - poliwhirl    → poliwrath (no item) / politoed (King's Rock)
+//   - clamperl     → huntail / gorebyss (both random-pick in GO)
+//   - eevee        → all eight eeveelutions
+//   - tyrogue      → hitmonlee / hitmonchan / hitmontop
 //
-// When pvpoke / engine eventually publish evolution-item data
-// natively, this table can be deleted.
+// Linear chains gated by an item in GO (scyther→scizor via Metal
+// Coat, onix→steelix, porygon line via Up-Grade / Sinnoh Stone,
+// rhydon→rhyperior, etc.) are deliberately OUT of scope here —
+// surfacing their item cost requires wiring a Requirement field
+// onto MemberCostBreakdown at the walkEvolutionChain path, which
+// is a separate task. When pvpoke / engine eventually publish
+// evolution-item data natively, this table can be deleted.
 
 // Canonical per-step evolution candy tiers in Pokémon GO. The
 // three values cover every entry in the branching-evolution table.
@@ -34,44 +44,25 @@ const (
 
 //nolint:gochecknoglobals // hardcoded canonical table; Niantic changes these ~never
 var evolutionItemRequirements = map[string]EvolutionItemRequirement{
-	// Stone-gated branches (Gloom, Sunkern).
+	// Gloom split (Sun Stone vs no-item).
 	"vileplume": {Candy: evolveCandy100},
 	"bellossom": {Item: "sun_stone", Candy: evolveCandy100},
-	"sunflora":  {Item: "sun_stone", Candy: evolveCandy25},
 
-	// King's Rock branches (Slowpoke, Poliwhirl).
-	"slowbro":   {Candy: evolveCandy50},
-	"slowking":  {Item: "king_rock", Candy: evolveCandy50},
+	// Slowpoke split (King's Rock vs no-item).
+	"slowbro":  {Candy: evolveCandy50},
+	"slowking": {Item: "king_rock", Candy: evolveCandy50},
+
+	// Poliwhirl split (King's Rock vs no-item).
 	"poliwrath": {Candy: evolveCandy100},
 	"politoed":  {Item: "king_rock", Candy: evolveCandy100},
-
-	// Trade-evolution proxies (Dragon Scale, Metal Coat, Up-grade).
-	"kingdra":  {Item: "dragon_scale", Candy: evolveCandy100},
-	"scizor":   {Item: "metal_coat", Candy: evolveCandy50},
-	"steelix":  {Item: "metal_coat", Candy: evolveCandy50},
-	"porygon2": {Item: "up_grade", Candy: evolveCandy25},
 
 	// Clamperl split — pure RNG in Pokémon GO (no item, unlike
 	// mainline games' Deep Sea Tooth / Deep Sea Scale).
 	"huntail":  {Candy: evolveCandy50, Notes: "random pick (no item in Pokémon GO, unlike mainline)"},
 	"gorebyss": {Candy: evolveCandy50, Notes: "random pick (no item in Pokémon GO, unlike mainline)"},
 
-	// Sinnoh-stone evolutions.
-	"rhyperior":  {Item: "sinnoh_stone", Candy: evolveCandy100},
-	"electivire": {Item: "sinnoh_stone", Candy: evolveCandy100},
-	"magmortar":  {Item: "sinnoh_stone", Candy: evolveCandy100},
-	"porygon_z":  {Item: "sinnoh_stone", Candy: evolveCandy100},
-	"gliscor":    {Item: "sinnoh_stone", Candy: evolveCandy100},
-	"dusknoir":   {Item: "sinnoh_stone", Candy: evolveCandy100},
-	"togekiss":   {Item: "sinnoh_stone", Candy: evolveCandy100},
-
-	// Lure-gated evolutions.
-	"magnezone": {Item: "magnetic_lure", Candy: evolveCandy100, Notes: "evolve near a Magnetic Lure module"},
-	"probopass": {Item: "magnetic_lure", Candy: evolveCandy50, Notes: "evolve near a Magnetic Lure module"},
-	"leafeon":   {Item: "mossy_lure", Candy: evolveCandy25, Notes: "evolve near a Mossy Lure module"},
-	"glaceon":   {Item: "glacial_lure", Candy: evolveCandy25, Notes: "evolve near a Glacial Lure module"},
-
-	// Eevee branches — random pick unless name-trick used.
+	// Eevee branches — all eight descendants reach this table
+	// because eevee is the canonical multi-branch chain in pvpoke.
 	"vaporeon": {Candy: evolveCandy25, Notes: "random pick unless name-trick used (Rainer)"},
 	"jolteon":  {Candy: evolveCandy25, Notes: "random pick unless name-trick used (Sparky)"},
 	"flareon":  {Candy: evolveCandy25, Notes: "random pick unless name-trick used (Pyro)"},
@@ -79,6 +70,8 @@ var evolutionItemRequirements = map[string]EvolutionItemRequirement{
 	// gate. The name-trick bypass works once per account.
 	"espeon":  {Candy: evolveCandy25, Notes: "walk 10 km as buddy + evolve during the day (one per name-trick Sakura)"},
 	"umbreon": {Candy: evolveCandy25, Notes: "walk 10 km as buddy + evolve during the night (one per name-trick Tamao)"},
+	"leafeon": {Item: "mossy_lure", Candy: evolveCandy25, Notes: "evolve near a Mossy Lure module"},
+	"glaceon": {Item: "glacial_lure", Candy: evolveCandy25, Notes: "evolve near a Glacial Lure module"},
 	"sylveon": {Candy: evolveCandy25, Notes: "earn 70 buddy hearts (one per name-trick Kira)"},
 
 	// Tyrogue split (stat-based, no item).
