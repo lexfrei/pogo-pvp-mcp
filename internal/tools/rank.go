@@ -765,11 +765,12 @@ func partitionNonRestricted(
 		chargeds: chargeds,
 	}
 
-	if len(out.chargeds) == 0 {
+	switch {
+	case len(out.fasts) == 0 && len(out.chargeds) == 0:
+		return out, "species has no " + label + " moves"
+	case len(out.chargeds) == 0:
 		return out, "species has no " + label + " charged moves"
-	}
-
-	if len(out.fasts) == 0 {
+	case len(out.fasts) == 0:
 		return out, "species has no " + label + " fast moves"
 	}
 
