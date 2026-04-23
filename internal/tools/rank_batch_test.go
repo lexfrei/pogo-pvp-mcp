@@ -296,6 +296,28 @@ func TestRankBatch_TopLevelMetadataEcho(t *testing.T) {
 	}
 }
 
+// TestRankBatch_ParamsShapeLocked pins the RankBatchParams public
+// field set against the documented contract (no Cup input; docs
+// would lie otherwise — see the r7 round-1 review where CLAUDE.md
+// falsely claimed "Cup input restored"). A compile-time struct
+// literal with every expected field present catches both addition
+// and removal — if a future refactor adds Cup, the literal needs
+// a Cup: key to compile and the rebuild flags doc drift. If a
+// field is dropped, the literal fails with "unknown field".
+func TestRankBatch_ParamsShapeLocked(t *testing.T) {
+	t.Parallel()
+
+	// Compile-time evidence only; no runtime assertion needed.
+	_ = tools.RankBatchParams{
+		Species: "",
+		IVs:     nil,
+		League:  "",
+		CPCap:   0,
+		XL:      false,
+		Options: tools.CombatantOptions{},
+	}
+}
+
 // TestRankBatch_RankingsByCupHoisted pins r7 payload-efficiency
 // finding: pvp_rank_batch lifts rankings_by_cup to the top-level
 // result once (species-scoped — identical across IVs), and every

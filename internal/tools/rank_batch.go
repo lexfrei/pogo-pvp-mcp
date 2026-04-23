@@ -34,9 +34,13 @@ const maxRankBatchSize = 64
 // when a client is sweeping IV space (typical use: "score my entire
 // box of this species in one call"). Options applies batch-wide —
 // every IV triple is evaluated against the same resolved species,
-// so Options.Shadow=true sweeps the shadow variant's ranking. No
-// cup parameter: pvp_rank returns rankings_by_cup on every result,
-// so the batch reproduces that array per entry.
+// so Options.Shadow=true sweeps the shadow variant's ranking.
+//
+// No cup parameter: the batch runs unfiltered and hoists
+// rankings_by_cup onto the top-level RankBatchResult (species-
+// scoped, identical across IVs). Per-entry Result.RankingsByCup is
+// stripped. Callers that need per-cup narrowing should call
+// pvp_rank individually with its own Cup filter.
 type RankBatchParams struct {
 	Species string           `json:"species" jsonschema:"species id in the pvpoke gamemaster"`
 	IVs     [][3]int         `json:"ivs" jsonschema:"list of [atk, def, sta] triples; each component 0..15"`
