@@ -122,7 +122,8 @@ type TeamAnalysisParams struct {
 	Cup            string      `json:"cup,omitempty" jsonschema:"cup id from pvpoke; empty = open-league all"`
 	TopN           int         `json:"top_n,omitempty" jsonschema:"meta species to sweep (default 30)"`
 	Shields        []int       `json:"shields,omitempty" jsonschema:"symmetric shield scenarios; omit for [1]; averaged; each 0..2"`
-	DisallowLegacy bool        `json:"disallow_legacy,omitempty" jsonschema:"reject legacy moves; default false (legacy allowed)"`
+	DisallowLegacy bool        `json:"disallow_legacy,omitempty" jsonschema:"reject pvpoke legacyMoves (permanently removed)"`
+	DisallowElite  bool        `json:"disallow_elite,omitempty" jsonschema:"reject pvpoke eliteMoves (Elite TM / Community Day)"`
 	TargetLevel    float64     `json:"target_level,omitempty" jsonschema:"cost target; 0 = deepest fit under cap; positive = 0.5-grid level"`
 }
 
@@ -326,14 +327,14 @@ func (tool *TeamAnalysisTool) prepareTeam(
 	ctx context.Context, snapshot *pogopvp.Gamemaster,
 	params *TeamAnalysisParams, cpCap, shields int,
 ) ([]pogopvp.Combatant, error) {
-	err := rejectTeamLegacy(snapshot, params.Team, params.DisallowLegacy)
+	err := rejectTeamRestricted(snapshot, params.Team, params.DisallowLegacy, params.DisallowElite)
 	if err != nil {
 		return nil, err
 	}
 
 	for i := range params.Team {
 		err = applyMovesetDefaults(ctx, tool.rankings, &params.Team[i], cpCap, params.Cup,
-			snapshot, params.DisallowLegacy)
+			snapshot, params.DisallowLegacy, params.DisallowElite)
 		if err != nil {
 			return nil, fmt.Errorf("team[%d] moveset: %w", i, err)
 		}

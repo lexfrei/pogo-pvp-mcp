@@ -22,7 +22,8 @@ type ThreatCoverageParams struct {
 	Cup            string      `json:"cup,omitempty" jsonschema:"cup id from pvpoke; empty = open-league all"`
 	TopN           int         `json:"top_n,omitempty" jsonschema:"meta size to sweep (default 30)"`
 	Shields        []int       `json:"shields,omitempty" jsonschema:"symmetric shield scenarios (default [1]); each 0..2"`
-	DisallowLegacy bool        `json:"disallow_legacy,omitempty" jsonschema:"reject legacy moves on team or pool inputs"`
+	DisallowLegacy bool        `json:"disallow_legacy,omitempty" jsonschema:"reject pvpoke legacyMoves (permanently removed)"`
+	DisallowElite  bool        `json:"disallow_elite,omitempty" jsonschema:"reject pvpoke eliteMoves (Elite TM / Community Day)"`
 }
 
 // ThreatCandidateMatchup is one pool member's scored result against a
@@ -238,14 +239,15 @@ func (tool *ThreatCoverageTool) prepareThreatCoverage(
 	shields := scenarios[0]
 
 	teamCombatants, err := tool.resolveCombatantSlice(
-		ctx, snapshot, params.Team, "team", cpCap, shields, params.Cup, params.DisallowLegacy)
+		ctx, snapshot, params.Team, "team", cpCap, shields, params.Cup,
+		params.DisallowLegacy, params.DisallowElite)
 	if err != nil {
 		return nil, err
 	}
 
 	poolCombatants, err := tool.resolveCombatantSlice(
 		ctx, snapshot, params.CandidatePool, "candidate_pool",
-		cpCap, shields, params.Cup, params.DisallowLegacy)
+		cpCap, shields, params.Cup, params.DisallowLegacy, params.DisallowElite)
 	if err != nil {
 		return nil, err
 	}
@@ -269,22 +271,22 @@ func (tool *ThreatCoverageTool) prepareThreatCoverage(
 	}, nil
 }
 
-// resolveCombatantSlice runs the legacy gate + per-member moveset
-// defaulting + combatant construction over a slice (team or pool).
-// Factored out so prepareThreatCoverage stays under gocyclo.
+// resolveCombatantSlice runs the restricted-move gate + per-member
+// moveset defaulting + combatant construction over a slice (team or
+// pool). Factored out so prepareThreatCoverage stays under gocyclo.
 func (tool *ThreatCoverageTool) resolveCombatantSlice(
 	ctx context.Context, snapshot *pogopvp.Gamemaster,
 	specs []Combatant, label string,
-	cpCap, shields int, cup string, disallowLegacy bool,
+	cpCap, shields int, cup string, disallowLegacy, disallowElite bool,
 ) ([]pogopvp.Combatant, error) {
-	err := rejectTeamLegacy(snapshot, specs, disallowLegacy)
+	err := rejectTeamRestricted(snapshot, specs, disallowLegacy, disallowElite)
 	if err != nil {
 		return nil, err
 	}
 
 	for i := range specs {
 		err = applyMovesetDefaults(ctx, tool.rankings, &specs[i], cpCap, cup,
-			snapshot, disallowLegacy)
+			snapshot, disallowLegacy, disallowElite)
 		if err != nil {
 			return nil, fmt.Errorf("%s[%d] moveset: %w", label, i, err)
 		}

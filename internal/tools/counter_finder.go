@@ -23,7 +23,8 @@ type CounterFinderParams struct {
 	Shields        []int       `json:"shields,omitempty" jsonschema:"symmetric shield scenarios (omit for [1]); each 0..2"`
 	TopN           int         `json:"top_n,omitempty" jsonschema:"how many counters to return (default 5)"`
 	MetaTopN       int         `json:"meta_top_n,omitempty" jsonschema:"meta size when from_pool is empty (default 30)"`
-	DisallowLegacy bool        `json:"disallow_legacy,omitempty" jsonschema:"reject legacy moves; default false"`
+	DisallowLegacy bool        `json:"disallow_legacy,omitempty" jsonschema:"reject pvpoke legacyMoves (permanently removed)"`
+	DisallowElite  bool        `json:"disallow_elite,omitempty" jsonschema:"reject pvpoke eliteMoves (Elite TM / Community Day)"`
 }
 
 // CounterScenarioResult is the per-scenario detail inside a
@@ -195,13 +196,13 @@ func (tool *CounterFinderTool) prepareCounterFinder(
 
 	scenarios := resolveTeamDefaults(params.Shields, 0).Scenarios
 
-	err = assertNoLegacyInCombatant(snapshot, &params.Target, params.DisallowLegacy)
+	err = assertNoRestrictedInCombatant(snapshot, &params.Target, params.DisallowLegacy, params.DisallowElite)
 	if err != nil {
 		return nil, fmt.Errorf("target: %w", err)
 	}
 
 	err = applyMovesetDefaults(ctx, tool.rankings, &params.Target, cpCap, params.Cup,
-		snapshot, params.DisallowLegacy)
+		snapshot, params.DisallowLegacy, params.DisallowElite)
 	if err != nil {
 		return nil, fmt.Errorf("target moveset: %w", err)
 	}
@@ -235,14 +236,14 @@ func (tool *CounterFinderTool) resolveCandidates(
 	params *CounterFinderParams, cpCap, shields int,
 ) ([]pogopvp.Combatant, []Combatant, error) {
 	if len(params.FromPool) > 0 {
-		err := rejectTeamLegacy(snapshot, params.FromPool, params.DisallowLegacy)
+		err := rejectTeamRestricted(snapshot, params.FromPool, params.DisallowLegacy, params.DisallowElite)
 		if err != nil {
 			return nil, nil, err
 		}
 
 		for i := range params.FromPool {
 			err = applyMovesetDefaults(ctx, tool.rankings, &params.FromPool[i], cpCap, params.Cup,
-				snapshot, params.DisallowLegacy)
+				snapshot, params.DisallowLegacy, params.DisallowElite)
 			if err != nil {
 				return nil, nil, fmt.Errorf("from_pool[%d]: %w", i, err)
 			}
