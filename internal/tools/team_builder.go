@@ -139,21 +139,45 @@ type MemberCostBreakdown struct {
 	// vaporeon / jolteon / flareon). Each entry carries the child
 	// species id, its predicted CP at the pool member's current
 	// level (evolution preserves level in Pokémon GO), and whether
-	// that level-1 floor fits the league cap. Candy / item cost
-	// deliberately omitted — those require PokéMiners data and live
-	// in a dedicated pvp_evolution_cost tool. Empty slice on non-
-	// branching skips and on successful promotions.
+	// that level-1 floor fits the league cap. R6.7 added
+	// Requirement: when the child species is in the curated
+	// evolution-item table, the per-step item (if any) + candy cost
+	// + notes ship alongside; otherwise Requirement is nil and the
+	// caller should consult its own data source. Empty slice on
+	// non-branching skips and on successful promotions.
 	AutoEvolveAlternatives []EvolveAlternative `json:"auto_evolve_alternatives,omitempty"`
 }
 
 // EvolveAlternative describes one branch the auto-evolve pass
-// rejected because it could not pick unilaterally. Surface format
-// is intentionally minimal — the caller can pass To through
-// pvp_evolution_cost for per-step candy / item needs.
+// rejected because it could not pick unilaterally. When the branch
+// is in the curated evolutionItemRequirements table (Bulbapedia-
+// sourced subset of branching chains Niantic ships — gloom→
+// vileplume/bellossom, slowpoke→slowking/slowbro, eevee split,
+// etc.), Requirement carries the item (if any) and candy cost;
+// otherwise Requirement is nil and callers should fall back to
+// their own data source for per-step requirements.
 type EvolveAlternative struct {
-	To          string `json:"to"`
-	PredictedCP int    `json:"predicted_cp"`
-	LeagueFit   bool   `json:"league_fit"`
+	To          string                    `json:"to"`
+	PredictedCP int                       `json:"predicted_cp"`
+	LeagueFit   bool                      `json:"league_fit"`
+	Requirement *EvolutionItemRequirement `json:"requirement,omitempty"`
+}
+
+// EvolutionItemRequirement captures the item (if any) and candy
+// cost a trainer must spend to perform one evolution step in
+// Pokémon GO. Item is the canonical snake_case id; observed values
+// in the table today: "sun_stone", "king_rock", "mossy_lure",
+// "glacial_lure". Empty when no item is required (random-pick
+// branches, stat-based splits like Tyrogue, buddy-km-gated
+// eeveelutions). Candy is the per-step cost and is always positive
+// in the current table. Notes is a free-form caveat for non-candy
+// mechanics (buddy-km walk, time-of-day gate, lure-module
+// requirement, mainline-vs-GO difference on Clamperl, etc.) and is
+// empty when the entry has no further subtleties.
+type EvolutionItemRequirement struct {
+	Item  string `json:"item,omitempty"`
+	Candy int    `json:"candy"`
+	Notes string `json:"notes,omitempty"`
 }
 
 // ErrMemberInvalidForLeague is returned when a pool member's

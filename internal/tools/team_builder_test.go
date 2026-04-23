@@ -2114,6 +2114,324 @@ func TestTeamBuilderTool_AutoEvolveBranchingAlternativesLeagueFit(t *testing.T) 
 	t.Fatalf("eevee not in the returned team")
 }
 
+// gloomBranchingFixture publishes gloom with two evolutions to pin
+// the item-gated branching path (R6.7): vileplume no item,
+// bellossom sun_stone. Base stats chosen so both children fit GL
+// at level 1 floor.
+const gloomBranchingFixture = `{
+  "id": "gamemaster",
+  "timestamp": "2026-04-23 00:00:00",
+  "pokemon": [
+    {"dex": 44, "speciesId": "gloom", "speciesName": "Gloom",
+     "baseStats": {"atk": 131, "def": 112, "hp": 155},
+     "types": ["grass", "poison"],
+     "fastMoves": ["FAST1"], "chargedMoves": ["CH1"],
+     "family": {"id": "FAMILY_ODDISH", "parent": "oddish", "evolutions": ["vileplume", "bellossom"]},
+     "released": true},
+    {"dex": 45, "speciesId": "vileplume", "speciesName": "Vileplume",
+     "baseStats": {"atk": 172, "def": 148, "hp": 181},
+     "types": ["grass", "poison"],
+     "fastMoves": ["FAST1"], "chargedMoves": ["CH1"],
+     "family": {"id": "FAMILY_ODDISH", "parent": "gloom"},
+     "released": true},
+    {"dex": 182, "speciesId": "bellossom", "speciesName": "Bellossom",
+     "baseStats": {"atk": 169, "def": 189, "hp": 181},
+     "types": ["grass"],
+     "fastMoves": ["FAST1"], "chargedMoves": ["CH1"],
+     "family": {"id": "FAMILY_ODDISH", "parent": "gloom"},
+     "released": true},
+    {"dex": 2, "speciesId": "b", "speciesName": "B",
+     "baseStats": {"atk": 152, "def": 143, "hp": 216}, "types": ["water"],
+     "fastMoves": ["FAST1"], "chargedMoves": ["CH1"], "released": true},
+    {"dex": 3, "speciesId": "c", "speciesName": "C",
+     "baseStats": {"atk": 234, "def": 159, "hp": 207}, "types": ["fighting"],
+     "fastMoves": ["FAST1"], "chargedMoves": ["CH1"], "released": true}
+  ],
+  "moves": [
+    {"moveId": "FAST1", "name": "Fast 1", "type": "normal",
+     "power": 3, "energy": 0, "energyGain": 5, "cooldown": 1000, "turns": 2},
+    {"moveId": "CH1", "name": "Charged 1", "type": "normal",
+     "power": 50, "energy": 35, "cooldown": 500}
+  ]
+}`
+
+// TestTeamBuilderTool_AutoEvolveItemGatedAlternativesRequirement
+// pins the R6.7 item-gated contract end-to-end: gloom branching
+// surfaces vileplume + bellossom Requirement entries, bellossom
+// carries the sun_stone item, vileplume is item-free, both at
+// 100 candy. Regression guard for the pre-round-2 table.
+func TestTeamBuilderTool_AutoEvolveItemGatedAlternativesRequirement(t *testing.T) {
+	t.Parallel()
+
+	const rankingsPayload = `[
+  {"speciesId": "gloom", "speciesName": "Gloom", "rating": 500,
+   "moveset": ["FAST1", "CH1"],
+   "stats": {"product": 2100, "atk": 100, "def": 100, "hp": 150}},
+  {"speciesId": "b", "speciesName": "B", "rating": 600,
+   "moveset": ["FAST1", "CH1"],
+   "stats": {"product": 2000, "atk": 100, "def": 120, "hp": 150}},
+  {"speciesId": "c", "speciesName": "C", "rating": 650,
+   "moveset": ["FAST1", "CH1"],
+   "stats": {"product": 2050, "atk": 105, "def": 125, "hp": 145}}
+]`
+
+	tool := newTeamBuilderToolFromFixture(t, gloomBranchingFixture, rankingsPayload)
+	handler := tool.Handler()
+
+	pool := []tools.Combatant{
+		{Species: "gloom", IV: [3]int{15, 15, 15}, Level: 20, FastMove: "FAST1", ChargedMoves: []string{"CH1"}},
+		baseCombatant("b"),
+		baseCombatant("c"),
+	}
+
+	_, result, err := handler(t.Context(), nil, tools.TeamBuilderParams{
+		Pool:       pool,
+		League:     leagueGreat,
+		AutoEvolve: true,
+	})
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+
+	if len(result.Teams) == 0 {
+		t.Fatal("no teams returned")
+	}
+
+	var alts []tools.EvolveAlternative
+	for i := range result.Teams[0].Members {
+		if result.Teams[0].Members[i].Species == "gloom" {
+			alts = result.Teams[0].CostBreakdowns[i].AutoEvolveAlternatives
+
+			break
+		}
+	}
+
+	if len(alts) != 2 {
+		t.Fatalf("alts len = %d, want 2 (vileplume + bellossom); alts=%+v", len(alts), alts)
+	}
+
+	byID := make(map[string]tools.EvolveAlternative, len(alts))
+	for _, alt := range alts {
+		byID[alt.To] = alt
+	}
+
+	bellossom, ok := byID["bellossom"]
+	if !ok {
+		t.Fatal("bellossom missing from alts")
+	}
+	if bellossom.Requirement == nil {
+		t.Fatal("bellossom Requirement = nil, want populated")
+	}
+	if bellossom.Requirement.Item != "sun_stone" {
+		t.Errorf("bellossom Requirement.Item = %q, want sun_stone", bellossom.Requirement.Item)
+	}
+
+	const wantBellossomCandy = 100
+	if bellossom.Requirement.Candy != wantBellossomCandy {
+		t.Errorf("bellossom Requirement.Candy = %d, want %d",
+			bellossom.Requirement.Candy, wantBellossomCandy)
+	}
+
+	vileplume, ok := byID["vileplume"]
+	if !ok {
+		t.Fatal("vileplume missing from alts")
+	}
+	if vileplume.Requirement == nil {
+		t.Fatal("vileplume Requirement = nil, want populated")
+	}
+	if vileplume.Requirement.Item != "" {
+		t.Errorf("vileplume Requirement.Item = %q, want empty (no item)", vileplume.Requirement.Item)
+	}
+
+	const wantVileplumeCandy = 100
+	if vileplume.Requirement.Candy != wantVileplumeCandy {
+		t.Errorf("vileplume Requirement.Candy = %d, want %d",
+			vileplume.Requirement.Candy, wantVileplumeCandy)
+	}
+}
+
+// unknownBranchingFixture publishes a synthetic base species whose
+// children are NOT in the evolution_items table — models the
+// Scyther→Kleavor class of chain that pvpoke data may list but
+// Niantic hasn't shipped in GO. Test pins that Requirement=nil
+// for such branches and callers can distinguish them from the
+// in-table cases.
+const unknownBranchingFixture = `{
+  "id": "gamemaster",
+  "timestamp": "2026-04-23 00:00:00",
+  "pokemon": [
+    {"dex": 9001, "speciesId": "unknownbase", "speciesName": "UnknownBase",
+     "baseStats": {"atk": 104, "def": 114, "hp": 146},
+     "types": ["normal"],
+     "fastMoves": ["FAST1"], "chargedMoves": ["CH1"],
+     "family": {"id": "FAMILY_UNK", "evolutions": ["unknownchildA", "unknownchildB"]},
+     "released": true},
+    {"dex": 9002, "speciesId": "unknownchildA", "speciesName": "UnknownChildA",
+     "baseStats": {"atk": 152, "def": 143, "hp": 155},
+     "types": ["normal"],
+     "fastMoves": ["FAST1"], "chargedMoves": ["CH1"],
+     "family": {"id": "FAMILY_UNK", "parent": "unknownbase"},
+     "released": true},
+    {"dex": 9003, "speciesId": "unknownchildB", "speciesName": "UnknownChildB",
+     "baseStats": {"atk": 148, "def": 139, "hp": 160},
+     "types": ["normal"],
+     "fastMoves": ["FAST1"], "chargedMoves": ["CH1"],
+     "family": {"id": "FAMILY_UNK", "parent": "unknownbase"},
+     "released": true},
+    {"dex": 2, "speciesId": "b", "speciesName": "B",
+     "baseStats": {"atk": 152, "def": 143, "hp": 216}, "types": ["water"],
+     "fastMoves": ["FAST1"], "chargedMoves": ["CH1"], "released": true},
+    {"dex": 3, "speciesId": "c", "speciesName": "C",
+     "baseStats": {"atk": 234, "def": 159, "hp": 207}, "types": ["fighting"],
+     "fastMoves": ["FAST1"], "chargedMoves": ["CH1"], "released": true}
+  ],
+  "moves": [
+    {"moveId": "FAST1", "name": "Fast 1", "type": "normal",
+     "power": 3, "energy": 0, "energyGain": 5, "cooldown": 1000, "turns": 2},
+    {"moveId": "CH1", "name": "Charged 1", "type": "normal",
+     "power": 50, "energy": 35, "cooldown": 500}
+  ]
+}`
+
+// TestTeamBuilderTool_AutoEvolveUnknownBranchRequirementNil pins
+// the graceful fall-through: a branch whose child is absent from
+// evolutionItemRequirements table leaves Requirement=nil on that
+// alternative, not a zero-valued struct. Matches the Scyther →
+// Kleavor and similar "pvpoke lists it but Niantic doesn't ship"
+// contract.
+func TestTeamBuilderTool_AutoEvolveUnknownBranchRequirementNil(t *testing.T) {
+	t.Parallel()
+
+	const rankingsPayload = `[
+  {"speciesId": "unknownbase", "speciesName": "UnknownBase", "rating": 500,
+   "moveset": ["FAST1", "CH1"],
+   "stats": {"product": 2100, "atk": 100, "def": 100, "hp": 150}},
+  {"speciesId": "b", "speciesName": "B", "rating": 600,
+   "moveset": ["FAST1", "CH1"],
+   "stats": {"product": 2000, "atk": 100, "def": 120, "hp": 150}},
+  {"speciesId": "c", "speciesName": "C", "rating": 650,
+   "moveset": ["FAST1", "CH1"],
+   "stats": {"product": 2050, "atk": 105, "def": 125, "hp": 145}}
+]`
+
+	tool := newTeamBuilderToolFromFixture(t, unknownBranchingFixture, rankingsPayload)
+	handler := tool.Handler()
+
+	pool := []tools.Combatant{
+		{Species: "unknownbase", IV: [3]int{15, 15, 15}, Level: 20, FastMove: "FAST1", ChargedMoves: []string{"CH1"}},
+		baseCombatant("b"),
+		baseCombatant("c"),
+	}
+
+	_, result, err := handler(t.Context(), nil, tools.TeamBuilderParams{
+		Pool:       pool,
+		League:     leagueGreat,
+		AutoEvolve: true,
+	})
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+
+	if len(result.Teams) == 0 {
+		t.Fatal("no teams returned")
+	}
+
+	var alts []tools.EvolveAlternative
+	for i := range result.Teams[0].Members {
+		if result.Teams[0].Members[i].Species == "unknownbase" {
+			alts = result.Teams[0].CostBreakdowns[i].AutoEvolveAlternatives
+
+			break
+		}
+	}
+
+	if len(alts) != 2 {
+		t.Fatalf("alts len = %d, want 2; got %+v", len(alts), alts)
+	}
+
+	for _, alt := range alts {
+		if alt.Requirement != nil {
+			t.Errorf("alt %q Requirement = %+v, want nil (not in curated table)",
+				alt.To, alt.Requirement)
+		}
+	}
+}
+
+// TestTeamBuilderTool_AutoEvolveBranchingAlternativesRequirement
+// pins R6.7: each EvolveAlternative on a branching eevee skip
+// carries a Requirement pulled from the curated evolution-item
+// table. All three vanilla eeveelutions (vaporeon / jolteon /
+// flareon) use 25 candy, no item. A regression that missed the
+// evolutionRequirementFor lookup would leave Requirement=nil.
+func TestTeamBuilderTool_AutoEvolveBranchingAlternativesRequirement(t *testing.T) {
+	t.Parallel()
+
+	const rankingsPayload = `[
+  {"speciesId": "eevee", "speciesName": "Eevee", "rating": 500,
+   "moveset": ["FAST1", "CH1"],
+   "stats": {"product": 2100, "atk": 100, "def": 100, "hp": 150}},
+  {"speciesId": "b", "speciesName": "B", "rating": 600,
+   "moveset": ["FAST1", "CH1"],
+   "stats": {"product": 2000, "atk": 100, "def": 120, "hp": 150}},
+  {"speciesId": "c", "speciesName": "C", "rating": 650,
+   "moveset": ["FAST1", "CH1"],
+   "stats": {"product": 2050, "atk": 105, "def": 125, "hp": 145}}
+]`
+
+	tool := newTeamBuilderToolFromFixture(t, autoEvolveBranchingFixture, rankingsPayload)
+	handler := tool.Handler()
+
+	pool := []tools.Combatant{
+		{Species: speciesEevee, IV: [3]int{15, 15, 15}, Level: 20, FastMove: "FAST1", ChargedMoves: []string{"CH1"}},
+		baseCombatant("b"),
+		baseCombatant("c"),
+	}
+
+	_, result, err := handler(t.Context(), nil, tools.TeamBuilderParams{
+		Pool:       pool,
+		League:     leagueGreat,
+		AutoEvolve: true,
+	})
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+
+	if len(result.Teams) == 0 {
+		t.Fatal("no teams returned")
+	}
+
+	var alts []tools.EvolveAlternative
+	for i := range result.Teams[0].Members {
+		if result.Teams[0].Members[i].Species == speciesEevee {
+			alts = result.Teams[0].CostBreakdowns[i].AutoEvolveAlternatives
+
+			break
+		}
+	}
+
+	if len(alts) == 0 {
+		t.Fatal("eevee branch alternatives not present")
+	}
+
+	// Expected contract: all three vanilla eeveelutions carry
+	// Requirement with 25 candy and no item (random-pick branches).
+	const wantCandy = 25
+
+	for _, alt := range alts {
+		if alt.Requirement == nil {
+			t.Errorf("alt %q Requirement = nil, want populated (r6.7 table)", alt.To)
+
+			continue
+		}
+		if alt.Requirement.Item != "" {
+			t.Errorf("alt %q Requirement.Item = %q, want empty (random pick)", alt.To, alt.Requirement.Item)
+		}
+		if alt.Requirement.Candy != wantCandy {
+			t.Errorf("alt %q Requirement.Candy = %d, want %d", alt.To, alt.Requirement.Candy, wantCandy)
+		}
+	}
+}
+
 // TestTeamBuilderTool_ParallelSharedPoolNoRace pins the R5
 // defensive-clone claim on Combatant.originalIndex's godoc: two
 // parallel handler invocations sharing one []Combatant pool must
