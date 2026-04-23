@@ -238,12 +238,15 @@ func rankFromIndex(index map[string]int, species string) int {
 }
 
 // resolveCupLabel mirrors rankings.resolveCup at the tool boundary:
-// an empty input echoes as "all" in results so clients see what was
-// actually applied. Kept here (not re-exported from the rankings
-// package) to avoid widening that API surface for one string.
+// both an empty input and the explicit "all" spelling echo as "all"
+// in results so clients see what was actually applied. Clients can
+// pass either form on input — the single label on output stays
+// consistent ("all" for the open-league slice). Kept here (not
+// re-exported from the rankings package) to avoid widening that API
+// surface for one string.
 func resolveCupLabel(cup string) string {
-	if cup == "" {
-		return "all"
+	if cup == "" || cup == openLeagueCupID {
+		return openLeagueCupID
 	}
 
 	return cup

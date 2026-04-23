@@ -105,6 +105,7 @@ type RankParams struct {
 	League  string           `json:"league" jsonschema:"little|great|ultra|master"`
 	CPCap   int              `json:"cp_cap,omitempty" jsonschema:"override (0 = league default); optimal level re-searched under the override"`
 	XL      bool             `json:"xl,omitempty" jsonschema:"allow XL candy levels above 40"`
+	Cup     string           `json:"cup,omitempty" jsonschema:"filter rankings_by_cup: ''=every cup, 'all'=open-league only, <id>=that cup"`
 	Options CombatantOptions `json:"options,omitzero" jsonschema:"shadow / lucky / purified flags; Shadow flips to the pvpoke _shadow entry"`
 }
 
@@ -281,7 +282,7 @@ func (tool *RankTool) handle(
 	result.OptimalMoveset = tool.lookupMoveset(ctx, inputs.cpCap, "", &inputs.species)
 	result.NonLegacyMoveset = tool.nonLegacyAlternative(ctx, &inputs, result.OptimalMoveset)
 	result.NonEliteMoveset = tool.nonEliteAlternative(ctx, &inputs, result.OptimalMoveset)
-	result.RankingsByCup = tool.buildRankingsByCup(ctx, &inputs)
+	result.RankingsByCup = tool.buildRankingsByCup(ctx, &inputs, params.Cup)
 
 	err = ctx.Err()
 	if err != nil {
@@ -338,7 +339,7 @@ func (tool *RankTool) lookupMoveset(
 // ctx.Err() check at the loop boundary honours the project-wide
 // invariant that handlers release on client disconnect mid-sweep.
 func (tool *RankTool) buildRankingsByCup(
-	ctx context.Context, inputs *rankInputs,
+	ctx context.Context, inputs *rankInputs, cupFilter string,
 ) []CupRanking {
 	if tool.rankings == nil {
 		return nil
@@ -349,7 +350,7 @@ func (tool *RankTool) buildRankingsByCup(
 		return nil
 	}
 
-	cupIDs := cupIDsForLookup(snapshot)
+	cupIDs := cupIDsForLookup(snapshot, cupFilter)
 
 	out := make([]CupRanking, 0, len(cupIDs))
 
@@ -376,17 +377,38 @@ func (tool *RankTool) buildRankingsByCup(
 // implicit leading "" we already prepend.
 const openLeagueCupID = "all"
 
-// cupIDsForLookup returns the list of pvpoke cup ids to try: "" for
-// the open-league slice first, then every named cup from the
-// gamemaster sorted alphabetically. No filtering on the cup's
-// LevelCap — that field is the Pokémon level cap (40 for Classic,
-// 50 for Equinox/Little, 0 for "inherit"), not the CP cap, so
-// comparing it against the league CP cap is never meaningful and
-// silently dropped real cups like `little` at cpCap=500. Unsupported
-// (cup, cap) pairs silently fall out later: rankings.Manager.Get
-// returns ErrUnknownCup on upstream 404, and lookupCupRanking
-// discards a nil result without adding to the output array.
-func cupIDsForLookup(snapshot *pogopvp.Gamemaster) []string {
+// cupIDsForLookup returns the list of pvpoke cup ids to try:
+//
+//   - filter is empty — no filter: "" for the open-league slice
+//     first, then every named cup from the gamemaster sorted
+//     alphabetically (pre-R6.5 behaviour preserved).
+//   - filter == "all" — only the open-league slice (single element
+//     "" which rankings.Manager maps back to the "all" key).
+//   - filter names a specific cup — returns a single-element slice
+//     for that cup. Unknown cups return an empty slice so the
+//     caller emits an empty rankings_by_cup — consistent with the
+//     existing "cup not published by pvpoke" path (lookupCupRanking
+//     returns nil).
+//
+// No filtering on the cup's LevelCap — that field is the Pokémon
+// level cap (40 for Classic, 50 for Equinox/Little, 0 for "inherit"),
+// not the CP cap, so comparing it against the league CP cap is never
+// meaningful and silently dropped real cups like `little` at cpCap=500.
+// Unsupported (cup, cap) pairs silently fall out later:
+// rankings.Manager.Get returns ErrUnknownCup on upstream 404.
+func cupIDsForLookup(snapshot *pogopvp.Gamemaster, filter string) []string {
+	if filter == openLeagueCupID {
+		return []string{""}
+	}
+
+	if filter != "" {
+		if _, ok := snapshot.Cups[filter]; !ok {
+			return nil
+		}
+
+		return []string{filter}
+	}
+
 	names := make([]string, 0, len(snapshot.Cups))
 
 	for cupID := range snapshot.Cups {
