@@ -147,13 +147,33 @@ type MemberCostBreakdown struct {
 }
 
 // EvolveAlternative describes one branch the auto-evolve pass
-// rejected because it could not pick unilaterally. Surface format
-// is intentionally minimal — the caller can pass To through
-// pvp_evolution_cost for per-step candy / item needs.
+// rejected because it could not pick unilaterally. When the branch
+// is in the curated evolutionItemRequirements table (Bulbapedia-
+// sourced branching chains — gloom→vileplume/bellossom, slowpoke→
+// slowking/slowbro, etc.), Requirement carries the item (if any)
+// and candy cost; otherwise Requirement is nil and callers should
+// fall back to their own data source for per-step requirements.
 type EvolveAlternative struct {
-	To          string `json:"to"`
-	PredictedCP int    `json:"predicted_cp"`
-	LeagueFit   bool   `json:"league_fit"`
+	To          string                    `json:"to"`
+	PredictedCP int                       `json:"predicted_cp"`
+	LeagueFit   bool                      `json:"league_fit"`
+	Requirement *EvolutionItemRequirement `json:"requirement,omitempty"`
+}
+
+// EvolutionItemRequirement captures the item (if any) and candy
+// cost a trainer must spend to perform one evolution step in
+// Pokémon GO. Item is the canonical snake_case id (sun_stone,
+// metal_coat, king_rock, dragon_scale, up_grade, deep_sea_tooth,
+// deep_sea_scale, sinnoh_stone, unova_stone, magnetic_lure,
+// mossy_lure, glacial_lure, rainy_lure) or empty when no item is
+// required. Candy is the per-step cost; zero signals that the
+// requirement is gated on a non-candy mechanic (buddy distance,
+// best-buddy status, trade-evolution hold-item proxy, etc.) that
+// Niantic's wiki doesn't reduce to a single integer.
+type EvolutionItemRequirement struct {
+	Item  string `json:"item,omitempty"`
+	Candy int    `json:"candy"`
+	Notes string `json:"notes,omitempty"`
 }
 
 // ErrMemberInvalidForLeague is returned when a pool member's

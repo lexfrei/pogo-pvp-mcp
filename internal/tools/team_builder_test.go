@@ -2114,6 +2114,81 @@ func TestTeamBuilderTool_AutoEvolveBranchingAlternativesLeagueFit(t *testing.T) 
 	t.Fatalf("eevee not in the returned team")
 }
 
+// TestTeamBuilderTool_AutoEvolveBranchingAlternativesRequirement
+// pins R6.7: each EvolveAlternative on a branching eevee skip
+// carries a Requirement pulled from the curated evolution-item
+// table. All three vanilla eeveelutions (vaporeon / jolteon /
+// flareon) use 25 candy, no item. A regression that missed the
+// evolutionRequirementFor lookup would leave Requirement=nil.
+func TestTeamBuilderTool_AutoEvolveBranchingAlternativesRequirement(t *testing.T) {
+	t.Parallel()
+
+	const rankingsPayload = `[
+  {"speciesId": "eevee", "speciesName": "Eevee", "rating": 500,
+   "moveset": ["FAST1", "CH1"],
+   "stats": {"product": 2100, "atk": 100, "def": 100, "hp": 150}},
+  {"speciesId": "b", "speciesName": "B", "rating": 600,
+   "moveset": ["FAST1", "CH1"],
+   "stats": {"product": 2000, "atk": 100, "def": 120, "hp": 150}},
+  {"speciesId": "c", "speciesName": "C", "rating": 650,
+   "moveset": ["FAST1", "CH1"],
+   "stats": {"product": 2050, "atk": 105, "def": 125, "hp": 145}}
+]`
+
+	tool := newTeamBuilderToolFromFixture(t, autoEvolveBranchingFixture, rankingsPayload)
+	handler := tool.Handler()
+
+	pool := []tools.Combatant{
+		{Species: speciesEevee, IV: [3]int{15, 15, 15}, Level: 20, FastMove: "FAST1", ChargedMoves: []string{"CH1"}},
+		baseCombatant("b"),
+		baseCombatant("c"),
+	}
+
+	_, result, err := handler(t.Context(), nil, tools.TeamBuilderParams{
+		Pool:       pool,
+		League:     leagueGreat,
+		AutoEvolve: true,
+	})
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+
+	if len(result.Teams) == 0 {
+		t.Fatal("no teams returned")
+	}
+
+	var alts []tools.EvolveAlternative
+	for i := range result.Teams[0].Members {
+		if result.Teams[0].Members[i].Species == speciesEevee {
+			alts = result.Teams[0].CostBreakdowns[i].AutoEvolveAlternatives
+
+			break
+		}
+	}
+
+	if len(alts) == 0 {
+		t.Fatal("eevee branch alternatives not present")
+	}
+
+	// Expected contract: all three vanilla eeveelutions carry
+	// Requirement with 25 candy and no item (random-pick branches).
+	const wantCandy = 25
+
+	for _, alt := range alts {
+		if alt.Requirement == nil {
+			t.Errorf("alt %q Requirement = nil, want populated (r6.7 table)", alt.To)
+
+			continue
+		}
+		if alt.Requirement.Item != "" {
+			t.Errorf("alt %q Requirement.Item = %q, want empty (random pick)", alt.To, alt.Requirement.Item)
+		}
+		if alt.Requirement.Candy != wantCandy {
+			t.Errorf("alt %q Requirement.Candy = %d, want %d", alt.To, alt.Requirement.Candy, wantCandy)
+		}
+	}
+}
+
 // TestTeamBuilderTool_ParallelSharedPoolNoRace pins the R5
 // defensive-clone claim on Combatant.originalIndex's godoc: two
 // parallel handler invocations sharing one []Combatant pool must
