@@ -347,18 +347,13 @@ func TestCPCapJSONSchemaTagsMatch(t *testing.T) {
 	}
 }
 
-// TestReportDataIssueURLMatchesLiveRepo pins the round-2 fix for
-// pvp_report_data_issue: the tool's outbound URLs must target the
-// live GitHub repository name, not the Go module path. CLAUDE.md
-// records the `gh repo rename` from `pvpoke-mcp` to `pogo-pvp-mcp`
-// as pending; using the pending path in the URL produces a 404.
-// When the rename lands, flip both the hardcoded URL in
-// report_data_issue.go AND the "rename is pending" note in
-// CLAUDE.md in one commit — this test asserts they stay in sync:
-// if CLAUDE.md stops saying rename-is-pending, the URL must have
-// flipped to pogo-pvp-mcp; while the note is still present, the
-// URL must still point at pvpoke-mcp.
-func TestReportDataIssueURLMatchesLiveRepo(t *testing.T) {
+// TestReportDataIssueURLConsistentWithCLAUDEMD cross-checks the
+// hardcoded URL in pvp_report_data_issue against CLAUDE.md's
+// rename-status note. This is a text-vs-text invariant — it does
+// NOT verify that the URL actually resolves over the network. To
+// catch "URL 404s because the rename has not run yet" add a
+// separate integration test that HEADs the URL from CI.
+func TestReportDataIssueURLConsistentWithCLAUDEMD(t *testing.T) {
 	t.Parallel()
 
 	claudeMD := readRepoFile(t, "CLAUDE.md")
