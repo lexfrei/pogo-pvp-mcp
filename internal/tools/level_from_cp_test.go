@@ -41,6 +41,73 @@ const levelFromCPFixture = `{
   ]
 }`
 
+// TestLevelFromCP_ReachableWhenTargetFitsUnderCap pins the positive
+// case: a CP target above the picked level's CP but strictly below
+// the IV spread's max reachable CP must flag Reachable=true. The
+// picked level is just the greatest-under-target grid point, not a
+// signal of unreachability.
+func TestLevelFromCP_ReachableWhenTargetFitsUnderCap(t *testing.T) {
+	t.Parallel()
+
+	mgr := newManagerWithFixture(t, levelFromCPFixture)
+	handler := tools.NewLevelFromCPTool(mgr).Handler()
+
+	// medicham [15,15,15] tops out at ~1431 CP without XL; 1300 is
+	// comfortably below that, so the handler picks a level < cap
+	// and Reachable must be true (just nearest-under-target on the
+	// 0.5 grid, not an impossibility signal).
+	_, result, err := handler(t.Context(), nil, tools.LevelFromCPParams{
+		Species: speciesMedicham,
+		IV:      [3]int{15, 15, 15},
+		CP:      1300,
+	})
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+
+	if !result.Reachable {
+		t.Errorf("Reachable = false, want true (CP 1300 sits below medicham's max CP, level < cap)")
+	}
+	if result.Level >= 40 {
+		t.Errorf("Level = %.1f, want below cap 40 (otherwise target isn't actually below max)",
+			result.Level)
+	}
+}
+
+// TestLevelFromCP_UnreachableAtLevelCap pins r7 finding: a CP
+// target that the IV spread cannot reach even at the level cap
+// must flag Reachable=false so the caller can distinguish "off
+// grid, nearest level picked" from "impossible target". Caller
+// previously had to compare CP fields to detect this.
+func TestLevelFromCP_UnreachableAtLevelCap(t *testing.T) {
+	t.Parallel()
+
+	mgr := newManagerWithFixture(t, levelFromCPFixture)
+	handler := tools.NewLevelFromCPTool(mgr).Handler()
+
+	// CP 9999 is far beyond any medicham level can reach; without
+	// XL the cap is NoXLMaxLevel=40. Handler should clamp at 40
+	// and flag Reachable=false.
+	_, result, err := handler(t.Context(), nil, tools.LevelFromCPParams{
+		Species: speciesMedicham,
+		IV:      [3]int{15, 15, 15},
+		CP:      9999,
+	})
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+
+	if result.Reachable {
+		t.Errorf("Reachable = true, want false (CP 9999 unreachable at level cap 40)")
+	}
+	if result.Exact {
+		t.Errorf("Exact = true, want false (CP 9999 unreachable)")
+	}
+	if result.CP >= 9999 {
+		t.Errorf("CP = %d, want capped below 9999", result.CP)
+	}
+}
+
 func TestLevelFromCP_FitsUnderCap(t *testing.T) {
 	t.Parallel()
 

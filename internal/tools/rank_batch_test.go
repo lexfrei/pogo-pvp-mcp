@@ -296,6 +296,59 @@ func TestRankBatch_TopLevelMetadataEcho(t *testing.T) {
 	}
 }
 
+// TestRankBatch_RankingsByCupHoisted pins r7 payload-efficiency
+// finding: pvp_rank_batch lifts rankings_by_cup to the top-level
+// result once (species-scoped — identical across IVs), and every
+// per-entry Result omits its own RankingsByCup. A regression that
+// left the per-entry field populated would balloon the payload
+// 5-50× on typical box-scoring workflows.
+func TestRankBatch_RankingsByCupHoisted(t *testing.T) {
+	t.Parallel()
+
+	// Reuse the multi-cup fixture and rankings server shape from
+	// rank_test.go so the inner pvp_rank handler actually produces
+	// a non-empty RankingsByCup for each entry — only then does
+	// the hoisting assertion carry signal.
+	const openPayload = `[
+  {"speciesId": "medicham", "speciesName": "Medicham", "rating": 700,
+   "moveset": ["COUNTER", "ICE_PUNCH", "PSYCHIC"],
+   "stats": {"product": 2100, "atk": 106, "def": 139, "hp": 141}}
+]`
+	const springPayload = `[
+  {"speciesId": "medicham", "speciesName": "Medicham", "rating": 820,
+   "moveset": ["COUNTER", "PSYCHIC", "ICE_PUNCH"],
+   "stats": {"product": 2100, "atk": 106, "def": 139, "hp": 141}}
+]`
+
+	gm := newManagerWithFixture(t, rankMultiCupFixtureGamemaster)
+	ranks := newRankingsManagerMultiCup(t, openPayload, springPayload)
+	tool := tools.NewRankBatchTool(gm, ranks)
+	handler := tool.Handler()
+
+	_, result, err := handler(t.Context(), nil, tools.RankBatchParams{
+		Species: speciesMedicham,
+		IVs:     [][3]int{{0, 15, 15}, {15, 15, 15}, {7, 8, 9}},
+		League:  leagueGreat,
+	})
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+
+	if len(result.RankingsByCup) == 0 {
+		t.Fatal("top-level RankingsByCup empty; want populated (open + spring)")
+	}
+
+	for i, entry := range result.Entries {
+		if !entry.OK {
+			t.Fatalf("Entries[%d] OK=false err=%q", i, entry.Error)
+		}
+		if len(entry.Result.RankingsByCup) != 0 {
+			t.Errorf("Entries[%d].Result.RankingsByCup len = %d, want 0 (hoisted to top-level)",
+				i, len(entry.Result.RankingsByCup))
+		}
+	}
+}
+
 // TestRankBatch_DuplicateIVsPreserveOrder pins the invariant that
 // the Entries slice mirrors the input IVs slice verbatim, including
 // duplicates.

@@ -45,7 +45,11 @@ type MetaEntry struct {
 	Atk         float64   `json:"atk"`
 	Def         float64   `json:"def"`
 	HP          int       `json:"hp"`
-	Role        string    `json:"role,omitempty"`
+	// Role is one of "lead", "switch", "closer", "flex", or "" when
+	// the species is not present in any per-role pvpoke ranking.
+	// "flex" signals the per-role rankings are too close to pick a
+	// concrete niche (see classifyRole's roleRankGapThreshold).
+	Role string `json:"role,omitempty" jsonschema:"lead|switch|closer|flex (empty if species not in any role ranking)"`
 }
 
 // MetaResult is the JSON output contract for pvp_meta. Cup echoes
