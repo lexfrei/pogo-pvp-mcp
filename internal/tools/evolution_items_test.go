@@ -48,6 +48,21 @@ func TestEvolutionRequirementFor_Table(t *testing.T) {
 		{"hitmonlee", "", evolveCandy25},
 		{"hitmonchan", "", evolveCandy25},
 		{"hitmontop", "", evolveCandy25},
+		// Linear item-gated (R7.P2).
+		{"sunflora", testItemSunStone, evolveCandy50},
+		{"kingdra", "dragon_scale", evolveCandy100},
+		{"scizor", "metal_coat", evolveCandy50},
+		{"steelix", "metal_coat", evolveCandy50},
+		{"porygon2", "up_grade", evolveCandy25},
+		{"porygon_z", "sinnoh_stone", evolveCandy100},
+		{"rhyperior", "sinnoh_stone", evolveCandy100},
+		{"electivire", "sinnoh_stone", evolveCandy100},
+		{"magmortar", "sinnoh_stone", evolveCandy100},
+		{"gliscor", "sinnoh_stone", evolveCandy100},
+		{"dusknoir", "sinnoh_stone", evolveCandy100},
+		{"togekiss", "sinnoh_stone", evolveCandy100},
+		{"magnezone", "magnetic_lure", evolveCandy100},
+		{"probopass", "magnetic_lure", evolveCandy50},
 	}
 
 	for _, tc := range cases {
@@ -88,24 +103,16 @@ func TestEvolutionRequirementFor_BellossomNeedsSunStone(t *testing.T) {
 }
 
 // TestEvolutionRequirementFor_UnknownReturnsNil pins the fall-
-// through for species outside the curated branching table — the
-// caller must fall back to its own data source rather than assume
-// a default. Linear evolutions (ivysaur → venusaur, onix →
-// steelix) land here by design because the R6.7 scope covers only
-// branching chains; linear item-gated chains stay at Requirement
-// nil until a follow-up phase wires them onto MemberCostBreakdown
-// at the walkEvolutionChain path.
+// through for species outside the curated table — linear chains
+// without an item gate (ivysaur → venusaur), terminal species, and
+// out-of-GO chains (scyther → kleavor). Callers should treat nil
+// as "consult your own data source" rather than "no requirement".
 func TestEvolutionRequirementFor_UnknownReturnsNil(t *testing.T) {
 	t.Parallel()
 
 	for _, id := range []string{
 		"ivysaur", "venusaur", "ditto", "kleavor",
 		"completely-bogus-species",
-		// Linear item-gated chains intentionally OUT of scope.
-		"scizor", "steelix", "kingdra", "porygon2", "porygon_z",
-		"rhyperior", "electivire", "magmortar",
-		"gliscor", "dusknoir", "togekiss",
-		"magnezone", "probopass", "sunflora",
 	} {
 		req := evolutionRequirementFor(id)
 		if req != nil {

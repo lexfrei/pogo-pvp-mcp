@@ -146,6 +146,15 @@ type MemberCostBreakdown struct {
 	// caller should consult its own data source. Empty slice on
 	// non-branching skips and on successful promotions.
 	AutoEvolveAlternatives []EvolveAlternative `json:"auto_evolve_alternatives,omitempty"`
+	// AutoEvolveRequirements lists the evolution-item requirements
+	// walkEvolutionChain accumulated on the linear path from the
+	// original pool member to the post-evolve species (R7.P2). One
+	// entry per item-gated step; silent gaps for steps whose
+	// species are outside the curated table (bulbasaur → ivysaur,
+	// etc.). Empty when no evolution happened, when the walk ended
+	// on a branching skip (see AutoEvolveAlternatives for that
+	// case), or when the linear path had zero item-gated steps.
+	AutoEvolveRequirements []EvolutionItemRequirement `json:"auto_evolve_requirements,omitempty"`
 }
 
 // EvolveAlternative describes one branch the auto-evolve pass

@@ -78,6 +78,25 @@ var evolutionItemRequirements = map[string]EvolutionItemRequirement{
 	"hitmonlee":  {Candy: evolveCandy25, Notes: "highest ATK IV selects hitmonlee"},
 	"hitmonchan": {Candy: evolveCandy25, Notes: "highest DEF IV selects hitmonchan"},
 	"hitmontop":  {Candy: evolveCandy25, Notes: "highest HP IV selects hitmontop"},
+
+	// R7.P2 — linear item-gated steps. walkEvolutionChain picks up
+	// the requirement while traversing a single-child chain (no
+	// branching decision by the player, but the evolve-button still
+	// demands an item on top of candy).
+	"sunflora":   {Item: "sun_stone", Candy: evolveCandy50},
+	"kingdra":    {Item: "dragon_scale", Candy: evolveCandy100},
+	"scizor":     {Item: "metal_coat", Candy: evolveCandy50},
+	"steelix":    {Item: "metal_coat", Candy: evolveCandy50},
+	"porygon2":   {Item: "up_grade", Candy: evolveCandy25},
+	"porygon_z":  {Item: "sinnoh_stone", Candy: evolveCandy100},
+	"rhyperior":  {Item: "sinnoh_stone", Candy: evolveCandy100},
+	"electivire": {Item: "sinnoh_stone", Candy: evolveCandy100},
+	"magmortar":  {Item: "sinnoh_stone", Candy: evolveCandy100},
+	"gliscor":    {Item: "sinnoh_stone", Candy: evolveCandy100},
+	"dusknoir":   {Item: "sinnoh_stone", Candy: evolveCandy100},
+	"togekiss":   {Item: "sinnoh_stone", Candy: evolveCandy100},
+	"magnezone":  {Item: "magnetic_lure", Candy: evolveCandy100, Notes: "evolve near a Magnetic Lure module"},
+	"probopass":  {Item: "magnetic_lure", Candy: evolveCandy50, Notes: "evolve near a Magnetic Lure module"},
 }
 
 // evolutionRequirementFor returns the curated requirement for

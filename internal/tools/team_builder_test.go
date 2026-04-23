@@ -1297,7 +1297,7 @@ func TestTeamBuilderTool_AutoEvolveBanMatchesPreEvolveID(t *testing.T) {
 
 	for _, team := range result.Teams {
 		for _, member := range team.Members {
-			if member.Species == "blastoise" {
+			if member.Species == speciesBlastoise {
 				t.Errorf("blastoise leaked into team despite banned=[squirtle] (pre-evolve id must match post-promotion pool entries)")
 			}
 		}
@@ -1913,6 +1913,173 @@ func TestTeamBuilderTool_BudgetNegativeToleranceClamped(t *testing.T) {
 	if len(result.Teams) == 0 {
 		t.Errorf("Teams empty; negative tolerance must clamp to 0, not to a stricter filter")
 	}
+}
+
+// autoEvolveItemGatedLinearFixture publishes a single-branch chain
+// whose terminal is in the curated evolution-item table
+// (scyther → scizor, Metal Coat in real GO mechanics). Lets the
+// R7.P2 test prove walkEvolutionChain accumulates the Metal Coat
+// requirement on a linear promotion, distinct from the
+// branching-path Requirement which was already covered in R6.7.
+const autoEvolveItemGatedLinearFixture = `{
+  "id": "gamemaster",
+  "timestamp": "2026-04-23 00:00:00",
+  "pokemon": [
+    {"dex": 123, "speciesId": "scyther", "speciesName": "Scyther",
+     "baseStats": {"atk": 218, "def": 170, "hp": 172},
+     "types": ["bug", "flying"],
+     "fastMoves": ["FAST1"], "chargedMoves": ["CH1"],
+     "family": {"id": "FAMILY_SCYTHER", "evolutions": ["scizor"]},
+     "released": true},
+    {"dex": 212, "speciesId": "scizor", "speciesName": "Scizor",
+     "baseStats": {"atk": 236, "def": 191, "hp": 172},
+     "types": ["bug", "steel"],
+     "fastMoves": ["FAST1"], "chargedMoves": ["CH1"],
+     "family": {"id": "FAMILY_SCYTHER", "parent": "scyther"},
+     "released": true},
+    {"dex": 2, "speciesId": "b", "speciesName": "B",
+     "baseStats": {"atk": 152, "def": 143, "hp": 216}, "types": ["water"],
+     "fastMoves": ["FAST1"], "chargedMoves": ["CH1"], "released": true},
+    {"dex": 3, "speciesId": "c", "speciesName": "C",
+     "baseStats": {"atk": 234, "def": 159, "hp": 207}, "types": ["fighting"],
+     "fastMoves": ["FAST1"], "chargedMoves": ["CH1"], "released": true}
+  ],
+  "moves": [
+    {"moveId": "FAST1", "name": "Fast 1", "type": "normal",
+     "power": 3, "energy": 0, "energyGain": 5, "cooldown": 1000, "turns": 2},
+    {"moveId": "CH1", "name": "Charged 1", "type": "normal",
+     "power": 50, "energy": 35, "cooldown": 500}
+  ]
+}`
+
+// TestTeamBuilderTool_AutoEvolveLinearChainRequirement pins R7.P2:
+// walking a single-branch chain whose terminal is in the curated
+// evolution-item table (scyther → scizor via Metal Coat) must
+// populate MemberCostBreakdown.AutoEvolveRequirements with the
+// item + candy cost. Previously only branching chains surfaced
+// the requirement (R6.7 scope trim); r7 closes the linear-path
+// gap.
+func TestTeamBuilderTool_AutoEvolveLinearChainRequirement(t *testing.T) {
+	t.Parallel()
+
+	const rankingsPayload = `[
+  {"speciesId": "scizor", "speciesName": "Scizor", "rating": 700,
+   "moveset": ["FAST1", "CH1"],
+   "stats": {"product": 2100, "atk": 106, "def": 139, "hp": 141}},
+  {"speciesId": "b", "speciesName": "B", "rating": 600,
+   "moveset": ["FAST1", "CH1"],
+   "stats": {"product": 2000, "atk": 100, "def": 120, "hp": 150}},
+  {"speciesId": "c", "speciesName": "C", "rating": 650,
+   "moveset": ["FAST1", "CH1"],
+   "stats": {"product": 2050, "atk": 105, "def": 125, "hp": 145}}
+]`
+
+	tool := newTeamBuilderToolFromFixture(t, autoEvolveItemGatedLinearFixture, rankingsPayload)
+	handler := tool.Handler()
+
+	pool := []tools.Combatant{
+		{Species: "scyther", IV: [3]int{15, 15, 15}, Level: 20, FastMove: "FAST1", ChargedMoves: []string{"CH1"}},
+		baseCombatant("b"),
+		baseCombatant("c"),
+	}
+
+	_, result, err := handler(t.Context(), nil, tools.TeamBuilderParams{
+		Pool:       pool,
+		League:     leagueGreat,
+		AutoEvolve: true,
+	})
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+
+	if len(result.Teams) == 0 {
+		t.Fatal("no teams returned")
+	}
+
+	var breakdown *tools.MemberCostBreakdown
+	for i := range result.Teams[0].Members {
+		if result.Teams[0].Members[i].Species == speciesScizor {
+			breakdown = &result.Teams[0].CostBreakdowns[i]
+
+			break
+		}
+	}
+
+	if breakdown == nil {
+		t.Fatalf("scizor not in returned team; members=%+v", result.Teams[0].Members)
+	}
+
+	if len(breakdown.AutoEvolveRequirements) != 1 {
+		t.Fatalf("AutoEvolveRequirements len = %d, want 1 (single Metal Coat hop); got %+v",
+			len(breakdown.AutoEvolveRequirements), breakdown.AutoEvolveRequirements)
+	}
+
+	req := breakdown.AutoEvolveRequirements[0]
+	if req.Item != "metal_coat" {
+		t.Errorf("Requirement.Item = %q, want metal_coat", req.Item)
+	}
+
+	const wantScizorCandy = 50
+	if req.Candy != wantScizorCandy {
+		t.Errorf("Requirement.Candy = %d, want %d", req.Candy, wantScizorCandy)
+	}
+}
+
+// TestTeamBuilderTool_AutoEvolveLinearChainNoItemRequirements pins
+// the complement: a linear chain whose intermediate species are
+// outside the curated table (squirtle → wartortle → blastoise
+// — both linear, no items) must leave AutoEvolveRequirements
+// empty. Differentiates "linear, no item" from "linear, item-
+// gated" so a regression that started flagging every promotion
+// fails loudly.
+func TestTeamBuilderTool_AutoEvolveLinearChainNoItemRequirements(t *testing.T) {
+	t.Parallel()
+
+	const rankingsPayload = `[
+  {"speciesId": "blastoise", "speciesName": "Blastoise", "rating": 700,
+   "moveset": ["FAST1", "CH_BLAST"],
+   "stats": {"product": 2100, "atk": 106, "def": 139, "hp": 141}},
+  {"speciesId": "b", "speciesName": "B", "rating": 600,
+   "moveset": ["FAST1", "CH1"],
+   "stats": {"product": 2000, "atk": 100, "def": 120, "hp": 150}},
+  {"speciesId": "c", "speciesName": "C", "rating": 650,
+   "moveset": ["FAST1", "CH1"],
+   "stats": {"product": 2050, "atk": 105, "def": 125, "hp": 145}}
+]`
+
+	tool := newTeamBuilderToolFromFixture(t, autoEvolveLinearFixture, rankingsPayload)
+	handler := tool.Handler()
+
+	pool := []tools.Combatant{
+		{Species: "squirtle", IV: [3]int{15, 15, 15}, Level: 20, FastMove: "FAST1", ChargedMoves: []string{"CH_SQUIRT"}},
+		baseCombatant("b"),
+		baseCombatant("c"),
+	}
+
+	_, result, err := handler(t.Context(), nil, tools.TeamBuilderParams{
+		Pool:       pool,
+		League:     leagueGreat,
+		AutoEvolve: true,
+	})
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+
+	if len(result.Teams) == 0 {
+		t.Fatal("no teams returned")
+	}
+
+	for i := range result.Teams[0].Members {
+		if result.Teams[0].Members[i].Species == speciesBlastoise {
+			if n := len(result.Teams[0].CostBreakdowns[i].AutoEvolveRequirements); n > 0 {
+				t.Errorf("AutoEvolveRequirements len = %d, want 0 (squirtle→wartortle→blastoise is linear no-item)", n)
+			}
+
+			return
+		}
+	}
+
+	t.Fatalf("blastoise not in returned team; members=%+v", result.Teams[0].Members)
 }
 
 // autoEvolveBranchingFixture publishes eevee with three evolutions;

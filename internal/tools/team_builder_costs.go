@@ -149,6 +149,14 @@ func computeMemberCost(
 		breakdown.AutoEvolveAlternatives = spec.autoEvolveAlternatives
 	}
 
+	// R7.P2: surface linear-chain evolution-item requirements so
+	// the caller can tell a trainer how many sinnoh_stones /
+	// metal_coats / sun_stones the path demands. Populated only
+	// when the walker took at least one item-gated hop.
+	if len(spec.autoEvolveRequirements) > 0 {
+		breakdown.AutoEvolveRequirements = spec.autoEvolveRequirements
+	}
+
 	return breakdown
 }
 

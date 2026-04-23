@@ -134,6 +134,7 @@ const (
 	speciesEevee     = "eevee"
 	speciesVaporeon  = "vaporeon"
 	speciesJolteon   = "jolteon"
+	speciesScizor    = "scizor"
 )
 
 func newEvolutionPreviewTool(t *testing.T, gmJSON string) *tools.EvolutionPreviewTool {

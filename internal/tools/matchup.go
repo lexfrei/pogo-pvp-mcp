@@ -96,6 +96,13 @@ type Combatant struct {
 	autoEvolvedFrom        string
 	autoEvolveSkip         string
 	autoEvolveAlternatives []EvolveAlternative
+	// autoEvolveRequirements accumulates evolution-item requirements
+	// for every step walkEvolutionChain actually took (linear
+	// path only — branching skips populate autoEvolveAlternatives
+	// instead). Empty for non-evolve paths and for linear chains
+	// whose species are outside the curated table (e.g. ivysaur →
+	// venusaur, no item required).
+	autoEvolveRequirements []EvolutionItemRequirement
 	// originalIndex records the 0-based position this entry held in
 	// the caller's input pool before any auto-evolve / filter /
 	// ban pass mutated it. Stamped on a COPY of the caller's pool
