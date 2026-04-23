@@ -146,7 +146,7 @@ func enumerateBranchAlternatives(
 		}
 
 		floorCP := pogopvp.ComputeCP(child.BaseStats, ivSpread, cpmFloor)
-		req, _ := evolutionRequirementFor(childID)
+		req := evolutionRequirementFor(childID)
 
 		out = append(out, EvolveAlternative{
 			To:          childID,
