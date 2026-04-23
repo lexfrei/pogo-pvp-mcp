@@ -61,6 +61,10 @@ func newTeamAnalysisToolFromFixture(t *testing.T, gmJSON, ranksJSON string) *too
 // this file uses it because it is the root-cause Bug #2 scenario.
 const moveAquaTail = "AQUA_TAIL"
 
+// speciesQuagsire is the elite-move carrier species used across
+// the elite-path tests.
+const speciesQuagsire = "quagsire"
+
 // eliteFixtureGamemaster mirrors legacyFixtureGamemaster but adds
 // quagsire with AQUA_TAIL in the eliteMoves block — the Bug #1 / #2
 // reproduction target. Medicham keeps its legacy PSYCHIC so tests
@@ -139,7 +143,7 @@ func TestTeamBuilder_DisallowEliteRejectsExplicit(t *testing.T) {
 
 	pool := []tools.Combatant{
 		{
-			Species: "quagsire", IV: [3]int{15, 15, 15}, Level: 40,
+			Species: speciesQuagsire, IV: [3]int{15, 15, 15}, Level: 40,
 			FastMove: "MUD_SHOT", ChargedMoves: []string{moveAquaTail},
 		},
 		{
@@ -175,7 +179,7 @@ func TestTeamBuilder_DisallowLegacyAllowsEliteMoves(t *testing.T) {
 
 	pool := []tools.Combatant{
 		{
-			Species: "quagsire", IV: [3]int{15, 15, 15}, Level: 40,
+			Species: speciesQuagsire, IV: [3]int{15, 15, 15}, Level: 40,
 			FastMove: "MUD_SHOT", ChargedMoves: []string{moveAquaTail},
 		},
 		{
@@ -215,7 +219,7 @@ func TestTeamBuilder_DisallowLegacyRejectsLegacyOnly(t *testing.T) {
 
 	pool := []tools.Combatant{
 		{
-			Species: "quagsire", IV: [3]int{15, 15, 15}, Level: 40,
+			Species: speciesQuagsire, IV: [3]int{15, 15, 15}, Level: 40,
 			FastMove: "MUD_SHOT", ChargedMoves: []string{moveAquaTail},
 		},
 		{
@@ -250,7 +254,7 @@ func TestTeamBuilder_DisallowBothRejectsEitherCategory(t *testing.T) {
 
 	pool := []tools.Combatant{
 		{
-			Species: "quagsire", IV: [3]int{15, 15, 15}, Level: 40,
+			Species: speciesQuagsire, IV: [3]int{15, 15, 15}, Level: 40,
 			FastMove: "MUD_SHOT", ChargedMoves: []string{moveAquaTail},
 		},
 		{
@@ -303,7 +307,7 @@ func TestSpeciesInfo_EliteMovesSurfaced(t *testing.T) {
 
 	handler := tools.NewSpeciesInfoTool(gmMgr, nil).Handler()
 
-	_, result, err := handler(t.Context(), nil, tools.SpeciesInfoParams{Species: "quagsire"})
+	_, result, err := handler(t.Context(), nil, tools.SpeciesInfoParams{Species: speciesQuagsire})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
 	}
@@ -371,7 +375,7 @@ func TestMoveInfo_EliteReverseIndex(t *testing.T) {
 		t.Fatalf("handler AQUA_TAIL: %v", err)
 	}
 
-	if len(aquaResult.EliteOnSpecies) != 1 || aquaResult.EliteOnSpecies[0] != "quagsire" {
+	if len(aquaResult.EliteOnSpecies) != 1 || aquaResult.EliteOnSpecies[0] != speciesQuagsire {
 		t.Errorf("AQUA_TAIL.EliteOnSpecies = %v, want [quagsire]", aquaResult.EliteOnSpecies)
 	}
 	if len(aquaResult.LegacyOnSpecies) != 0 {
@@ -416,7 +420,7 @@ func TestTeamBuilder_DisallowEliteRejectsResolvedElite(t *testing.T) {
 	// the rankings recommendation; DisallowElite must trip
 	// ErrEliteConflict before simulation.
 	pool := []tools.Combatant{
-		{Species: "quagsire", IV: [3]int{15, 15, 15}, Level: 40},
+		{Species: speciesQuagsire, IV: [3]int{15, 15, 15}, Level: 40},
 		{
 			Species: "azumarill", IV: [3]int{15, 15, 15}, Level: 40,
 			FastMove: "BUBBLE", ChargedMoves: []string{"ICE_BEAM"},
@@ -434,6 +438,55 @@ func TestTeamBuilder_DisallowEliteRejectsResolvedElite(t *testing.T) {
 	})
 	if !errors.Is(err, tools.ErrEliteConflict) {
 		t.Errorf("error = %v, want wrapping ErrEliteConflict (auto-fill landed on elite AQUA_TAIL)", err)
+	}
+}
+
+// TestCounterFinder_DisallowEliteFiltersMetaFallback is the elite
+// sibling of TestCounterFinder_DisallowLegacyFiltersMetaFallback.
+// With an empty from_pool the tool scans the top-N pvpoke meta; a
+// ranking entry whose recommended moveset contains an elite move
+// for its own species must drop out under disallow_elite=true so
+// the tool never recommends an unobtainable moveset.
+func TestCounterFinder_DisallowEliteFiltersMetaFallback(t *testing.T) {
+	t.Parallel()
+
+	const ranksJSON = `[
+  {"speciesId": "quagsire", "speciesName": "Quagsire", "rating": 900,
+   "moveset": ["MUD_SHOT", "AQUA_TAIL"],
+   "matchups": [], "counters": [],
+   "stats": {"product": 2400, "atk": 100, "def": 130, "hp": 180}},
+  {"speciesId": "azumarill", "speciesName": "Azumarill", "rating": 880,
+   "moveset": ["BUBBLE", "ICE_BEAM"],
+   "matchups": [], "counters": [],
+   "stats": {"product": 2500, "atk": 80, "def": 150, "hp": 200}}
+]`
+
+	tool := newCounterFinderTool(t, eliteFixtureGamemaster, ranksJSON)
+	handler := tool.Handler()
+
+	_, result, err := handler(t.Context(), nil, tools.CounterFinderParams{
+		Target: tools.Combatant{
+			Species: speciesMedicham, IV: [3]int{15, 15, 15}, Level: 40,
+			FastMove: moveCounter, ChargedMoves: []string{"ICE_PUNCH"},
+		},
+		League:        leagueGreat,
+		TopN:          5,
+		DisallowElite: true,
+	})
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+
+	for _, counter := range result.Counters {
+		if counter.Counter.Species == speciesQuagsire {
+			t.Errorf(
+				"quagsire surfaced under disallow_elite=true with elite AQUA_TAIL in recommended moveset; "+
+					"counters = %+v", result.Counters)
+		}
+	}
+
+	if len(result.Counters) == 0 {
+		t.Error("Counters empty; expected azumarill (all-regular moveset) to remain after filtering")
 	}
 }
 
@@ -455,7 +508,7 @@ func TestRank_OptimalHasEliteDetected(t *testing.T) {
 	handler := tool.Handler()
 
 	_, result, err := handler(t.Context(), nil, tools.RankParams{
-		Species: "quagsire",
+		Species: speciesQuagsire,
 		IV:      [3]int{0, 15, 15},
 		League:  leagueGreat,
 	})
@@ -499,7 +552,7 @@ func TestTeamAnalysis_DisallowEliteExplicit(t *testing.T) {
 
 	team := []tools.Combatant{
 		{
-			Species: "quagsire", IV: [3]int{15, 15, 15}, Level: 40,
+			Species: speciesQuagsire, IV: [3]int{15, 15, 15}, Level: 40,
 			FastMove: "MUD_SHOT", ChargedMoves: []string{moveAquaTail},
 		},
 		{

@@ -26,7 +26,8 @@ var ErrLegacyConflict = errors.New("legacy move present but disallow_legacy=true
 // limited-time research (Venusaur FRENZY_PLANT, Quagsire AQUA_TAIL).
 // Surfaced when a Combatant carries an elite move under
 // DisallowElite=true.
-var ErrEliteConflict = errors.New("elite/community-day move present but disallow_elite=true")
+var ErrEliteConflict = errors.New(
+	"elite move (Elite TM / Community Day / event) present but disallow_elite=true")
 
 // MoveRef is the per-move JSON projection that pvp_meta, pvp_rank,
 // and pvp_species_info use when they need to surface the restricted
@@ -135,6 +136,22 @@ func filterMovesByCategory(
 func anyEliteMove(species *pogopvp.Species, moveset []string) bool {
 	for _, id := range moveset {
 		if pogopvp.IsEliteMove(species, id) {
+			return true
+		}
+	}
+
+	return false
+}
+
+// movesetInRestrictedCategory reports whether any id in moveset is
+// in the restricted category on the given species. Used by the
+// meta-fallback filter in pvp_counter_finder so one loop covers
+// both the legacy and elite filters via the category predicate.
+func movesetInRestrictedCategory(
+	species *pogopvp.Species, moveset []string, cat restrictedCategory,
+) bool {
+	for _, id := range moveset {
+		if cat.predicate(species, id) {
 			return true
 		}
 	}
