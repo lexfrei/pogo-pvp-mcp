@@ -64,7 +64,7 @@ func autoEvolveMember(snapshot *pogopvp.Gamemaster, spec *Combatant, cpCap int) 
 
 	originalID := spec.Species
 
-	terminal, reason := walkEvolutionChain(snapshot, &species, spec.IV, cpCap)
+	terminal, reason, requirements := walkEvolutionChain(snapshot, &species, spec.IV, cpCap)
 	if reason != "" {
 		spec.autoEvolvedFrom = originalID
 		spec.autoEvolveSkip = reason
@@ -86,6 +86,7 @@ func autoEvolveMember(snapshot *pogopvp.Gamemaster, spec *Combatant, cpCap int) 
 
 	spec.Species = terminal.ID
 	spec.autoEvolvedFrom = originalID
+	spec.autoEvolveRequirements = requirements
 	// Clear moveset so defaultPoolMovesets re-queries rankings for
 	// the evolved species (base-species recommended moveset is not
 	// valid on the descendant; e.g. Gloom's VINE_WHIP is not in
@@ -159,6 +160,47 @@ func enumerateBranchAlternatives(
 	return out
 }
 
+// evolveStepOutcome is the return shape of advanceEvolveStep — one
+// of {skip reason set, next species set, stop=true}. Keeps the
+// per-step decision table out of walkEvolutionChain's main loop
+// so gocognit stays under its threshold.
+type evolveStepOutcome struct {
+	next    *pogopvp.Species
+	skip    string
+	stop    bool
+	overCap bool
+}
+
+// advanceEvolveStep decides what walkEvolutionChain should do at
+// one hop: terminal reached (stop), branching (skip), missing in
+// snapshot (stop — cache drift tolerance), over-cap (skip or
+// return lastFit), or advance.
+func advanceEvolveStep(
+	snapshot *pogopvp.Gamemaster, current *pogopvp.Species,
+	ivSpread pogopvp.IV, cpm float64, cpCap int,
+) evolveStepOutcome {
+	if len(current.Evolutions) == 0 {
+		return evolveStepOutcome{stop: true}
+	}
+
+	if len(current.Evolutions) > 1 {
+		return evolveStepOutcome{skip: skipReasonBranching}
+	}
+
+	nextID := current.Evolutions[0]
+
+	next, ok := snapshot.Pokemon[nextID]
+	if !ok {
+		return evolveStepOutcome{stop: true}
+	}
+
+	if pogopvp.ComputeCP(next.BaseStats, ivSpread, cpm) > cpCap {
+		return evolveStepOutcome{overCap: true}
+	}
+
+	return evolveStepOutcome{next: &next}
+}
+
 // walkEvolutionChain follows Species.Evolutions forward until one of:
 //   - Terminal species reached (no further evolutions). Return it if
 //     it fits the cap, else return (nil, "auto_evolve_over_cap").
@@ -170,57 +212,100 @@ func enumerateBranchAlternatives(
 // level-1 CPM so the "fits" check is the floor CP of the form —
 // matches validatePoolForLeague's semantics.
 //
-//nolint:gocritic // unnamedResult: (terminal species, skip reason) documented in godoc
+// The third return value accumulates evolution-item requirements
+// from the curated table for every step the walk actually took
+// (R7.P2). Empty on branching / over-cap skips. Linear steps
+// through species absent from the table (bulbasaur → ivysaur)
+// silently omit their hop; only item-gated steps produce entries.
 func walkEvolutionChain(
 	snapshot *pogopvp.Gamemaster, base *pogopvp.Species, ivs [3]int, cpCap int,
-) (*pogopvp.Species, string) {
-	current := base
-
-	var lastFit *pogopvp.Species
-
+) (*pogopvp.Species, string, []EvolutionItemRequirement) {
 	ivSpread, err := pogopvp.NewIV(ivs[0], ivs[1], ivs[2])
 	if err != nil {
-		return nil, ""
+		return nil, "", nil
 	}
 
 	cpm, err := pogopvp.CPMAt(pogopvp.MinLevel)
 	if err != nil {
-		return nil, ""
+		return nil, "", nil
 	}
 
+	current := base
+
+	var (
+		lastFit      *pogopvp.Species
+		requirements []EvolutionItemRequirement
+	)
+
 	for range autoEvolveMaxDepth {
-		if len(current.Evolutions) == 0 {
-			break
+		step := advanceEvolveStep(snapshot, current, ivSpread, cpm, cpCap)
+
+		if done, terminal, skip, reqs := processEvolveStep(step, lastFit, requirements); done {
+			return terminal, skip, reqs
 		}
 
-		if len(current.Evolutions) > 1 {
-			return nil, skipReasonBranching
+		if req := evolutionRequirementFor(step.next.ID); req != nil {
+			requirements = append(requirements, *req)
 		}
 
-		nextID := current.Evolutions[0]
-
-		next, ok := snapshot.Pokemon[nextID]
-		if !ok {
-			break
-		}
-
-		if pogopvp.ComputeCP(next.BaseStats, ivSpread, cpm) > cpCap {
-			if lastFit != nil {
-				return lastFit, ""
-			}
-
-			return nil, skipReasonOverCap
-		}
-
-		lastFit = &next
-		current = &next
+		lastFit = step.next
+		current = step.next
 	}
 
 	if lastFit != nil {
-		return lastFit, ""
+		return lastFit, "", requirements
 	}
 
-	return nil, ""
+	return nil, "", nil
+}
+
+// processEvolveStep collapses the "terminal / branch / over-cap"
+// early-return decisions on each hop. Returns (done=true, ...) when
+// the walker should stop; (done=false, ...) when the caller should
+// continue advancing past step.next. Split out of walkEvolutionChain
+// so the main body stays under funlen.
+//
+// All three terminating branches (stop / skip / overCap) honour
+// the same "preserve lastFit" rule: if the walker already
+// successfully advanced past at least one hop, the pool member
+// gets promoted to lastFit AND the accumulated requirements ship
+// on the breakdown. Skip reasons (branching / over-cap) surface
+// only when the very first hop failed — then lastFit is nil and
+// the base form stays in place with the skip reason flagged.
+// Symmetry matters: a prior asymmetric branching branch dropped
+// lastFit+requirements silently, which was a latent bug for any
+// future chain that branches after an item-gated linear hop.
+//
+//nolint:gocritic // unnamedResult: documented in godoc
+func processEvolveStep(
+	step evolveStepOutcome, lastFit *pogopvp.Species,
+	requirements []EvolutionItemRequirement,
+) (bool, *pogopvp.Species, string, []EvolutionItemRequirement) {
+	if step.stop {
+		if lastFit != nil {
+			return true, lastFit, "", requirements
+		}
+
+		return true, nil, "", nil
+	}
+
+	if step.skip != "" {
+		if lastFit != nil {
+			return true, lastFit, "", requirements
+		}
+
+		return true, nil, step.skip, nil
+	}
+
+	if step.overCap {
+		if lastFit != nil {
+			return true, lastFit, "", requirements
+		}
+
+		return true, nil, skipReasonOverCap, nil
+	}
+
+	return false, nil, "", nil
 }
 
 // autoEvolveFlagsFor returns the per-member breakdown flags the

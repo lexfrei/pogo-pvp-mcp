@@ -48,6 +48,21 @@ func TestEvolutionRequirementFor_Table(t *testing.T) {
 		{"hitmonlee", "", evolveCandy25},
 		{"hitmonchan", "", evolveCandy25},
 		{"hitmontop", "", evolveCandy25},
+		// Linear item-gated (R7.P2).
+		{"sunflora", testItemSunStone, evolveCandy50},
+		{"kingdra", "dragon_scale", evolveCandy100},
+		{"scizor", "metal_coat", evolveCandy50},
+		{"steelix", "metal_coat", evolveCandy50},
+		{"porygon2", "up_grade", evolveCandy50},
+		{"porygon_z", "sinnoh_stone", evolveCandy100},
+		{"rhyperior", "sinnoh_stone", evolveCandy100},
+		{"electivire", "sinnoh_stone", evolveCandy100},
+		{"magmortar", "sinnoh_stone", evolveCandy100},
+		{"gliscor", "sinnoh_stone", evolveCandy100},
+		{"dusknoir", "sinnoh_stone", evolveCandy100},
+		{"togekiss", "sinnoh_stone", evolveCandy100},
+		{"magnezone", "magnetic_lure", evolveCandy100},
+		{"probopass", "magnetic_lure", evolveCandy50},
 	}
 
 	for _, tc := range cases {
@@ -88,29 +103,58 @@ func TestEvolutionRequirementFor_BellossomNeedsSunStone(t *testing.T) {
 }
 
 // TestEvolutionRequirementFor_UnknownReturnsNil pins the fall-
-// through for species outside the curated branching table — the
-// caller must fall back to its own data source rather than assume
-// a default. Linear evolutions (ivysaur → venusaur, onix →
-// steelix) land here by design because the R6.7 scope covers only
-// branching chains; linear item-gated chains stay at Requirement
-// nil until a follow-up phase wires them onto MemberCostBreakdown
-// at the walkEvolutionChain path.
+// through for species outside the curated table — linear chains
+// without an item gate (ivysaur → venusaur), terminal species, and
+// out-of-GO chains (scyther → kleavor). Callers should treat nil
+// as "consult your own data source" rather than "no requirement".
 func TestEvolutionRequirementFor_UnknownReturnsNil(t *testing.T) {
 	t.Parallel()
 
 	for _, id := range []string{
 		"ivysaur", "venusaur", "ditto", "kleavor",
 		"completely-bogus-species",
-		// Linear item-gated chains intentionally OUT of scope.
-		"scizor", "steelix", "kingdra", "porygon2", "porygon_z",
-		"rhyperior", "electivire", "magmortar",
-		"gliscor", "dusknoir", "togekiss",
-		"magnezone", "probopass", "sunflora",
 	} {
 		req := evolutionRequirementFor(id)
 		if req != nil {
 			t.Errorf("evolutionRequirementFor(%q) = %+v, want nil", id, req)
 		}
+	}
+}
+
+// TestEvolutionRequirementFor_ShadowSuffixStripped pins that
+// legacy-convention shadow ids resolve to the non-shadow table
+// entry — scizor_shadow → Metal Coat, same as scizor. Direct
+// unit-level coverage for the suffix-strip in evolutionRequirementFor
+// so a regression fails here instead of only in the end-to-end
+// team_builder shadow test (tighter failure localisation).
+func TestEvolutionRequirementFor_ShadowSuffixStripped(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		shadow string
+		base   string
+	}{
+		{"scizor_shadow", "scizor"},
+		{"steelix_shadow", "steelix"},
+		{"magnezone_shadow", "magnezone"},
+	} {
+		t.Run(tc.shadow, func(t *testing.T) {
+			t.Parallel()
+
+			got := evolutionRequirementFor(tc.shadow)
+			want := evolutionRequirementFor(tc.base)
+
+			if got == nil {
+				t.Fatalf("evolutionRequirementFor(%q) = nil, want non-nil via shadow-suffix strip", tc.shadow)
+			}
+			if want == nil {
+				t.Fatalf("base %q missing from table — fix the test fixture", tc.base)
+			}
+			if got.Item != want.Item || got.Candy != want.Candy {
+				t.Errorf("shadow lookup = {item:%q, candy:%d}, want {item:%q, candy:%d}",
+					got.Item, got.Candy, want.Item, want.Candy)
+			}
+		})
 	}
 }
 

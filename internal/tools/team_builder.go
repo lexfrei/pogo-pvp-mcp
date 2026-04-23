@@ -134,18 +134,41 @@ type MemberCostBreakdown struct {
 	StardustMultiplier       float64  `json:"stardust_multiplier"`
 	SecondMoveCostMultiplier float64  `json:"second_move_cost_multiplier"`
 	Flags                    []string `json:"flags,omitempty"`
-	// AutoEvolveAlternatives is populated when the auto-evolve pass
-	// refuses to promote because the chain branches (e.g. eevee →
-	// vaporeon / jolteon / flareon). Each entry carries the child
-	// species id, its predicted CP at the pool member's current
-	// level (evolution preserves level in Pokémon GO), and whether
-	// that level-1 floor fits the league cap. R6.7 added
-	// Requirement: when the child species is in the curated
-	// evolution-item table, the per-step item (if any) + candy cost
-	// + notes ship alongside; otherwise Requirement is nil and the
-	// caller should consult its own data source. Empty slice on
-	// non-branching skips and on successful promotions.
+	// AutoEvolveAlternatives is populated only when the auto-evolve
+	// pass hit branching at the FIRST hop with no prior linear
+	// promotion (e.g. eevee → vaporeon / jolteon / flareon starting
+	// from eevee itself). Each entry carries the child species id,
+	// its predicted CP at the pool member's current level (evolution
+	// preserves level in Pokémon GO), and whether that level-1
+	// floor fits the league cap. R6.7 added Requirement per entry:
+	// when the child species is in the curated evolution-item
+	// table, the per-step item (if any) + candy cost + notes ship
+	// alongside; otherwise Requirement is nil and the caller
+	// should consult its own data source. Empty slice on non-
+	// branching skips, on successful (full or partial) promotions,
+	// AND on post-linear branching — the R7.P2 round-2 fix treats
+	// branching AFTER an item-gated linear hop as a successful
+	// partial promotion (see AutoEvolveRequirements below), so the
+	// downstream branching alternatives are intentionally dropped
+	// from the response in that case.
 	AutoEvolveAlternatives []EvolveAlternative `json:"auto_evolve_alternatives,omitempty"`
+	// AutoEvolveRequirements lists the evolution-item requirements
+	// walkEvolutionChain accumulated on the linear path from the
+	// original pool member to the post-evolve species (R7.P2). One
+	// entry per item-gated step; silent gaps for steps whose
+	// species are outside the curated table (bulbasaur → ivysaur,
+	// etc.). Populated in three scenarios: (a) a successful full-
+	// terminal promotion that touched ≥1 item-gated hop; (b) a
+	// partial promotion that stopped at over-cap after ≥1 item-
+	// gated hop; (c) a partial promotion that stopped at branching
+	// after ≥1 item-gated hop (R7.P2 round-2 fix — the branching
+	// alternatives are dropped from the response in this case;
+	// AutoEvolveAlternatives stays empty). Empty when no evolution
+	// happened, when the walk hit branching or over-cap at the
+	// FIRST hop (base form untouched, skip flag in Flags + possibly
+	// AutoEvolveAlternatives), or when the linear path had zero
+	// item-gated steps.
+	AutoEvolveRequirements []EvolutionItemRequirement `json:"auto_evolve_requirements,omitempty"`
 }
 
 // EvolveAlternative describes one branch the auto-evolve pass
@@ -166,12 +189,13 @@ type EvolveAlternative struct {
 // EvolutionItemRequirement captures the item (if any) and candy
 // cost a trainer must spend to perform one evolution step in
 // Pokémon GO. Item is the canonical snake_case id; observed values
-// in the table today: "sun_stone", "king_rock", "mossy_lure",
-// "glacial_lure". Empty when no item is required (random-pick
-// branches, stat-based splits like Tyrogue, buddy-km-gated
-// eeveelutions). Candy is the per-step cost and is always positive
-// in the current table. Notes is a free-form caveat for non-candy
-// mechanics (buddy-km walk, time-of-day gate, lure-module
+// in the table today: "sun_stone", "king_rock", "dragon_scale",
+// "metal_coat", "up_grade", "sinnoh_stone", "mossy_lure",
+// "glacial_lure", "magnetic_lure". Empty when no item is required
+// (random-pick branches, stat-based splits like Tyrogue, buddy-km-
+// gated eeveelutions). Candy is the per-step cost and is always
+// positive in the current table. Notes is a free-form caveat for
+// non-candy mechanics (buddy-km walk, time-of-day gate, lure-module
 // requirement, mainline-vs-GO difference on Clamperl, etc.) and is
 // empty when the entry has no further subtleties.
 type EvolutionItemRequirement struct {
