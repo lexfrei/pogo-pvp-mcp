@@ -541,6 +541,159 @@ func TestRank_OptimalHasEliteDetected(t *testing.T) {
 	}
 }
 
+// TestCounterFinder_DisallowEliteIgnoredForTarget pins r7 finding
+// #13 on the elite axis: a target with an elite move (Quagsire
+// AQUA_TAIL — what the enemy actually uses in the ladder) must
+// pass through even when disallow_elite=true. The flag is for
+// the caller's own pool, never the opponent's build.
+func TestCounterFinder_DisallowEliteIgnoredForTarget(t *testing.T) {
+	t.Parallel()
+
+	tool := newCounterFinderTool(t, eliteFixtureGamemaster, `[]`)
+	handler := tool.Handler()
+
+	_, result, err := handler(t.Context(), nil, tools.CounterFinderParams{
+		Target: tools.Combatant{
+			Species: speciesQuagsire, IV: [3]int{15, 15, 15}, Level: 40,
+			FastMove: "MUD_SHOT", ChargedMoves: []string{moveAquaTail},
+		},
+		FromPool: []tools.Combatant{
+			{
+				Species: "azumarill", IV: [3]int{15, 15, 15}, Level: 40,
+				FastMove: "BUBBLE", ChargedMoves: []string{"ICE_BEAM"},
+			},
+		},
+		League:        leagueGreat,
+		DisallowElite: true,
+	})
+	if err != nil {
+		t.Fatalf("handler: %v (target must pass as-is, disallow_elite gates pool only)", err)
+	}
+	if len(result.Counters) == 0 {
+		t.Fatal("Counters empty; expected azumarill to score against the elite-AQUA_TAIL quagsire target")
+	}
+	if result.Counters[0].Counter.Species != "azumarill" {
+		t.Errorf("Counters[0].Counter.Species = %q, want azumarill",
+			result.Counters[0].Counter.Species)
+	}
+}
+
+// TestCounterFinder_DisallowLegacyIgnoredForTargetAutoFill pins the
+// auto-fill half of r7 finding #13: an empty-moveset target whose
+// pvpoke recommendation contains a legacy move must still be
+// accepted and filled with the recommended (legacy) build, because
+// the target represents the enemy's actual build. Without this
+// test, a future refactor flipping the hardcoded (false, false) in
+// applyMovesetDefaults back to (params.DisallowLegacy, ...) would
+// regress silently — every other counter_finder test passes an
+// explicit FastMove, short-circuiting the auto-fill path.
+func TestCounterFinder_DisallowLegacyIgnoredForTargetAutoFill(t *testing.T) {
+	t.Parallel()
+
+	// Rankings recommend medicham with legacy PSYCHIC → auto-fill
+	// would normally reject under DisallowLegacy=true; r7 fix
+	// shields the target from this gate.
+	const ranksJSON = `[
+  {"speciesId": "medicham", "speciesName": "Medicham", "rating": 700,
+   "moveset": ["COUNTER", "PSYCHIC", "ICE_PUNCH"],
+   "matchups": [], "counters": [],
+   "stats": {"product": 2100, "atk": 106, "def": 139, "hp": 141}}
+]`
+
+	tool := newCounterFinderTool(t, legacyFixtureGamemaster, ranksJSON)
+	handler := tool.Handler()
+
+	_, result, err := handler(t.Context(), nil, tools.CounterFinderParams{
+		Target: tools.Combatant{
+			Species: speciesMedicham, IV: [3]int{15, 15, 15}, Level: 40,
+			// FastMove + ChargedMoves intentionally omitted — forces
+			// applyMovesetDefaults onto the auto-fill path where the
+			// fix's hardcoded (false, false) flag-bypass lives.
+		},
+		FromPool: []tools.Combatant{
+			{
+				Species: "machamp", IV: [3]int{15, 15, 15}, Level: 40,
+				FastMove: moveCounter, ChargedMoves: []string{"CROSS_CHOP"},
+			},
+		},
+		League:         leagueGreat,
+		DisallowLegacy: true,
+	})
+	if err != nil {
+		t.Fatalf("handler: %v (target auto-fill must bypass disallow_legacy)", err)
+	}
+	if len(result.Counters) == 0 {
+		t.Fatal("Counters empty; expected machamp to be scored")
+	}
+}
+
+// TestCounterFinder_DisallowEliteIgnoredForTargetAutoFill is the
+// elite-axis sibling of the legacy auto-fill test above. Uses
+// quagsire + AQUA_TAIL in the rankings recommendation.
+func TestCounterFinder_DisallowEliteIgnoredForTargetAutoFill(t *testing.T) {
+	t.Parallel()
+
+	const ranksJSON = `[
+  {"speciesId": "quagsire", "speciesName": "Quagsire", "rating": 700,
+   "moveset": ["MUD_SHOT", "AQUA_TAIL", "STONE_EDGE"],
+   "matchups": [], "counters": [],
+   "stats": {"product": 2100, "atk": 100, "def": 130, "hp": 180}}
+]`
+
+	tool := newCounterFinderTool(t, eliteFixtureGamemaster, ranksJSON)
+	handler := tool.Handler()
+
+	_, result, err := handler(t.Context(), nil, tools.CounterFinderParams{
+		Target: tools.Combatant{
+			Species: speciesQuagsire, IV: [3]int{15, 15, 15}, Level: 40,
+			// Empty moveset → auto-fill picks AQUA_TAIL (elite).
+		},
+		FromPool: []tools.Combatant{
+			{
+				Species: "azumarill", IV: [3]int{15, 15, 15}, Level: 40,
+				FastMove: "BUBBLE", ChargedMoves: []string{"ICE_BEAM"},
+			},
+		},
+		League:        leagueGreat,
+		DisallowElite: true,
+	})
+	if err != nil {
+		t.Fatalf("handler: %v (target auto-fill must bypass disallow_elite)", err)
+	}
+	if len(result.Counters) == 0 {
+		t.Fatal("Counters empty; expected azumarill to be scored")
+	}
+}
+
+// TestCounterFinder_DisallowEliteRejectsFromPoolMember is the
+// companion elite sibling of the legacy from-pool gate test,
+// ensuring the guard still applies where it should — on the
+// candidate pool (what the caller can field), not the target.
+func TestCounterFinder_DisallowEliteRejectsFromPoolMember(t *testing.T) {
+	t.Parallel()
+
+	tool := newCounterFinderTool(t, eliteFixtureGamemaster, `[]`)
+	handler := tool.Handler()
+
+	_, _, err := handler(t.Context(), nil, tools.CounterFinderParams{
+		Target: tools.Combatant{
+			Species: "azumarill", IV: [3]int{15, 15, 15}, Level: 40,
+			FastMove: "BUBBLE", ChargedMoves: []string{"ICE_BEAM"},
+		},
+		FromPool: []tools.Combatant{
+			{
+				Species: speciesQuagsire, IV: [3]int{15, 15, 15}, Level: 40,
+				FastMove: "MUD_SHOT", ChargedMoves: []string{moveAquaTail},
+			},
+		},
+		League:        leagueGreat,
+		DisallowElite: true,
+	})
+	if !errors.Is(err, tools.ErrEliteConflict) {
+		t.Errorf("error = %v, want wrapping ErrEliteConflict (pool member uses elite AQUA_TAIL)", err)
+	}
+}
+
 // TestRank_RankingsByCupCarriesHasElite pins that the per-cup
 // Moveset rows emit HasElite=true when the recommended moveset is
 // elite — the parallel axis to TestRank_OptimalHasEliteDetected.

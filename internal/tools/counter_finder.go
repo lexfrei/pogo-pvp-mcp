@@ -23,8 +23,8 @@ type CounterFinderParams struct {
 	Shields        []int       `json:"shields,omitempty" jsonschema:"symmetric shield scenarios (omit for [1]); each 0..2"`
 	TopN           int         `json:"top_n,omitempty" jsonschema:"how many counters to return (default 5)"`
 	MetaTopN       int         `json:"meta_top_n,omitempty" jsonschema:"meta size when from_pool is empty (default 30)"`
-	DisallowLegacy bool        `json:"disallow_legacy,omitempty" jsonschema:"reject pvpoke legacyMoves (permanently removed)"`
-	DisallowElite  bool        `json:"disallow_elite,omitempty" jsonschema:"reject pvpoke eliteMoves (Elite TM / Community Day)"`
+	DisallowLegacy bool        `json:"disallow_legacy,omitempty" jsonschema:"reject legacyMoves in from_pool/meta; target passes as-is"`
+	DisallowElite  bool        `json:"disallow_elite,omitempty" jsonschema:"reject eliteMoves in from_pool/meta; target passes as-is"`
 }
 
 // CounterScenarioResult is the per-scenario detail inside a
@@ -196,13 +196,21 @@ func (tool *CounterFinderTool) prepareCounterFinder(
 
 	scenarios := resolveTeamDefaults(params.Shields, 0).Scenarios
 
-	err = assertNoRestrictedInCombatant(snapshot, &params.Target, params.DisallowLegacy, params.DisallowElite)
-	if err != nil {
-		return nil, fmt.Errorf("target: %w", err)
-	}
+	// Target describes the ENEMY, not the caller's own Pokémon.
+	// Applying disallow_legacy / disallow_elite to the target would
+	// reject real ladder builds (e.g. Serperior with FRENZY_PLANT,
+	// Lapras with its elite chargeds) that the opponent actively
+	// uses, producing a weakened-enemy counter list — the opposite
+	// of what the caller wants. Flags apply only to the from_pool /
+	// meta-fallback candidates downstream (the Pokémon the caller
+	// will field in response). Target moveset is auto-filled from
+	// pvpoke's recommendation as-is, no category filter — the
+	// hardcoded (false, false) below is deliberate: passing the
+	// caller's flags here would re-introduce r7 finding #13.
+	const targetDisallowLegacy, targetDisallowElite = false, false
 
 	err = applyMovesetDefaults(ctx, tool.rankings, &params.Target, cpCap, params.Cup,
-		snapshot, params.DisallowLegacy, params.DisallowElite)
+		snapshot, targetDisallowLegacy, targetDisallowElite)
 	if err != nil {
 		return nil, fmt.Errorf("target moveset: %w", err)
 	}
