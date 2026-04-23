@@ -204,9 +204,13 @@ func (tool *CounterFinderTool) prepareCounterFinder(
 	// of what the caller wants. Flags apply only to the from_pool /
 	// meta-fallback candidates downstream (the Pokémon the caller
 	// will field in response). Target moveset is auto-filled from
-	// pvpoke's recommendation as-is, no category filter.
+	// pvpoke's recommendation as-is, no category filter — the
+	// hardcoded (false, false) below is deliberate: passing the
+	// caller's flags here would re-introduce r7 finding #13.
+	const targetDisallowLegacy, targetDisallowElite = false, false
+
 	err = applyMovesetDefaults(ctx, tool.rankings, &params.Target, cpCap, params.Cup,
-		snapshot, false, false)
+		snapshot, targetDisallowLegacy, targetDisallowElite)
 	if err != nil {
 		return nil, fmt.Errorf("target moveset: %w", err)
 	}

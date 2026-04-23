@@ -351,8 +351,6 @@ func TestCounterFinder_TopNLargerThanCandidates(t *testing.T) {
 	}
 }
 
-// TestCounterFinder_DisallowLegacyRejectsTarget pins the target-side
-// DisallowLegacy gate.
 // TestCounterFinder_DisallowLegacyIgnoredForTarget pins r7 finding
 // #13: disallow_legacy applies only to pool candidates (what the
 // caller can field), NOT to the target (what the enemy actually
@@ -365,7 +363,7 @@ func TestCounterFinder_DisallowLegacyIgnoredForTarget(t *testing.T) {
 	tool := newCounterFinderTool(t, legacyFixtureGamemaster, `[]`)
 	handler := tool.Handler()
 
-	_, _, err := handler(t.Context(), nil, tools.CounterFinderParams{
+	_, result, err := handler(t.Context(), nil, tools.CounterFinderParams{
 		Target: tools.Combatant{
 			Species: speciesMedicham, IV: [3]int{15, 15, 15}, Level: 40,
 			FastMove: moveCounter, ChargedMoves: []string{movePsychic},
@@ -379,8 +377,18 @@ func TestCounterFinder_DisallowLegacyIgnoredForTarget(t *testing.T) {
 		League:         leagueGreat,
 		DisallowLegacy: true,
 	})
-	if errors.Is(err, tools.ErrLegacyConflict) {
-		t.Errorf("error = %v, want NO ErrLegacyConflict (target must be accepted as-is, disallow_legacy is for pool only)", err)
+	if err != nil {
+		t.Fatalf("handler: %v (target must be accepted as-is, disallow_legacy is for pool only)", err)
+	}
+
+	// Machamp must surface as a counter — absence-of-sentinel alone
+	// would pass on any unrelated failure; assert the positive shape.
+	if len(result.Counters) == 0 {
+		t.Fatal("Counters empty; expected machamp to be scored against the legacy-PSYCHIC medicham target")
+	}
+	if result.Counters[0].Counter.Species != "machamp" {
+		t.Errorf("Counters[0].Counter.Species = %q, want machamp",
+			result.Counters[0].Counter.Species)
 	}
 }
 
