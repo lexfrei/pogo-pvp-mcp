@@ -28,14 +28,21 @@ type LevelFromCPParams struct {
 // which (species, iv) reaches CP ≤ the requested target. Exact is
 // true when the level's CP equals the requested CP; otherwise the
 // returned level is the greatest one that still fits under target.
-// ResolvedSpeciesID / ShadowVariantMissing echo the shadow-aware
-// lookup (see resolveSpeciesLookup).
+// Reachable is false when the requested CP is BEYOND what the given
+// IV spread can ever reach at this species' level cap (i.e. the
+// inversion clamped at MaxLevel and the resulting CP is still below
+// the requested target) — lets the caller distinguish "off-grid,
+// nearest level picked" (reachable=true, exact=false) from "CP
+// target is impossible for this IV spread under the XL flag"
+// (reachable=false). ResolvedSpeciesID / ShadowVariantMissing echo
+// the shadow-aware lookup (see resolveSpeciesLookup).
 type LevelFromCPResult struct {
 	Species              string  `json:"species"`
 	ResolvedSpeciesID    string  `json:"resolved_species_id,omitempty"`
 	IV                   [3]int  `json:"iv"`
 	Level                float64 `json:"level"`
 	Exact                bool    `json:"exact"`
+	Reachable            bool    `json:"reachable"`
 	CP                   int     `json:"cp"`
 	Atk                  float64 `json:"atk"`
 	Def                  float64 `json:"def"`
@@ -109,19 +116,36 @@ func (tool *LevelFromCPTool) handle(
 		return nil, LevelFromCPResult{}, fmt.Errorf("level_for_cp: %w", err)
 	}
 
+	out, err := buildLevelFromCPResult(species, ivs, &params, resolvedID, shadowMissing, &result)
+	if err != nil {
+		return nil, LevelFromCPResult{}, err
+	}
+
+	return nil, out, nil
+}
+
+// buildLevelFromCPResult re-evaluates stats at the resolved level
+// and assembles the response bundle. Factored out so handle() stays
+// under funlen.
+func buildLevelFromCPResult(
+	species pogopvp.Species, ivs pogopvp.IV,
+	params *LevelFromCPParams, resolvedID string, shadowMissing bool,
+	result *pogopvp.LevelResult,
+) (LevelFromCPResult, error) {
 	cpm, err := pogopvp.CPMAt(result.Level)
 	if err != nil {
-		return nil, LevelFromCPResult{}, fmt.Errorf("cpm at level %.1f: %w", result.Level, err)
+		return LevelFromCPResult{}, fmt.Errorf("cpm at level %.1f: %w", result.Level, err)
 	}
 
 	stats := pogopvp.ComputeStats(species.BaseStats, ivs, cpm)
 
-	return nil, LevelFromCPResult{
+	return LevelFromCPResult{
 		Species:              params.Species,
 		ResolvedSpeciesID:    resolvedID,
 		IV:                   params.IV,
 		Level:                result.Level,
 		Exact:                result.Exact,
+		Reachable:            reachableCP(result.Level, result.CP, params.CP, params.XL),
 		CP:                   result.CP,
 		Atk:                  stats.Atk,
 		Def:                  stats.Def,
@@ -129,4 +153,27 @@ func (tool *LevelFromCPTool) handle(
 		StatProduct:          pogopvp.ComputeStatProduct(stats),
 		ShadowVariantMissing: shadowMissing,
 	}, nil
+}
+
+// reachableCP decides whether the requested CP target is attainable
+// for the species / IV spread. The inversion returns the greatest
+// 0.5-grid level with CP ≤ target, so result.CP < target is the
+// default case. Reachable is false ONLY when the level is pinned at
+// the cap (MaxLevel with XL, NoXLMaxLevel without) AND the resulting
+// CP is still short of the target — i.e. the IV spread tops out
+// below what was asked. Every other shape (CP ≥ target, or level
+// strictly below the cap with CP < target) means the target is
+// reachable; in the second case the picked level is just the
+// nearest-under-target on the 0.5 grid.
+func reachableCP(level float64, resolvedCP, targetCP int, allowXL bool) bool {
+	if resolvedCP >= targetCP {
+		return true
+	}
+
+	maxLevel := pogopvp.NoXLMaxLevel
+	if allowXL {
+		maxLevel = pogopvp.MaxLevel
+	}
+
+	return level < maxLevel
 }

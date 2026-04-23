@@ -34,9 +34,13 @@ const maxRankBatchSize = 64
 // when a client is sweeping IV space (typical use: "score my entire
 // box of this species in one call"). Options applies batch-wide —
 // every IV triple is evaluated against the same resolved species,
-// so Options.Shadow=true sweeps the shadow variant's ranking. No
-// cup parameter: pvp_rank returns rankings_by_cup on every result,
-// so the batch reproduces that array per entry.
+// so Options.Shadow=true sweeps the shadow variant's ranking.
+//
+// No cup parameter: the batch runs unfiltered and hoists
+// rankings_by_cup onto the top-level RankBatchResult (species-
+// scoped, identical across IVs). Per-entry Result.RankingsByCup is
+// stripped. Callers that need per-cup narrowing should call
+// pvp_rank individually with its own Cup filter.
 type RankBatchParams struct {
 	Species string           `json:"species" jsonschema:"species id in the pvpoke gamemaster"`
 	IVs     [][3]int         `json:"ivs" jsonschema:"list of [atk, def, sta] triples; each component 0..15"`
@@ -60,12 +64,19 @@ type RankBatchEntry struct {
 // RankBatchResult is the JSON output: per-IV RankResult in the same
 // order as the input IVs, plus a count of how many succeeded to
 // spare the caller an iteration.
+//
+// RankingsByCup is hoisted to the top level because it is species-
+// scoped (cup rankings do not depend on the caller's IVs); repeating
+// it per-entry would balloon the payload 5-50× on typical box
+// scoring workflows. Each entries[*].result still carries every
+// other pvp_rank field, with its own RankingsByCup zeroed out.
 type RankBatchResult struct {
-	Species      string           `json:"species"`
-	League       string           `json:"league"`
-	CPCap        int              `json:"cp_cap"`
-	Entries      []RankBatchEntry `json:"entries"`
-	SuccessCount int              `json:"success_count"`
+	Species       string           `json:"species"`
+	League        string           `json:"league"`
+	CPCap         int              `json:"cp_cap"`
+	RankingsByCup []CupRanking     `json:"rankings_by_cup,omitempty"`
+	Entries       []RankBatchEntry `json:"entries"`
+	SuccessCount  int              `json:"success_count"`
 }
 
 // RankBatchTool wraps the gamemaster + rankings managers. It reuses
@@ -123,27 +134,42 @@ func (tool *RankBatchTool) handle(
 	rankHandler := tool.rank.Handler()
 	entries := make([]RankBatchEntry, 0, len(params.IVs))
 
-	var successCount int
+	var (
+		successCount  int
+		rankingsByCup []CupRanking
+	)
 
 	for _, ivTriple := range params.IVs {
 		if ctx.Err() != nil {
 			return nil, RankBatchResult{}, fmt.Errorf("rank_batch cancelled: %w", ctx.Err())
 		}
 
-		entries = append(entries, runRankBatchEntry(
-			ctx, req, rankHandler, ivTriple, &params, resolvedCPCap))
+		entry := runRankBatchEntry(ctx, req, rankHandler, ivTriple, &params, resolvedCPCap)
 
-		if entries[len(entries)-1].OK {
+		// Hoist the species-scoped rankings_by_cup once from the
+		// first successful entry and strip it from every per-
+		// entry result: the array is identical across IVs, so
+		// repeating it per-entry multiplies payload size 5-50×
+		// for no information gain.
+		if entry.OK {
+			if rankingsByCup == nil && len(entry.Result.RankingsByCup) > 0 {
+				rankingsByCup = entry.Result.RankingsByCup
+			}
+
+			entry.Result.RankingsByCup = nil
 			successCount++
 		}
+
+		entries = append(entries, entry)
 	}
 
 	return nil, RankBatchResult{
-		Species:      params.Species,
-		League:       params.League,
-		CPCap:        resolvedCPCap,
-		Entries:      entries,
-		SuccessCount: successCount,
+		Species:       params.Species,
+		League:        params.League,
+		CPCap:         resolvedCPCap,
+		RankingsByCup: rankingsByCup,
+		Entries:       entries,
+		SuccessCount:  successCount,
 	}, nil
 }
 
