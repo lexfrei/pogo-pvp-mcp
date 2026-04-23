@@ -275,6 +275,123 @@ func TestTeamBuilder_DisallowBothRejectsEitherCategory(t *testing.T) {
 	}
 }
 
+// TestMoveRef_NewMoveRefTagsElite pins MoveRef.Elite population
+// via the live fixture. Quagsire AQUA_TAIL is elite (not legacy);
+// Quagsire MUD_SHOT is neither; Medicham PSYCHIC is legacy (not
+// elite). All three checks run through the same tool path.
+func TestSpeciesInfo_EliteMovesSurfaced(t *testing.T) {
+	t.Parallel()
+
+	gmServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(eliteFixtureGamemaster))
+	}))
+	t.Cleanup(gmServer.Close)
+
+	gmMgr, err := gamemaster.NewManager(config.GamemasterConfig{
+		Source:    gmServer.URL,
+		LocalPath: filepath.Join(t.TempDir(), "gm.json"),
+	})
+	if err != nil {
+		t.Fatalf("NewManager gm: %v", err)
+	}
+
+	err = gmMgr.Refresh(t.Context())
+	if err != nil {
+		t.Fatalf("Refresh gm: %v", err)
+	}
+
+	handler := tools.NewSpeciesInfoTool(gmMgr, nil).Handler()
+
+	_, result, err := handler(t.Context(), nil, tools.SpeciesInfoParams{Species: "quagsire"})
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+
+	if len(result.EliteMoves) != 1 || result.EliteMoves[0] != moveAquaTail {
+		t.Errorf("EliteMoves = %v, want [%s]", result.EliteMoves, moveAquaTail)
+	}
+	if len(result.LegacyMoves) != 0 {
+		t.Errorf("LegacyMoves = %v, want empty (quagsire has no legacyMoves)", result.LegacyMoves)
+	}
+
+	// Per-move refs: AQUA_TAIL.elite=true, AQUA_TAIL.legacy=false,
+	// STONE_EDGE.elite=false, STONE_EDGE.legacy=false.
+	for _, ref := range result.ChargedMoves {
+		switch ref.ID {
+		case moveAquaTail:
+			if !ref.Elite {
+				t.Errorf("ChargedMoves[%s].Elite = false, want true", ref.ID)
+			}
+			if ref.Legacy {
+				t.Errorf("ChargedMoves[%s].Legacy = true, want false", ref.ID)
+			}
+		case "STONE_EDGE":
+			if ref.Elite {
+				t.Errorf("ChargedMoves[%s].Elite = true, want false", ref.ID)
+			}
+			if ref.Legacy {
+				t.Errorf("ChargedMoves[%s].Legacy = true, want false", ref.ID)
+			}
+		}
+	}
+}
+
+// TestMoveInfo_EliteReverseIndex reproduces the elite_of reverse
+// lookup. AQUA_TAIL is elite on quagsire only (in the fixture);
+// its legacy_on_species list must be empty. Conversely PSYCHIC
+// appears in legacy_on_species on medicham and absent from
+// elite_on_species.
+func TestMoveInfo_EliteReverseIndex(t *testing.T) {
+	t.Parallel()
+
+	gmServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(eliteFixtureGamemaster))
+	}))
+	t.Cleanup(gmServer.Close)
+
+	gmMgr, err := gamemaster.NewManager(config.GamemasterConfig{
+		Source:    gmServer.URL,
+		LocalPath: filepath.Join(t.TempDir(), "gm.json"),
+	})
+	if err != nil {
+		t.Fatalf("NewManager gm: %v", err)
+	}
+
+	err = gmMgr.Refresh(t.Context())
+	if err != nil {
+		t.Fatalf("Refresh gm: %v", err)
+	}
+
+	handler := tools.NewMoveInfoTool(gmMgr).Handler()
+
+	_, aquaResult, err := handler(t.Context(), nil, tools.MoveInfoParams{MoveID: moveAquaTail})
+	if err != nil {
+		t.Fatalf("handler AQUA_TAIL: %v", err)
+	}
+
+	if len(aquaResult.EliteOnSpecies) != 1 || aquaResult.EliteOnSpecies[0] != "quagsire" {
+		t.Errorf("AQUA_TAIL.EliteOnSpecies = %v, want [quagsire]", aquaResult.EliteOnSpecies)
+	}
+	if len(aquaResult.LegacyOnSpecies) != 0 {
+		t.Errorf("AQUA_TAIL.LegacyOnSpecies = %v, want empty", aquaResult.LegacyOnSpecies)
+	}
+
+	_, psychicResult, err := handler(t.Context(), nil, tools.MoveInfoParams{MoveID: movePsychic})
+	if err != nil {
+		t.Fatalf("handler PSYCHIC: %v", err)
+	}
+
+	if len(psychicResult.LegacyOnSpecies) != 1 || psychicResult.LegacyOnSpecies[0] != speciesMedicham {
+		t.Errorf("PSYCHIC.LegacyOnSpecies = %v, want [%s]",
+			psychicResult.LegacyOnSpecies, speciesMedicham)
+	}
+	if len(psychicResult.EliteOnSpecies) != 0 {
+		t.Errorf("PSYCHIC.EliteOnSpecies = %v, want empty", psychicResult.EliteOnSpecies)
+	}
+}
+
 // TestTeamAnalysis_DisallowEliteExplicit mirrors the team_builder
 // test at the team_analysis layer — the client's reported 4-round
 // regression was for team_analysis specifically.

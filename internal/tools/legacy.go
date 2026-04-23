@@ -96,6 +96,23 @@ func anyLegacyMove(species *pogopvp.Species, moveset []string) bool {
 // non-legacy subset. Preserves input order so the enumeration is
 // deterministic across invocations.
 func nonLegacyMoves(species *pogopvp.Species, ids []string) []string {
+	return filterMovesByCategory(species, ids, pogopvp.IsLegacyMove)
+}
+
+// nonEliteMoves partitions the species' full move list into the
+// non-elite subset. Mirror of nonLegacyMoves for the elite
+// category.
+func nonEliteMoves(species *pogopvp.Species, ids []string) []string {
+	return filterMovesByCategory(species, ids, pogopvp.IsEliteMove)
+}
+
+// filterMovesByCategory returns the subset of ids that do NOT
+// satisfy the predicate (i.e. strip moves that belong to the
+// given restricted category). Preserves input order.
+func filterMovesByCategory(
+	species *pogopvp.Species, ids []string,
+	predicate func(*pogopvp.Species, string) bool,
+) []string {
 	if species == nil {
 		return ids
 	}
@@ -103,7 +120,7 @@ func nonLegacyMoves(species *pogopvp.Species, ids []string) []string {
 	out := make([]string, 0, len(ids))
 
 	for _, id := range ids {
-		if pogopvp.IsLegacyMove(species, id) {
+		if predicate(species, id) {
 			continue
 		}
 
@@ -111,6 +128,18 @@ func nonLegacyMoves(species *pogopvp.Species, ids []string) []string {
 	}
 
 	return out
+}
+
+// anyEliteMove reports whether any id in moveset is elite on the
+// given species. Mirror of anyLegacyMove for the elite category.
+func anyEliteMove(species *pogopvp.Species, moveset []string) bool {
+	for _, id := range moveset {
+		if pogopvp.IsEliteMove(species, id) {
+			return true
+		}
+	}
+
+	return false
 }
 
 // restrictedCategory bundles a restricted-move predicate (legacy or
