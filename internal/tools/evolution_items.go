@@ -70,8 +70,8 @@ var evolutionItemRequirements = map[string]EvolutionItemRequirement{
 	// gate. The name-trick bypass works once per account.
 	"espeon":  {Candy: evolveCandy25, Notes: "walk 10 km as buddy + evolve during the day (one per name-trick Sakura)"},
 	"umbreon": {Candy: evolveCandy25, Notes: "walk 10 km as buddy + evolve during the night (one per name-trick Tamao)"},
-	"leafeon": {Item: "mossy_lure", Candy: evolveCandy25, Notes: "evolve near a Mossy Lure module"},
-	"glaceon": {Item: "glacial_lure", Candy: evolveCandy25, Notes: "evolve near a Glacial Lure module"},
+	"leafeon": {Item: "mossy_lure", Candy: evolveCandy25, Notes: "evolve near a Mossy Lure module (one per name-trick Linnea)"},
+	"glaceon": {Item: "glacial_lure", Candy: evolveCandy25, Notes: "evolve near a Glacial Lure module (one per name-trick Rea)"},
 	"sylveon": {Candy: evolveCandy25, Notes: "earn 70 buddy hearts (one per name-trick Kira)"},
 
 	// Tyrogue split (stat-based, no item).

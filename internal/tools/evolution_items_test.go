@@ -10,7 +10,7 @@ import "testing"
 const testItemSunStone = "sun_stone"
 
 // TestEvolutionRequirementFor_Table exhaustively pins every
-// reachable entry. The table is small (16 keys), human-maintained,
+// reachable entry. The table is small (19 keys), human-maintained,
 // and Niantic changes these values rarely — so locking each entry
 // by ID + Item + Candy catches the typo-in-review-fix class of
 // regression that bit huntail/gorebyss/espeon/umbreon/magnezone/
