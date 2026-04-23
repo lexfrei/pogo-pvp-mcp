@@ -265,6 +265,17 @@ func walkEvolutionChain(
 // continue advancing past step.next. Split out of walkEvolutionChain
 // so the main body stays under funlen.
 //
+// All three terminating branches (stop / skip / overCap) honour
+// the same "preserve lastFit" rule: if the walker already
+// successfully advanced past at least one hop, the pool member
+// gets promoted to lastFit AND the accumulated requirements ship
+// on the breakdown. Skip reasons (branching / over-cap) surface
+// only when the very first hop failed — then lastFit is nil and
+// the base form stays in place with the skip reason flagged.
+// Symmetry matters: a prior asymmetric branching branch dropped
+// lastFit+requirements silently, which was a latent bug for any
+// future chain that branches after an item-gated linear hop.
+//
 //nolint:gocritic // unnamedResult: documented in godoc
 func processEvolveStep(
 	step evolveStepOutcome, lastFit *pogopvp.Species,
@@ -279,6 +290,10 @@ func processEvolveStep(
 	}
 
 	if step.skip != "" {
+		if lastFit != nil {
+			return true, lastFit, "", requirements
+		}
+
 		return true, nil, step.skip, nil
 	}
 

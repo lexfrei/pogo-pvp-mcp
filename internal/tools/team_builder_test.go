@@ -2015,7 +2015,7 @@ func TestTeamBuilderTool_AutoEvolveLinearChainRequirement(t *testing.T) {
 	}
 
 	req := breakdown.AutoEvolveRequirements[0]
-	if req.Item != "metal_coat" {
+	if req.Item != itemMetalCoat {
 		t.Errorf("Requirement.Item = %q, want metal_coat", req.Item)
 	}
 
@@ -2025,10 +2025,13 @@ func TestTeamBuilderTool_AutoEvolveLinearChainRequirement(t *testing.T) {
 	}
 }
 
-// itemUpGrade is the snake_case id the R7.P2 table uses for the
-// Porygon → Porygon2 Up-Grade item; hoisted to a const so the
-// multi-hop + over-cap tests share the same literal.
-const itemUpGrade = "up_grade"
+// itemUpGrade / itemMetalCoat are snake_case ids from the R7.P2
+// evolution-item table; hoisted to consts so the multi-hop +
+// over-cap + branching-preserve tests share one literal each.
+const (
+	itemUpGrade   = "up_grade"
+	itemMetalCoat = "metal_coat"
+)
 
 // autoEvolveTwoHopItemFixture publishes the porygon → porygon2 →
 // porygon_z chain. Both terminals are in the curated table
@@ -2257,6 +2260,251 @@ func TestTeamBuilderTool_AutoEvolveLinearChainRequirementOverCapPreserves(t *tes
 
 	if got := breakdown.AutoEvolveRequirements[0]; got.Item != itemUpGrade {
 		t.Errorf("AutoEvolveRequirements[0].Item = %q, want up_grade", got.Item)
+	}
+}
+
+// autoEvolveShadowLinearFixture mirrors autoEvolveItemGatedLinearFixture
+// but adds scyther_shadow + scizor_shadow so the R7.P2 promotion
+// path can be exercised with Options.Shadow=true. Shadow metal-
+// coat emission is non-obvious because autoEvolveMember uses
+// snapshot.Pokemon[spec.Species] (the shadow id) and the table
+// lookup runs on the evolved non-shadow child id — this test
+// pins that the requirement still surfaces on the shadow
+// breakdown.
+const autoEvolveShadowLinearFixture = `{
+  "id": "gamemaster",
+  "timestamp": "2026-04-23 00:00:00",
+  "pokemon": [
+    {"dex": 123, "speciesId": "scyther", "speciesName": "Scyther",
+     "baseStats": {"atk": 218, "def": 170, "hp": 172},
+     "types": ["bug", "flying"],
+     "fastMoves": ["FAST1"], "chargedMoves": ["CH1"],
+     "family": {"id": "FAMILY_SCYTHER", "evolutions": ["scizor"]},
+     "released": true},
+    {"dex": 123, "speciesId": "scyther_shadow", "speciesName": "Scyther (Shadow)",
+     "baseStats": {"atk": 218, "def": 170, "hp": 172},
+     "types": ["bug", "flying"],
+     "fastMoves": ["FAST1"], "chargedMoves": ["CH1"],
+     "family": {"id": "FAMILY_SCYTHER", "evolutions": ["scizor_shadow"]},
+     "released": true},
+    {"dex": 212, "speciesId": "scizor", "speciesName": "Scizor",
+     "baseStats": {"atk": 236, "def": 191, "hp": 172},
+     "types": ["bug", "steel"],
+     "fastMoves": ["FAST1"], "chargedMoves": ["CH1"],
+     "family": {"id": "FAMILY_SCYTHER", "parent": "scyther"},
+     "released": true},
+    {"dex": 212, "speciesId": "scizor_shadow", "speciesName": "Scizor (Shadow)",
+     "baseStats": {"atk": 236, "def": 191, "hp": 172},
+     "types": ["bug", "steel"],
+     "fastMoves": ["FAST1"], "chargedMoves": ["CH1"],
+     "family": {"id": "FAMILY_SCYTHER", "parent": "scyther_shadow"},
+     "released": true},
+    {"dex": 2, "speciesId": "b", "speciesName": "B",
+     "baseStats": {"atk": 152, "def": 143, "hp": 216}, "types": ["water"],
+     "fastMoves": ["FAST1"], "chargedMoves": ["CH1"], "released": true},
+    {"dex": 3, "speciesId": "c", "speciesName": "C",
+     "baseStats": {"atk": 234, "def": 159, "hp": 207}, "types": ["fighting"],
+     "fastMoves": ["FAST1"], "chargedMoves": ["CH1"], "released": true}
+  ],
+  "moves": [
+    {"moveId": "FAST1", "name": "Fast 1", "type": "normal",
+     "power": 3, "energy": 0, "energyGain": 5, "cooldown": 1000, "turns": 2},
+    {"moveId": "CH1", "name": "Charged 1", "type": "normal",
+     "power": 50, "energy": 35, "cooldown": 500}
+  ]
+}`
+
+// TestTeamBuilderTool_AutoEvolveShadowLinearChainRequirement pins
+// the R7.P2 behaviour for shadow pool members. Subtle: autoEvolve
+// walks the BASE-species evolutions (reads snapshot.Pokemon[
+// spec.Species] where spec.Species is the non-shadow id stored on
+// the caller's Combatant even when Options.Shadow=true), so the
+// walker traverses the non-shadow chain and the table lookup hits
+// the non-shadow "scizor" entry. That's how shadow promotions pick
+// up the Metal Coat requirement naturally — the shadow/non-shadow
+// redirect lives at a later stage (moveset resolution), not in
+// autoEvolveMember. A regression that broke the base-chain walk
+// for shadow members would drop the requirement silently.
+func TestTeamBuilderTool_AutoEvolveShadowLinearChainRequirement(t *testing.T) {
+	t.Parallel()
+
+	const rankingsPayload = `[
+  {"speciesId": "scizor_shadow", "speciesName": "Scizor (Shadow)", "rating": 720,
+   "moveset": ["FAST1", "CH1"],
+   "stats": {"product": 2100, "atk": 106, "def": 139, "hp": 141}},
+  {"speciesId": "scizor", "speciesName": "Scizor", "rating": 700,
+   "moveset": ["FAST1", "CH1"],
+   "stats": {"product": 2100, "atk": 106, "def": 139, "hp": 141}},
+  {"speciesId": "b", "speciesName": "B", "rating": 600,
+   "moveset": ["FAST1", "CH1"],
+   "stats": {"product": 2000, "atk": 100, "def": 120, "hp": 150}},
+  {"speciesId": "c", "speciesName": "C", "rating": 650,
+   "moveset": ["FAST1", "CH1"],
+   "stats": {"product": 2050, "atk": 105, "def": 125, "hp": 145}}
+]`
+
+	tool := newTeamBuilderToolFromFixture(t, autoEvolveShadowLinearFixture, rankingsPayload)
+	handler := tool.Handler()
+
+	pool := []tools.Combatant{
+		{
+			Species: speciesScyther, IV: [3]int{15, 15, 15}, Level: 20,
+			FastMove: "FAST1", ChargedMoves: []string{"CH1"},
+			Options: tools.CombatantOptions{Shadow: true},
+		},
+		baseCombatant("b"),
+		baseCombatant("c"),
+	}
+
+	_, result, err := handler(t.Context(), nil, tools.TeamBuilderParams{
+		Pool:       pool,
+		League:     leagueGreat,
+		AutoEvolve: true,
+	})
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+
+	var breakdown *tools.MemberCostBreakdown
+	for i := range result.Teams[0].Members {
+		sp := result.Teams[0].Members[i].Species
+		if sp == "scizor_shadow" || sp == speciesScizor {
+			breakdown = &result.Teams[0].CostBreakdowns[i]
+
+			break
+		}
+	}
+
+	if breakdown == nil {
+		t.Fatalf("shadow scizor not in returned team; members=%+v", result.Teams[0].Members)
+	}
+
+	if len(breakdown.AutoEvolveRequirements) != 1 {
+		t.Fatalf("AutoEvolveRequirements len = %d, want 1 "+
+			"(shadow walk goes through the base-species chain, so scizor's Metal Coat surfaces); got %+v",
+			len(breakdown.AutoEvolveRequirements), breakdown.AutoEvolveRequirements)
+	}
+
+	if got := breakdown.AutoEvolveRequirements[0]; got.Item != itemMetalCoat {
+		t.Errorf("AutoEvolveRequirements[0].Item = %q, want metal_coat", got.Item)
+	}
+}
+
+// autoEvolveLinearThenBranchFixture publishes a synthetic chain
+// where hop 1 promotes to a species in the curated R7.P2 table
+// (chainbase → scizor, scizor has the metal_coat entry) and hop 2
+// branches off scizor (scizor → scizorA / scizorB). Lets the R7.P2
+// round-2 fix prove that branching-after-linear preserves the
+// hop-1 promotion AND the hop-1 requirement, instead of dropping
+// both to nil. Real pvpoke gamemaster doesn't have scizor as a
+// branching parent; the fixture is synthetic to exercise the
+// code path only.
+const autoEvolveLinearThenBranchFixture = `{
+  "id": "gamemaster",
+  "timestamp": "2026-04-23 00:00:00",
+  "pokemon": [
+    {"dex": 900, "speciesId": "chainbase", "speciesName": "ChainBase",
+     "baseStats": {"atk": 100, "def": 100, "hp": 100},
+     "types": ["normal"],
+     "fastMoves": ["FAST1"], "chargedMoves": ["CH1"],
+     "family": {"id": "FAMILY_CHAIN", "evolutions": ["scizor"]},
+     "released": true},
+    {"dex": 212, "speciesId": "scizor", "speciesName": "Scizor",
+     "baseStats": {"atk": 140, "def": 140, "hp": 140},
+     "types": ["bug", "steel"],
+     "fastMoves": ["FAST1"], "chargedMoves": ["CH1"],
+     "family": {"id": "FAMILY_CHAIN", "parent": "chainbase", "evolutions": ["scizorA", "scizorB"]},
+     "released": true},
+    {"dex": 9001, "speciesId": "scizorA", "speciesName": "ScizorA",
+     "baseStats": {"atk": 145, "def": 135, "hp": 145},
+     "types": ["bug", "steel"],
+     "fastMoves": ["FAST1"], "chargedMoves": ["CH1"],
+     "family": {"id": "FAMILY_CHAIN", "parent": "scizor"},
+     "released": true},
+    {"dex": 9002, "speciesId": "scizorB", "speciesName": "ScizorB",
+     "baseStats": {"atk": 145, "def": 135, "hp": 145},
+     "types": ["bug", "steel"],
+     "fastMoves": ["FAST1"], "chargedMoves": ["CH1"],
+     "family": {"id": "FAMILY_CHAIN", "parent": "scizor"},
+     "released": true},
+    {"dex": 2, "speciesId": "b", "speciesName": "B",
+     "baseStats": {"atk": 152, "def": 143, "hp": 216}, "types": ["water"],
+     "fastMoves": ["FAST1"], "chargedMoves": ["CH1"], "released": true},
+    {"dex": 3, "speciesId": "c", "speciesName": "C",
+     "baseStats": {"atk": 234, "def": 159, "hp": 207}, "types": ["fighting"],
+     "fastMoves": ["FAST1"], "chargedMoves": ["CH1"], "released": true}
+  ],
+  "moves": [
+    {"moveId": "FAST1", "name": "Fast 1", "type": "normal",
+     "power": 3, "energy": 0, "energyGain": 5, "cooldown": 1000, "turns": 2},
+    {"moveId": "CH1", "name": "Charged 1", "type": "normal",
+     "power": 50, "energy": 35, "cooldown": 500}
+  ]
+}`
+
+// TestTeamBuilderTool_AutoEvolveLinearThenBranchingPreservesRequirements
+// pins the R7.P2 round-2 fix: when walkEvolutionChain advances
+// through at least one hop (chainbase → scizor, item-gated via
+// Metal Coat per the curated table) and then hits a branching
+// step (scizor → {scizorA, scizorB}), the resulting breakdown
+// must carry scizor as the promoted species AND the Metal Coat
+// requirement from hop 1. A regression to the pre-round-2
+// behavior would drop the promotion back to chainbase and lose
+// the requirement entirely.
+func TestTeamBuilderTool_AutoEvolveLinearThenBranchingPreservesRequirements(t *testing.T) {
+	t.Parallel()
+
+	const rankingsPayload = `[
+  {"speciesId": "scizor", "speciesName": "Scizor", "rating": 700,
+   "moveset": ["FAST1", "CH1"],
+   "stats": {"product": 2100, "atk": 106, "def": 139, "hp": 141}},
+  {"speciesId": "b", "speciesName": "B", "rating": 600,
+   "moveset": ["FAST1", "CH1"],
+   "stats": {"product": 2000, "atk": 100, "def": 120, "hp": 150}},
+  {"speciesId": "c", "speciesName": "C", "rating": 650,
+   "moveset": ["FAST1", "CH1"],
+   "stats": {"product": 2050, "atk": 105, "def": 125, "hp": 145}}
+]`
+
+	tool := newTeamBuilderToolFromFixture(t, autoEvolveLinearThenBranchFixture, rankingsPayload)
+	handler := tool.Handler()
+
+	pool := []tools.Combatant{
+		{Species: "chainbase", IV: [3]int{15, 15, 15}, Level: 20, FastMove: "FAST1", ChargedMoves: []string{"CH1"}},
+		baseCombatant("b"),
+		baseCombatant("c"),
+	}
+
+	_, result, err := handler(t.Context(), nil, tools.TeamBuilderParams{
+		Pool:       pool,
+		League:     leagueGreat,
+		AutoEvolve: true,
+	})
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+
+	var breakdown *tools.MemberCostBreakdown
+	for i := range result.Teams[0].Members {
+		if result.Teams[0].Members[i].Species == speciesScizor {
+			breakdown = &result.Teams[0].CostBreakdowns[i]
+
+			break
+		}
+	}
+
+	if breakdown == nil {
+		t.Fatalf("scizor not in returned team — promotion must survive the downstream branching; members=%+v",
+			result.Teams[0].Members)
+	}
+
+	if len(breakdown.AutoEvolveRequirements) != 1 {
+		t.Fatalf("AutoEvolveRequirements len = %d, want 1 (hop-1 metal_coat must survive downstream branching); got %+v",
+			len(breakdown.AutoEvolveRequirements), breakdown.AutoEvolveRequirements)
+	}
+
+	if got := breakdown.AutoEvolveRequirements[0]; got.Item != itemMetalCoat {
+		t.Errorf("AutoEvolveRequirements[0].Item = %q, want metal_coat", got.Item)
 	}
 }
 
