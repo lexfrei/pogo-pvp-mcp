@@ -1,41 +1,59 @@
 package tools
 
-// evolution_items.go carries a hardcoded branching-evolution
-// requirement table. pvpoke's gamemaster.json does NOT publish
-// evolution items — Species.Evolutions is a plain []string of
-// child ids, with no item or candy metadata. Clients asking
-// "should I evolve gloom to vileplume or bellossom, and what
-// does each cost?" need that data to make the recommendation.
+// evolution_items.go carries the curated evolution-item
+// requirement table for Pokémon GO. pvpoke's gamemaster.json does
+// NOT publish evolution items — Species.Evolutions is a plain
+// []string of child ids, with no item or candy metadata. Clients
+// asking "should I evolve gloom to vileplume or bellossom, and
+// what does each cost?" or "how many sinnoh_stones do I need for
+// this team?" need that data to make the recommendation.
 //
 // Source: Bulbapedia cross-referenced against pokemongohub.net +
 // gameinfo.io, snapshot 2026-04. Niantic changes these
 // requirements rarely; drift should be reported via
 // pvp_report_data_issue.
 //
-// Scope: ONLY branching chains where pvpoke's gamemaster lists
-// more than one direct child of the base species AND the child
-// is shipped in Pokémon GO. That's the only path
-// enumerateBranchAlternatives (team_builder_evolve.go) calls
-// evolutionRequirementFor — linear chains take the
-// walkEvolutionChain branch instead and never hit this table.
-// Ship-scope chains today (R6.7):
-//   - gloom split  → vileplume (no item) / bellossom (Sun Stone)
-//   - slowpoke     → slowbro (no item) / slowking (King's Rock)
-//   - poliwhirl    → poliwrath (no item) / politoed (King's Rock)
-//   - clamperl     → huntail / gorebyss (both random-pick in GO)
-//   - eevee        → all eight eeveelutions
-//   - tyrogue      → hitmonlee / hitmonchan / hitmontop
+// Scope (as of R7.P2 — both branching AND linear item-gated
+// chains Niantic ships in Pokémon GO):
 //
-// Linear chains gated by an item in GO (scyther→scizor via Metal
-// Coat, onix→steelix, porygon line via Up-Grade / Sinnoh Stone,
-// rhydon→rhyperior, etc.) are deliberately OUT of scope here —
-// surfacing their item cost requires wiring a Requirement field
-// onto MemberCostBreakdown at the walkEvolutionChain path, which
-// is a separate task. When pvpoke / engine eventually publish
-// evolution-item data natively, this table can be deleted.
+//   - Branching chains (queried by enumerateBranchAlternatives
+//     via evolutionRequirementFor(childID) when the walker hits
+//     len(Evolutions) > 1):
+//       gloom → vileplume (no item) / bellossom (Sun Stone)
+//       slowpoke → slowbro (no item) / slowking (King's Rock)
+//       poliwhirl → poliwrath (no item) / politoed (King's Rock)
+//       clamperl → huntail / gorebyss (both random-pick in GO)
+//       eevee → all eight eeveelutions
+//       tyrogue → hitmonlee / hitmonchan / hitmontop (stat-based)
+//
+//   - Linear item-gated chains (queried by walkEvolutionChain
+//     on each successful hop; accumulated into
+//     MemberCostBreakdown.AutoEvolveRequirements):
+//       sunkern → sunflora (Sun Stone)
+//       horsea → seadra → kingdra (Dragon Scale on seadra → kingdra)
+//       scyther → scizor (Metal Coat)
+//       onix → steelix (Metal Coat)
+//       porygon → porygon2 (Up-Grade) → porygon_z (Sinnoh Stone)
+//       rhydon → rhyperior (Sinnoh Stone)
+//       electabuzz → electivire (Sinnoh Stone)
+//       magmar → magmortar (Sinnoh Stone)
+//       gligar → gliscor (Sinnoh Stone)
+//       dusclops → dusknoir (Sinnoh Stone)
+//       togetic → togekiss (Sinnoh Stone)
+//       magneton → magnezone (Magnetic Lure)
+//       nosepass → probopass (Magnetic Lure)
+//
+// Linear chains without an item gate (bulbasaur → ivysaur →
+// venusaur, etc.) are intentionally absent — walkEvolutionChain
+// silently skips their hops when accumulating requirements, and
+// branching queries return nil so the caller knows to consult
+// its own data source.
+//
+// When pvpoke / engine eventually publish evolution-item data
+// natively, this table can be deleted.
 
 // Canonical per-step evolution candy tiers in Pokémon GO. The
-// three values cover every entry in the branching-evolution table.
+// three values cover every entry in the curated table.
 const (
 	evolveCandy25  = 25
 	evolveCandy50  = 50
@@ -87,7 +105,7 @@ var evolutionItemRequirements = map[string]EvolutionItemRequirement{
 	"kingdra":    {Item: "dragon_scale", Candy: evolveCandy100},
 	"scizor":     {Item: "metal_coat", Candy: evolveCandy50},
 	"steelix":    {Item: "metal_coat", Candy: evolveCandy50},
-	"porygon2":   {Item: "up_grade", Candy: evolveCandy25},
+	"porygon2":   {Item: "up_grade", Candy: evolveCandy50},
 	"porygon_z":  {Item: "sinnoh_stone", Candy: evolveCandy100},
 	"rhyperior":  {Item: "sinnoh_stone", Candy: evolveCandy100},
 	"electivire": {Item: "sinnoh_stone", Candy: evolveCandy100},
@@ -100,12 +118,13 @@ var evolutionItemRequirements = map[string]EvolutionItemRequirement{
 }
 
 // evolutionRequirementFor returns the curated requirement for
-// speciesID when the species is in the branching-evolution table,
-// or nil when it is not (linear evolutions, terminal species,
-// mechanics we do not yet model). Callers should treat nil as
-// "consult your own data source" rather than "no requirement".
-// Hands back an independent struct copy so caller mutation cannot
-// pollute the shared table.
+// speciesID when the species is in the table, or nil when it is
+// not (linear evolutions without an item gate, terminal species,
+// chains pvpoke lists but Niantic does not ship in GO, mechanics
+// we do not yet model). Callers should treat nil as "consult
+// your own data source" rather than "no requirement". Hands back
+// an independent struct copy so caller mutation cannot pollute
+// the shared table.
 func evolutionRequirementFor(speciesID string) *EvolutionItemRequirement {
 	req, ok := evolutionItemRequirements[speciesID]
 	if !ok {

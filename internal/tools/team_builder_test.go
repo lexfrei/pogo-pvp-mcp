@@ -2025,6 +2025,241 @@ func TestTeamBuilderTool_AutoEvolveLinearChainRequirement(t *testing.T) {
 	}
 }
 
+// itemUpGrade is the snake_case id the R7.P2 table uses for the
+// Porygon → Porygon2 Up-Grade item; hoisted to a const so the
+// multi-hop + over-cap tests share the same literal.
+const itemUpGrade = "up_grade"
+
+// autoEvolveTwoHopItemFixture publishes the porygon → porygon2 →
+// porygon_z chain. Both terminals are in the curated table
+// (up_grade, sinnoh_stone) so the R7.P2 multi-hop accumulator gets
+// tested end-to-end. Base-stat values are the real Pokémon GO
+// numbers so the level-1 fit check passes in Ultra League
+// (porygon_z fits at level 1 under 2500 CP).
+const autoEvolveTwoHopItemFixture = `{
+  "id": "gamemaster",
+  "timestamp": "2026-04-23 00:00:00",
+  "pokemon": [
+    {"dex": 137, "speciesId": "porygon", "speciesName": "Porygon",
+     "baseStats": {"atk": 153, "def": 136, "hp": 163},
+     "types": ["normal"],
+     "fastMoves": ["FAST1"], "chargedMoves": ["CH1"],
+     "family": {"id": "FAMILY_PORYGON", "evolutions": ["porygon2"]},
+     "released": true},
+    {"dex": 233, "speciesId": "porygon2", "speciesName": "Porygon2",
+     "baseStats": {"atk": 198, "def": 183, "hp": 197},
+     "types": ["normal"],
+     "fastMoves": ["FAST1"], "chargedMoves": ["CH1"],
+     "family": {"id": "FAMILY_PORYGON", "parent": "porygon", "evolutions": ["porygon_z"]},
+     "released": true},
+    {"dex": 474, "speciesId": "porygon_z", "speciesName": "Porygon-Z",
+     "baseStats": {"atk": 264, "def": 150, "hp": 198},
+     "types": ["normal"],
+     "fastMoves": ["FAST1"], "chargedMoves": ["CH1"],
+     "family": {"id": "FAMILY_PORYGON", "parent": "porygon2"},
+     "released": true},
+    {"dex": 2, "speciesId": "b", "speciesName": "B",
+     "baseStats": {"atk": 152, "def": 143, "hp": 216}, "types": ["water"],
+     "fastMoves": ["FAST1"], "chargedMoves": ["CH1"], "released": true},
+    {"dex": 3, "speciesId": "c", "speciesName": "C",
+     "baseStats": {"atk": 234, "def": 159, "hp": 207}, "types": ["fighting"],
+     "fastMoves": ["FAST1"], "chargedMoves": ["CH1"], "released": true}
+  ],
+  "moves": [
+    {"moveId": "FAST1", "name": "Fast 1", "type": "normal",
+     "power": 3, "energy": 0, "energyGain": 5, "cooldown": 1000, "turns": 2},
+    {"moveId": "CH1", "name": "Charged 1", "type": "normal",
+     "power": 50, "energy": 35, "cooldown": 500}
+  ]
+}`
+
+// TestTeamBuilderTool_AutoEvolveLinearChainRequirementMultiHop
+// pins the R7.P2 multi-hop accumulator: porygon walked to
+// porygon_z via porygon2 must surface two ordered requirement
+// entries — Up-Grade (50 candy) then Sinnoh Stone (100 candy).
+// A bug that reset the accumulator on advance would pass the
+// single-hop scyther test but silently drop all but the last
+// entry here.
+func TestTeamBuilderTool_AutoEvolveLinearChainRequirementMultiHop(t *testing.T) {
+	t.Parallel()
+
+	const rankingsPayload = `[
+  {"speciesId": "porygon_z", "speciesName": "Porygon-Z", "rating": 700,
+   "moveset": ["FAST1", "CH1"],
+   "stats": {"product": 2300, "atk": 140, "def": 120, "hp": 160}},
+  {"speciesId": "b", "speciesName": "B", "rating": 600,
+   "moveset": ["FAST1", "CH1"],
+   "stats": {"product": 2000, "atk": 100, "def": 120, "hp": 150}},
+  {"speciesId": "c", "speciesName": "C", "rating": 650,
+   "moveset": ["FAST1", "CH1"],
+   "stats": {"product": 2050, "atk": 105, "def": 125, "hp": 145}}
+]`
+
+	tool := newTeamBuilderToolFromFixture(t, autoEvolveTwoHopItemFixture, rankingsPayload)
+	handler := tool.Handler()
+
+	pool := []tools.Combatant{
+		{Species: "porygon", IV: [3]int{15, 15, 15}, Level: 20, FastMove: "FAST1", ChargedMoves: []string{"CH1"}},
+		baseCombatant("b"),
+		baseCombatant("c"),
+	}
+
+	_, result, err := handler(t.Context(), nil, tools.TeamBuilderParams{
+		Pool:       pool,
+		League:     "ultra",
+		AutoEvolve: true,
+	})
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+
+	var breakdown *tools.MemberCostBreakdown
+	for i := range result.Teams[0].Members {
+		if result.Teams[0].Members[i].Species == "porygon_z" {
+			breakdown = &result.Teams[0].CostBreakdowns[i]
+
+			break
+		}
+	}
+
+	if breakdown == nil {
+		t.Fatalf("porygon_z not in returned team; members=%+v", result.Teams[0].Members)
+	}
+
+	if len(breakdown.AutoEvolveRequirements) != 2 {
+		t.Fatalf("AutoEvolveRequirements len = %d, want 2 (up_grade then sinnoh_stone); got %+v",
+			len(breakdown.AutoEvolveRequirements), breakdown.AutoEvolveRequirements)
+	}
+
+	// Order must match the walker's hop order — up_grade first
+	// (porygon → porygon2), sinnoh_stone second (porygon2 →
+	// porygon_z). Swapping signals a regression in how the
+	// slice is accumulated.
+	const wantPorygon2Candy = 50
+	if got := breakdown.AutoEvolveRequirements[0]; got.Item != itemUpGrade || got.Candy != wantPorygon2Candy {
+		t.Errorf("AutoEvolveRequirements[0] = %+v, want {up_grade, %d}", got, wantPorygon2Candy)
+	}
+
+	const wantPorygonZCandy = 100
+	if got := breakdown.AutoEvolveRequirements[1]; got.Item != "sinnoh_stone" || got.Candy != wantPorygonZCandy {
+		t.Errorf("AutoEvolveRequirements[1] = %+v, want {sinnoh_stone, %d}", got, wantPorygonZCandy)
+	}
+}
+
+// autoEvolveOverCapFixture mirrors autoEvolveTwoHopItemFixture
+// but inflates porygon_z's base stats so its level-1 floor CP
+// exceeds the Great-League cap (1500). Keeps porygon + porygon2
+// fitting normally so the walker promotes to porygon2 and stops
+// at over-cap on hop 2. Synthetic stats — Pokémon GO's real
+// porygon_z floor fits under any league, so the over-cap path
+// needs an inflated fixture to exercise.
+const autoEvolveOverCapFixture = `{
+  "id": "gamemaster",
+  "timestamp": "2026-04-23 00:00:00",
+  "pokemon": [
+    {"dex": 137, "speciesId": "porygon", "speciesName": "Porygon",
+     "baseStats": {"atk": 153, "def": 136, "hp": 163},
+     "types": ["normal"],
+     "fastMoves": ["FAST1"], "chargedMoves": ["CH1"],
+     "family": {"id": "FAMILY_PORYGON", "evolutions": ["porygon2"]},
+     "released": true},
+    {"dex": 233, "speciesId": "porygon2", "speciesName": "Porygon2",
+     "baseStats": {"atk": 198, "def": 183, "hp": 197},
+     "types": ["normal"],
+     "fastMoves": ["FAST1"], "chargedMoves": ["CH1"],
+     "family": {"id": "FAMILY_PORYGON", "parent": "porygon", "evolutions": ["porygon_z"]},
+     "released": true},
+    {"dex": 474, "speciesId": "porygon_z", "speciesName": "Porygon-Z",
+     "baseStats": {"atk": 5000, "def": 5000, "hp": 5000},
+     "types": ["normal"],
+     "fastMoves": ["FAST1"], "chargedMoves": ["CH1"],
+     "family": {"id": "FAMILY_PORYGON", "parent": "porygon2"},
+     "released": true},
+    {"dex": 2, "speciesId": "b", "speciesName": "B",
+     "baseStats": {"atk": 152, "def": 143, "hp": 216}, "types": ["water"],
+     "fastMoves": ["FAST1"], "chargedMoves": ["CH1"], "released": true},
+    {"dex": 3, "speciesId": "c", "speciesName": "C",
+     "baseStats": {"atk": 234, "def": 159, "hp": 207}, "types": ["fighting"],
+     "fastMoves": ["FAST1"], "chargedMoves": ["CH1"], "released": true}
+  ],
+  "moves": [
+    {"moveId": "FAST1", "name": "Fast 1", "type": "normal",
+     "power": 3, "energy": 0, "energyGain": 5, "cooldown": 1000, "turns": 2},
+    {"moveId": "CH1", "name": "Charged 1", "type": "normal",
+     "power": 50, "energy": 35, "cooldown": 500}
+  ]
+}`
+
+// TestTeamBuilderTool_AutoEvolveLinearChainRequirementOverCapPreserves
+// pins the processEvolveStep edge case: on a two-hop linear walk
+// where hop 1 fits the league cap (porygon → porygon2) and hop 2
+// busts it (porygon2 → porygon_z at tight Great-League 1500),
+// the partial promotion must surface the hop-1 requirement
+// (Up-Grade) on AutoEvolveRequirements. A regression that
+// discarded the accumulator on overCap would silently drop the
+// requirement and leave the caller without the upgrade cost for
+// the promotion they just got.
+func TestTeamBuilderTool_AutoEvolveLinearChainRequirementOverCapPreserves(t *testing.T) {
+	t.Parallel()
+
+	const rankingsPayload = `[
+  {"speciesId": "porygon2", "speciesName": "Porygon2", "rating": 700,
+   "moveset": ["FAST1", "CH1"],
+   "stats": {"product": 2100, "atk": 100, "def": 120, "hp": 150}},
+  {"speciesId": "b", "speciesName": "B", "rating": 600,
+   "moveset": ["FAST1", "CH1"],
+   "stats": {"product": 2000, "atk": 100, "def": 120, "hp": 150}},
+  {"speciesId": "c", "speciesName": "C", "rating": 650,
+   "moveset": ["FAST1", "CH1"],
+   "stats": {"product": 2050, "atk": 105, "def": 125, "hp": 145}}
+]`
+
+	tool := newTeamBuilderToolFromFixture(t, autoEvolveOverCapFixture, rankingsPayload)
+	handler := tool.Handler()
+
+	pool := []tools.Combatant{
+		{Species: "porygon", IV: [3]int{15, 15, 15}, Level: 15, FastMove: "FAST1", ChargedMoves: []string{"CH1"}},
+		baseCombatant("b"),
+		baseCombatant("c"),
+	}
+
+	// Great League (cpCap=1500): the inflated porygon_z busts the
+	// cap at level 1, so the walker promotes to porygon2 (hop 1,
+	// fits) and stops at the overCap branch before advancing to
+	// porygon_z. AutoEvolveRequirements must still carry up_grade
+	// from hop 1.
+	_, result, err := handler(t.Context(), nil, tools.TeamBuilderParams{
+		Pool:       pool,
+		League:     leagueGreat,
+		AutoEvolve: true,
+	})
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+
+	var breakdown *tools.MemberCostBreakdown
+	for i := range result.Teams[0].Members {
+		if result.Teams[0].Members[i].Species == "porygon2" {
+			breakdown = &result.Teams[0].CostBreakdowns[i]
+
+			break
+		}
+	}
+
+	if breakdown == nil {
+		t.Fatalf("porygon2 not in returned team; members=%+v", result.Teams[0].Members)
+	}
+
+	if len(breakdown.AutoEvolveRequirements) != 1 {
+		t.Fatalf("AutoEvolveRequirements len = %d, want 1 (hop-1 up_grade survives the hop-2 over-cap); got %+v",
+			len(breakdown.AutoEvolveRequirements), breakdown.AutoEvolveRequirements)
+	}
+
+	if got := breakdown.AutoEvolveRequirements[0]; got.Item != itemUpGrade {
+		t.Errorf("AutoEvolveRequirements[0].Item = %q, want up_grade", got.Item)
+	}
+}
+
 // TestTeamBuilderTool_AutoEvolveLinearChainNoItemRequirements pins
 // the complement: a linear chain whose intermediate species are
 // outside the curated table (squirtle → wartortle → blastoise

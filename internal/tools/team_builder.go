@@ -175,12 +175,13 @@ type EvolveAlternative struct {
 // EvolutionItemRequirement captures the item (if any) and candy
 // cost a trainer must spend to perform one evolution step in
 // Pokémon GO. Item is the canonical snake_case id; observed values
-// in the table today: "sun_stone", "king_rock", "mossy_lure",
-// "glacial_lure". Empty when no item is required (random-pick
-// branches, stat-based splits like Tyrogue, buddy-km-gated
-// eeveelutions). Candy is the per-step cost and is always positive
-// in the current table. Notes is a free-form caveat for non-candy
-// mechanics (buddy-km walk, time-of-day gate, lure-module
+// in the table today: "sun_stone", "king_rock", "dragon_scale",
+// "metal_coat", "up_grade", "sinnoh_stone", "mossy_lure",
+// "glacial_lure", "magnetic_lure". Empty when no item is required
+// (random-pick branches, stat-based splits like Tyrogue, buddy-km-
+// gated eeveelutions). Candy is the per-step cost and is always
+// positive in the current table. Notes is a free-form caveat for
+// non-candy mechanics (buddy-km walk, time-of-day gate, lure-module
 // requirement, mainline-vs-GO difference on Clamperl, etc.) and is
 // empty when the entry has no further subtleties.
 type EvolutionItemRequirement struct {

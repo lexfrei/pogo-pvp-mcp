@@ -53,7 +53,7 @@ func TestEvolutionRequirementFor_Table(t *testing.T) {
 		{"kingdra", "dragon_scale", evolveCandy100},
 		{"scizor", "metal_coat", evolveCandy50},
 		{"steelix", "metal_coat", evolveCandy50},
-		{"porygon2", "up_grade", evolveCandy25},
+		{"porygon2", "up_grade", evolveCandy50},
 		{"porygon_z", "sinnoh_stone", evolveCandy100},
 		{"rhyperior", "sinnoh_stone", evolveCandy100},
 		{"electivire", "sinnoh_stone", evolveCandy100},
