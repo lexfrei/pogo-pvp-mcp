@@ -26,19 +26,17 @@ func TestReportDataIssue_Payload(t *testing.T) {
 		t.Errorf("Message is empty")
 	}
 
-	// Repository is currently hosted at lexfrei/pvpoke-mcp (the Go
-	// module path is already pogo-pvp-mcp but CLAUDE.md records
-	// the repo rename as pending). Using the module path in the
-	// URL returns 404. When the rename lands, flip both consts +
-	// this test in one explicit commit; don't let the drift slip
-	// through silently.
-	if result.RepositoryURL != "https://github.com/lexfrei/pvpoke-mcp" {
-		t.Errorf("RepositoryURL = %q, want live repo URL (rename pending per CLAUDE.md)",
+	// Repository URL matches the Go module path post-rename
+	// (pogo-pvp-mcp). GitHub keeps an HTTP redirect from the old
+	// pvpoke-mcp path for a grace window but the canonical URL
+	// points at the new name.
+	if result.RepositoryURL != "https://github.com/lexfrei/pogo-pvp-mcp" {
+		t.Errorf("RepositoryURL = %q, want canonical repo URL (post-rename)",
 			result.RepositoryURL)
 	}
 
-	if result.IssuesURL != "https://github.com/lexfrei/pvpoke-mcp/issues/new" {
-		t.Errorf("IssuesURL = %q, want live new-issue URL (rename pending per CLAUDE.md)",
+	if result.IssuesURL != "https://github.com/lexfrei/pogo-pvp-mcp/issues/new" {
+		t.Errorf("IssuesURL = %q, want canonical new-issue URL (post-rename)",
 			result.IssuesURL)
 	}
 
