@@ -123,11 +123,14 @@ func TestRank_CupFilterUnknownCupReturnsEmpty(t *testing.T) {
 	}
 }
 
-// TestRank_CupFilterAllStringEquivalentToEmpty pins R6.6: passing
-// Cup="all" must behave identically to Cup="". Both must resolve
-// to the open-league slice with a single entry in RankingsByCup
-// (labelled "all").
-func TestRank_CupFilterAllStringEquivalentToEmpty(t *testing.T) {
+// TestRank_CupFilterAllStringReturnsOpenLeagueOnly pins: passing
+// Cup="all" narrows rankings_by_cup to the single open-league row.
+// Complements TestRank_CupFilterEmptyReturnsAll (which asserts
+// Cup="" emits every published cup) — the two inputs deliberately
+// produce different output shapes, and callers who want the pre-
+// R6.5 "every cup" behaviour must leave Cup empty, not set it to
+// "all".
+func TestRank_CupFilterAllStringReturnsOpenLeagueOnly(t *testing.T) {
 	t.Parallel()
 
 	const openPayload = `[

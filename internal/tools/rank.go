@@ -105,7 +105,7 @@ type RankParams struct {
 	League  string           `json:"league" jsonschema:"little|great|ultra|master"`
 	CPCap   int              `json:"cp_cap,omitempty" jsonschema:"override (0 = league default); optimal level re-searched under the override"`
 	XL      bool             `json:"xl,omitempty" jsonschema:"allow XL candy levels above 40"`
-	Cup     string           `json:"cup,omitempty" jsonschema:"filter rankings_by_cup to this cup id only; empty/all = every published cup"`
+	Cup     string           `json:"cup,omitempty" jsonschema:"filter rankings_by_cup: ''=every cup, 'all'=open-league only, <id>=that cup"`
 	Options CombatantOptions `json:"options,omitzero" jsonschema:"shadow / lucky / purified flags; Shadow flips to the pvpoke _shadow entry"`
 }
 
