@@ -2033,6 +2033,12 @@ const (
 	itemMetalCoat = "metal_coat"
 )
 
+// speciesScizorShadow is the legacy-suffix id used by the two
+// shadow-promotion tests in this file (non-suffix convention
+// via Options.Shadow=true + suffix convention directly). Shared
+// as a const so the assertions don't trip goconst.
+const speciesScizorShadow = "scizor_shadow"
+
 // autoEvolveTwoHopItemFixture publishes the porygon → porygon2 →
 // porygon_z chain. Both terminals are in the curated table
 // (up_grade, sinnoh_stone) so the R7.P2 multi-hop accumulator gets
@@ -2368,7 +2374,7 @@ func TestTeamBuilderTool_AutoEvolveShadowLinearChainRequirement(t *testing.T) {
 	var breakdown *tools.MemberCostBreakdown
 	for i := range result.Teams[0].Members {
 		sp := result.Teams[0].Members[i].Species
-		if sp == "scizor_shadow" || sp == speciesScizor {
+		if sp == speciesScizorShadow || sp == speciesScizor {
 			breakdown = &result.Teams[0].CostBreakdowns[i]
 
 			break
@@ -2382,6 +2388,79 @@ func TestTeamBuilderTool_AutoEvolveShadowLinearChainRequirement(t *testing.T) {
 	if len(breakdown.AutoEvolveRequirements) != 1 {
 		t.Fatalf("AutoEvolveRequirements len = %d, want 1 "+
 			"(shadow walk goes through the base-species chain, so scizor's Metal Coat surfaces); got %+v",
+			len(breakdown.AutoEvolveRequirements), breakdown.AutoEvolveRequirements)
+	}
+
+	if got := breakdown.AutoEvolveRequirements[0]; got.Item != itemMetalCoat {
+		t.Errorf("AutoEvolveRequirements[0].Item = %q, want metal_coat", got.Item)
+	}
+}
+
+// TestTeamBuilderTool_AutoEvolveShadowSuffixChainRequirement
+// pins the legacy "_shadow"-suffix caller convention: a pool
+// entry with Species="scyther_shadow" (and no Options.Shadow —
+// id already disambiguates) walks the shadow chain
+// (scyther_shadow → scizor_shadow). The curated table keys on
+// non-shadow ids only, so the lookup strips "_shadow" before
+// reading — without that strip, every shadow-suffix caller
+// silently loses their Metal Coat (and every other item-gated
+// R7.P2 requirement). Regression without the strip: len=0.
+func TestTeamBuilderTool_AutoEvolveShadowSuffixChainRequirement(t *testing.T) {
+	t.Parallel()
+
+	const rankingsPayload = `[
+  {"speciesId": "scizor_shadow", "speciesName": "Scizor (Shadow)", "rating": 720,
+   "moveset": ["FAST1", "CH1"],
+   "stats": {"product": 2100, "atk": 106, "def": 139, "hp": 141}},
+  {"speciesId": "scizor", "speciesName": "Scizor", "rating": 700,
+   "moveset": ["FAST1", "CH1"],
+   "stats": {"product": 2100, "atk": 106, "def": 139, "hp": 141}},
+  {"speciesId": "b", "speciesName": "B", "rating": 600,
+   "moveset": ["FAST1", "CH1"],
+   "stats": {"product": 2000, "atk": 100, "def": 120, "hp": 150}},
+  {"speciesId": "c", "speciesName": "C", "rating": 650,
+   "moveset": ["FAST1", "CH1"],
+   "stats": {"product": 2050, "atk": 105, "def": 125, "hp": 145}}
+]`
+
+	tool := newTeamBuilderToolFromFixture(t, autoEvolveShadowLinearFixture, rankingsPayload)
+	handler := tool.Handler()
+
+	pool := []tools.Combatant{
+		{
+			Species: "scyther_shadow", IV: [3]int{15, 15, 15}, Level: 20,
+			FastMove: "FAST1", ChargedMoves: []string{"CH1"},
+		},
+		baseCombatant("b"),
+		baseCombatant("c"),
+	}
+
+	_, result, err := handler(t.Context(), nil, tools.TeamBuilderParams{
+		Pool:       pool,
+		League:     leagueGreat,
+		AutoEvolve: true,
+	})
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+
+	var breakdown *tools.MemberCostBreakdown
+	for i := range result.Teams[0].Members {
+		sp := result.Teams[0].Members[i].Species
+		if sp == speciesScizorShadow || sp == speciesScizor {
+			breakdown = &result.Teams[0].CostBreakdowns[i]
+
+			break
+		}
+	}
+
+	if breakdown == nil {
+		t.Fatalf("shadow scizor not in returned team; members=%+v", result.Teams[0].Members)
+	}
+
+	if len(breakdown.AutoEvolveRequirements) != 1 {
+		t.Fatalf("AutoEvolveRequirements len = %d, want 1 "+
+			"(shadow-suffix caller must still get Metal Coat via _shadow strip); got %+v",
 			len(breakdown.AutoEvolveRequirements), breakdown.AutoEvolveRequirements)
 	}
 

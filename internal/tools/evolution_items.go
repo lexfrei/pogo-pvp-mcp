@@ -1,5 +1,7 @@
 package tools
 
+import "strings"
+
 // evolution_items.go carries the curated evolution-item
 // requirement table for Pokémon GO. pvpoke's gamemaster.json does
 // NOT publish evolution items — Species.Evolutions is a plain
@@ -125,8 +127,15 @@ var evolutionItemRequirements = map[string]EvolutionItemRequirement{
 // your own data source" rather than "no requirement". Hands back
 // an independent struct copy so caller mutation cannot pollute
 // the shared table.
+//
+// Shadow-suffix tolerance: callers using the legacy
+// "species_shadow" convention (instead of Options.Shadow=true)
+// reach this helper with an id like "scizor_shadow". The curated
+// table is keyed on non-shadow ids only, so we strip the suffix
+// before lookup — the requirement (e.g. Metal Coat on scizor)
+// applies identically to the shadow variant.
 func evolutionRequirementFor(speciesID string) *EvolutionItemRequirement {
-	req, ok := evolutionItemRequirements[speciesID]
+	req, ok := evolutionItemRequirements[strings.TrimSuffix(speciesID, "_shadow")]
 	if !ok {
 		return nil
 	}
