@@ -315,21 +315,7 @@ func (tool *RankTool) lookupMoveset(
 			continue
 		}
 
-		if len(entry.Moveset) == 0 {
-			return nil
-		}
-
-		moveset := &Moveset{Fast: entry.Moveset[0]}
-		if len(entry.Moveset) > 1 {
-			moveset.Charged = append(moveset.Charged, entry.Moveset[1:]...)
-		}
-
-		moveset.HasLegacy = pogopvp.IsLegacyMove(species, moveset.Fast) ||
-			anyLegacyMove(species, moveset.Charged)
-		moveset.HasElite = pogopvp.IsEliteMove(species, moveset.Fast) ||
-			anyEliteMove(species, moveset.Charged)
-
-		return moveset
+		return movesetFromEntry(species, &entry)
 	}
 
 	return nil
@@ -450,9 +436,9 @@ func lookupCupRanking(
 }
 
 // movesetFromEntry projects a rankings entry's Moveset slice into
-// the tool's Moveset shape with per-move legacy tagging. Returns
-// nil when the entry carries no moveset data so the caller can
-// omit the field.
+// the tool's Moveset shape with per-category aggregate tagging
+// (HasLegacy / HasElite). Returns nil when the entry carries no
+// moveset data so the caller can omit the field.
 func movesetFromEntry(species *pogopvp.Species, entry *rankings.RankingEntry) *Moveset {
 	if len(entry.Moveset) == 0 {
 		return nil
@@ -465,6 +451,8 @@ func movesetFromEntry(species *pogopvp.Species, entry *rankings.RankingEntry) *M
 
 	moveset.HasLegacy = pogopvp.IsLegacyMove(species, moveset.Fast) ||
 		anyLegacyMove(species, moveset.Charged)
+	moveset.HasElite = pogopvp.IsEliteMove(species, moveset.Fast) ||
+		anyEliteMove(species, moveset.Charged)
 
 	return moveset
 }

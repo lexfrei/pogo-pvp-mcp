@@ -541,6 +541,55 @@ func TestRank_OptimalHasEliteDetected(t *testing.T) {
 	}
 }
 
+// TestRank_RankingsByCupCarriesHasElite pins that the per-cup
+// Moveset rows emit HasElite=true when the recommended moveset is
+// elite — the parallel axis to TestRank_OptimalHasEliteDetected.
+// Before round-2's movesetFromEntry fix, RankingsByCup[*].Moveset
+// would emit HasLegacy correctly but HasElite=false silently.
+func TestRank_RankingsByCupCarriesHasElite(t *testing.T) {
+	t.Parallel()
+
+	const ranksJSON = `[
+  {"speciesId": "quagsire", "speciesName": "Quagsire", "rating": 800,
+   "moveset": ["MUD_SHOT", "AQUA_TAIL", "STONE_EDGE"],
+   "matchups": [], "counters": [],
+   "stats": {"product": 2100, "atk": 100, "def": 130, "hp": 180}}
+]`
+
+	tool := newRankToolFromFixture(t, eliteFixtureGamemaster, ranksJSON)
+	handler := tool.Handler()
+
+	_, result, err := handler(t.Context(), nil, tools.RankParams{
+		Species: speciesQuagsire,
+		IV:      [3]int{0, 15, 15},
+		League:  leagueGreat,
+	})
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+
+	if len(result.RankingsByCup) == 0 {
+		t.Fatal("RankingsByCup empty; expected at least the open-league entry")
+	}
+
+	found := false
+	for _, entry := range result.RankingsByCup {
+		if entry.Moveset == nil {
+			continue
+		}
+		found = true
+		if !entry.Moveset.HasElite {
+			t.Errorf("RankingsByCup[%s].Moveset.HasElite = false, want true (AQUA_TAIL is elite)", entry.Cup)
+		}
+		if entry.Moveset.HasLegacy {
+			t.Errorf("RankingsByCup[%s].Moveset.HasLegacy = true, want false", entry.Cup)
+		}
+	}
+	if !found {
+		t.Fatal("no RankingsByCup entry carried a non-nil Moveset")
+	}
+}
+
 // TestTeamAnalysis_DisallowEliteExplicit mirrors the team_builder
 // test at the team_analysis layer — the client's reported 4-round
 // regression was for team_analysis specifically.
