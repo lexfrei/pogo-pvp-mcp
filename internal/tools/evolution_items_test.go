@@ -121,6 +121,43 @@ func TestEvolutionRequirementFor_UnknownReturnsNil(t *testing.T) {
 	}
 }
 
+// TestEvolutionRequirementFor_ShadowSuffixStripped pins that
+// legacy-convention shadow ids resolve to the non-shadow table
+// entry — scizor_shadow → Metal Coat, same as scizor. Direct
+// unit-level coverage for the suffix-strip in evolutionRequirementFor
+// so a regression fails here instead of only in the end-to-end
+// team_builder shadow test (tighter failure localisation).
+func TestEvolutionRequirementFor_ShadowSuffixStripped(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		shadow string
+		base   string
+	}{
+		{"scizor_shadow", "scizor"},
+		{"steelix_shadow", "steelix"},
+		{"magnezone_shadow", "magnezone"},
+	} {
+		t.Run(tc.shadow, func(t *testing.T) {
+			t.Parallel()
+
+			got := evolutionRequirementFor(tc.shadow)
+			want := evolutionRequirementFor(tc.base)
+
+			if got == nil {
+				t.Fatalf("evolutionRequirementFor(%q) = nil, want non-nil via shadow-suffix strip", tc.shadow)
+			}
+			if want == nil {
+				t.Fatalf("base %q missing from table — fix the test fixture", tc.base)
+			}
+			if got.Item != want.Item || got.Candy != want.Candy {
+				t.Errorf("shadow lookup = {item:%q, candy:%d}, want {item:%q, candy:%d}",
+					got.Item, got.Candy, want.Item, want.Candy)
+			}
+		})
+	}
+}
+
 // TestEvolutionRequirementFor_ReturnsCopy pins that the helper
 // hands back an independent struct — caller mutations must not
 // pollute the shared table. Verified by mutating the result and
