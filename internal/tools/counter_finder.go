@@ -23,8 +23,8 @@ type CounterFinderParams struct {
 	Shields        []int       `json:"shields,omitempty" jsonschema:"symmetric shield scenarios (omit for [1]); each 0..2"`
 	TopN           int         `json:"top_n,omitempty" jsonschema:"how many counters to return (default 5)"`
 	MetaTopN       int         `json:"meta_top_n,omitempty" jsonschema:"meta size when from_pool is empty (default 30)"`
-	DisallowLegacy bool        `json:"disallow_legacy,omitempty" jsonschema:"reject pvpoke legacyMoves (permanently removed)"`
-	DisallowElite  bool        `json:"disallow_elite,omitempty" jsonschema:"reject pvpoke eliteMoves (Elite TM / Community Day)"`
+	DisallowLegacy bool        `json:"disallow_legacy,omitempty" jsonschema:"reject legacyMoves in from_pool/meta; target passes as-is"`
+	DisallowElite  bool        `json:"disallow_elite,omitempty" jsonschema:"reject eliteMoves in from_pool/meta; target passes as-is"`
 }
 
 // CounterScenarioResult is the per-scenario detail inside a
