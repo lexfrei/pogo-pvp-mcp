@@ -2,13 +2,8 @@ module github.com/lexfrei/pogo-pvp-mcp
 
 go 1.26.2
 
-// pogo-pvp-engine is developed in lockstep from a sibling working tree.
-// The replace directive is removed once the engine repo is published and
-// tagged.
-replace github.com/lexfrei/pogo-pvp-engine => ../pogo-pvp-engine
-
 require (
-	github.com/lexfrei/pogo-pvp-engine v0.0.0-00010101000000-000000000000
+	github.com/lexfrei/pogo-pvp-engine v0.1.0
 	github.com/modelcontextprotocol/go-sdk v1.5.0
 	github.com/spf13/cobra v1.10.2
 	github.com/spf13/viper v1.21.0
