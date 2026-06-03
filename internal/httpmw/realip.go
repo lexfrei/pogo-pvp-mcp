@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"slices"
 	"strings"
 )
 
@@ -129,10 +130,10 @@ func resolveClientIP(r *http.Request, trusted TrustedProxySet) string {
 	// hop (or attacker-supplied value) furthest away. Skip trusted
 	// entries; first untrusted one is the effective client.
 	xffValues := r.Header.Values(xForwardedForHeader)
-	for i := len(xffValues) - 1; i >= 0; i-- {
-		entries := strings.Split(xffValues[i], ",")
-		for j := len(entries) - 1; j >= 0; j-- {
-			candidate := strings.TrimSpace(entries[j])
+	for _, xff := range slices.Backward(xffValues) {
+		entries := strings.Split(xff, ",")
+		for _, entry := range slices.Backward(entries) {
+			candidate := strings.TrimSpace(entry)
 			if candidate == "" {
 				continue
 			}

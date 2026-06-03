@@ -1,6 +1,9 @@
 package httpmw
 
-import "net/http"
+import (
+	"net/http"
+	"slices"
+)
 
 // Chain composes any number of `func(http.Handler) http.Handler`
 // middleware wrappers around handler. Wrappers are applied outer-to-
@@ -23,8 +26,8 @@ import "net/http"
 // needless closure wrapping.
 func Chain(handler http.Handler, middlewares ...func(http.Handler) http.Handler) http.Handler {
 	// Apply from last to first so middlewares[0] ends up outermost.
-	for i := len(middlewares) - 1; i >= 0; i-- {
-		handler = middlewares[i](handler)
+	for _, middleware := range slices.Backward(middlewares) {
+		handler = middleware(handler)
 	}
 
 	return handler
