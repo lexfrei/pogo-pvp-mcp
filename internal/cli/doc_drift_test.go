@@ -49,21 +49,21 @@ func TestReadmeDocumentsCombatantOptions(t *testing.T) {
 		"purified",
 		"lucky",
 		// Combat / team tools — Phase X-I surface.
-		"pvp_matchup",
-		"pvp_team_analysis",
-		"pvp_team_builder",
-		"pvp_counter_finder",
-		"pvp_threat_coverage",
+		toolMatchup,
+		toolTeamAnalysis,
+		toolTeamBuilder,
+		toolCounterFinder,
+		toolThreatCoverage,
 		// Info-path tools — Phase X-II surface.
-		"pvp_rank",
-		"pvp_species_info",
-		"pvp_level_from_cp",
-		"pvp_cp_limits",
-		"pvp_evolution_preview",
-		"pvp_rank_batch",
+		toolRank,
+		toolSpeciesInfo,
+		toolLevelFromCP,
+		toolCPLimits,
+		toolEvolutionPreview,
+		toolRankBatch,
 		// Cost tools.
-		"pvp_second_move_cost",
-		"pvp_powerup_cost",
+		toolSecondMoveCost,
+		toolPowerupCost,
 		"shadow_variant_missing",
 	}
 
@@ -260,8 +260,8 @@ func TestReadmeDocumentsMCPHTTPListener(t *testing.T) {
 		"DNS-rebinding protection",
 		// Phase 5 operational hardening: security headers +
 		// reverse proxy example must remain documented.
-		"Strict-Transport-Security",
-		"Content-Security-Policy",
+		headerHSTS,
+		headerCSP,
 		"Public deployment (reverse proxy example)",
 	}
 

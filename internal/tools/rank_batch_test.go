@@ -229,7 +229,7 @@ func TestRankBatch_UnknownSpeciesFailsFast(t *testing.T) {
 	ivs := [][3]int{{15, 15, 15}, {10, 10, 10}}
 
 	_, result, err := handler(t.Context(), nil, tools.RankBatchParams{
-		Species: "missingno",
+		Species: speciesMissingno,
 		IVs:     ivs,
 		League:  leagueGreat,
 	})

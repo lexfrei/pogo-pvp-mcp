@@ -105,7 +105,7 @@ func TestTeamAnalysisTool_HappyPath(t *testing.T) {
 
 	member := tools.Combatant{
 		IV: [3]int{15, 15, 15}, Level: 40,
-		FastMove: "FAST1", ChargedMoves: []string{"CH1"},
+		FastMove: moveFast1, ChargedMoves: []string{moveCharged1},
 	}
 	memberA := member
 	memberA.Species = "a"
@@ -148,7 +148,7 @@ func TestTeamAnalysisTool_WrongTeamSize(t *testing.T) {
 	handler := tool.Handler()
 
 	_, _, err := handler(t.Context(), nil, tools.TeamAnalysisParams{
-		Team:   []tools.Combatant{{Species: "a", Level: 40, FastMove: "FAST1"}},
+		Team:   []tools.Combatant{{Species: "a", Level: 40, FastMove: moveFast1}},
 		League: leagueGreat,
 	})
 	if !errors.Is(err, tools.ErrTeamSizeMismatch) {
@@ -164,7 +164,7 @@ func TestTeamAnalysisTool_NegativeTopN(t *testing.T) {
 
 	valid := tools.Combatant{
 		Species: "a", IV: [3]int{15, 15, 15}, Level: 40,
-		FastMove: "FAST1", ChargedMoves: []string{"CH1"},
+		FastMove: moveFast1, ChargedMoves: []string{moveCharged1},
 	}
 
 	_, _, err := handler(t.Context(), nil, tools.TeamAnalysisParams{
@@ -185,7 +185,7 @@ func TestTeamAnalysisTool_ZeroShieldsHonoured(t *testing.T) {
 
 	valid := tools.Combatant{
 		Species: "a", IV: [3]int{15, 15, 15}, Level: 40,
-		FastMove: "FAST1", ChargedMoves: []string{"CH1"},
+		FastMove: moveFast1, ChargedMoves: []string{moveCharged1},
 	}
 	team := []tools.Combatant{valid, valid, valid}
 
@@ -235,7 +235,7 @@ func TestTeamAnalysisTool_ChargedMovesEmptyIsJSONArray(t *testing.T) {
 		Species:  "a",
 		IV:       [3]int{15, 15, 15},
 		Level:    40,
-		FastMove: "FAST1",
+		FastMove: moveFast1,
 	}
 
 	_, result, err := handler(t.Context(), nil, tools.TeamAnalysisParams{
@@ -331,7 +331,7 @@ func TestTeamAnalysisTool_MovesetTooShortSkippedCleanly(t *testing.T) {
 
 	valid := tools.Combatant{
 		Species: "a", IV: [3]int{15, 15, 15}, Level: 40,
-		FastMove: "FAST1", ChargedMoves: []string{"CH1"},
+		FastMove: moveFast1, ChargedMoves: []string{moveCharged1},
 	}
 
 	_, result, err := handler(t.Context(), nil, tools.TeamAnalysisParams{
@@ -360,7 +360,7 @@ func TestTeamAnalysisTool_ScenariosAreAveraged(t *testing.T) {
 
 	valid := tools.Combatant{
 		Species: "a", IV: [3]int{15, 15, 15}, Level: 40,
-		FastMove: "FAST1", ChargedMoves: []string{"CH1"},
+		FastMove: moveFast1, ChargedMoves: []string{moveCharged1},
 	}
 	team := []tools.Combatant{valid, valid, valid}
 
@@ -406,7 +406,7 @@ func TestTeamAnalysisTool_InvalidShieldsValue(t *testing.T) {
 
 	valid := tools.Combatant{
 		Species: "a", IV: [3]int{15, 15, 15}, Level: 40,
-		FastMove: "FAST1", ChargedMoves: []string{"CH1"},
+		FastMove: moveFast1, ChargedMoves: []string{moveCharged1},
 	}
 
 	_, _, err := handler(t.Context(), nil, tools.TeamAnalysisParams{
@@ -421,7 +421,7 @@ func TestTeamAnalysisTool_InvalidShieldsValue(t *testing.T) {
 
 // TestTeamAnalysisTool_PerScenarioIsPopulated pins the Phase-2B
 // split: PerScenario must contain exactly one aggregate per entry in
-// the Scenarios slice, keyed as "Ns" (e.g. "1s" for shield count 1),
+// the Scenarios slice, keyed as "Ns" (e.g. scenario1s for shield count 1),
 // and each aggregate must carry the full PerMember / Coverage /
 // Uncovered / TeamScore shape.
 func TestTeamAnalysisTool_PerScenarioIsPopulated(t *testing.T) {
@@ -432,7 +432,7 @@ func TestTeamAnalysisTool_PerScenarioIsPopulated(t *testing.T) {
 
 	valid := tools.Combatant{
 		Species: "a", IV: [3]int{15, 15, 15}, Level: 40,
-		FastMove: "FAST1", ChargedMoves: []string{"CH1"},
+		FastMove: moveFast1, ChargedMoves: []string{moveCharged1},
 	}
 	team := []tools.Combatant{valid, valid, valid}
 
@@ -453,7 +453,7 @@ func TestTeamAnalysisTool_PerScenarioIsPopulated(t *testing.T) {
 			len(result.PerScenario))
 	}
 
-	for _, key := range []string{"0s", "1s", "2s"} {
+	for _, key := range []string{scenario0s, scenario1s, scenario2s} {
 		agg, ok := result.PerScenario[key]
 		if !ok {
 			t.Errorf("PerScenario missing key %q", key)
@@ -483,7 +483,7 @@ func TestTeamAnalysisTool_OverallIsMeanOfPerScenario(t *testing.T) {
 
 	valid := tools.Combatant{
 		Species: "a", IV: [3]int{15, 15, 15}, Level: 40,
-		FastMove: "FAST1", ChargedMoves: []string{"CH1"},
+		FastMove: moveFast1, ChargedMoves: []string{moveCharged1},
 	}
 	team := []tools.Combatant{valid, valid, valid}
 
@@ -495,8 +495,8 @@ func TestTeamAnalysisTool_OverallIsMeanOfPerScenario(t *testing.T) {
 		t.Fatalf("handler: %v", err)
 	}
 
-	zeroScore := result.PerScenario["0s"].TeamScore
-	twoScore := result.PerScenario["2s"].TeamScore
+	zeroScore := result.PerScenario[scenario0s].TeamScore
+	twoScore := result.PerScenario[scenario2s].TeamScore
 	overallScore := result.Overall.TeamScore
 
 	lo := min(zeroScore, twoScore)
@@ -510,7 +510,7 @@ func TestTeamAnalysisTool_OverallIsMeanOfPerScenario(t *testing.T) {
 
 // TestTeamAnalysisTool_DefaultShieldsProduceSingleScenario pins the
 // documented fallback: an empty Shields slice defaults to [1] and
-// produces a single per_scenario entry "1s".
+// produces a single per_scenario entry scenario1s.
 func TestTeamAnalysisTool_DefaultShieldsProduceSingleScenario(t *testing.T) {
 	t.Parallel()
 
@@ -519,7 +519,7 @@ func TestTeamAnalysisTool_DefaultShieldsProduceSingleScenario(t *testing.T) {
 
 	valid := tools.Combatant{
 		Species: "a", IV: [3]int{15, 15, 15}, Level: 40,
-		FastMove: "FAST1", ChargedMoves: []string{"CH1"},
+		FastMove: moveFast1, ChargedMoves: []string{moveCharged1},
 	}
 	team := []tools.Combatant{valid, valid, valid}
 
@@ -535,7 +535,7 @@ func TestTeamAnalysisTool_DefaultShieldsProduceSingleScenario(t *testing.T) {
 		t.Errorf("Scenarios = %v, want [1] (default)", result.Scenarios)
 	}
 
-	if _, ok := result.PerScenario["1s"]; !ok {
+	if _, ok := result.PerScenario[scenario1s]; !ok {
 		t.Errorf("PerScenario missing \"1s\" key; keys = %v",
 			perScenarioKeys(result.PerScenario))
 	}
@@ -559,7 +559,7 @@ func TestTeamAnalysisTool_DuplicateShieldsRejected(t *testing.T) {
 
 	valid := tools.Combatant{
 		Species: "a", IV: [3]int{15, 15, 15}, Level: 40,
-		FastMove: "FAST1", ChargedMoves: []string{"CH1"},
+		FastMove: moveFast1, ChargedMoves: []string{moveCharged1},
 	}
 	team := []tools.Combatant{valid, valid, valid}
 
@@ -586,7 +586,7 @@ func TestTeamAnalysisTool_PerScenarioSimulationFailuresScoped(t *testing.T) {
 
 	valid := tools.Combatant{
 		Species: "a", IV: [3]int{15, 15, 15}, Level: 40,
-		FastMove: "FAST1", ChargedMoves: []string{"CH1"},
+		FastMove: moveFast1, ChargedMoves: []string{moveCharged1},
 	}
 	team := []tools.Combatant{valid, valid, valid}
 
@@ -627,7 +627,7 @@ func TestTeamAnalysisTool_CoverageIsPerScenarioScoped(t *testing.T) {
 
 	valid := tools.Combatant{
 		Species: "a", IV: [3]int{15, 15, 15}, Level: 40,
-		FastMove: "FAST1", ChargedMoves: []string{"CH1"},
+		FastMove: moveFast1, ChargedMoves: []string{moveCharged1},
 	}
 	team := []tools.Combatant{valid, valid, valid}
 
@@ -639,8 +639,8 @@ func TestTeamAnalysisTool_CoverageIsPerScenarioScoped(t *testing.T) {
 		t.Fatalf("handler: %v", err)
 	}
 
-	zeroAgg := result.PerScenario["0s"]
-	twoAgg := result.PerScenario["2s"]
+	zeroAgg := result.PerScenario[scenario0s]
+	twoAgg := result.PerScenario[scenario2s]
 
 	if len(zeroAgg.Coverage) == 0 || len(twoAgg.Coverage) == 0 {
 		t.Fatalf("per-scenario coverage maps empty: 0s=%v, 2s=%v",
@@ -683,12 +683,12 @@ func TestTeamAnalysisTool_UnknownLeague(t *testing.T) {
 
 	valid := tools.Combatant{
 		Species: "a", IV: [3]int{15, 15, 15}, Level: 40,
-		FastMove: "FAST1", ChargedMoves: []string{"CH1"},
+		FastMove: moveFast1, ChargedMoves: []string{moveCharged1},
 	}
 
 	_, _, err := handler(t.Context(), nil, tools.TeamAnalysisParams{
 		Team:   []tools.Combatant{valid, valid, valid},
-		League: "marshmallow",
+		League: speciesMarshmallow,
 	})
 	if !errors.Is(err, tools.ErrUnknownLeague) {
 		t.Errorf("error = %v, want wrapping ErrUnknownLeague", err)
@@ -711,7 +711,7 @@ func TestTeamAnalysisTool_CostBreakdownPresent(t *testing.T) {
 
 	member := tools.Combatant{
 		IV: [3]int{15, 15, 15}, Level: 1.0,
-		FastMove: "FAST1", ChargedMoves: []string{"CH1"},
+		FastMove: moveFast1, ChargedMoves: []string{moveCharged1},
 	}
 	memberA := member
 	memberA.Species = "a"
@@ -751,7 +751,7 @@ func TestTeamAnalysisTool_CostBreakdownPresent(t *testing.T) {
 		t.Fatal("PerScenario map is empty; expected at least one scenario entry")
 	}
 
-	wantKeys := []string{"0s", "1s", "2s"}
+	wantKeys := []string{scenario0s, scenario1s, scenario2s}
 	for _, key := range wantKeys {
 		agg, ok := result.PerScenario[key]
 		if !ok {
@@ -801,16 +801,16 @@ func TestTeamAnalysisTool_InvalidTargetLevel(t *testing.T) {
 
 	valid := tools.Combatant{
 		Species: "a", IV: [3]int{15, 15, 15}, Level: 40,
-		FastMove: "FAST1", ChargedMoves: []string{"CH1"},
+		FastMove: moveFast1, ChargedMoves: []string{moveCharged1},
 	}
 
 	cases := []struct {
 		name   string
 		target float64
 	}{
-		{"off-grid target", 10.3},
-		{"above L50", 75.0},
-		{"negative", -1.0},
+		{labelOffGridTarget, 10.3},
+		{labelAboveL50, 75.0},
+		{labelNegative, -1.0},
 	}
 
 	for _, tc := range cases {
@@ -899,9 +899,9 @@ func TestTeamAnalysisTool_InvalidMemberForLeague(t *testing.T) {
 	handler := tools.NewTeamAnalysisTool(gmMgr, ranksMgr).Handler()
 
 	pool := []tools.Combatant{
-		{Species: "colossus", IV: [3]int{15, 15, 15}, Level: 1.0, FastMove: "FAST1", ChargedMoves: []string{"CH1"}},
-		{Species: "b", IV: [3]int{15, 15, 15}, Level: 30, FastMove: "FAST1", ChargedMoves: []string{"CH1"}},
-		{Species: "c", IV: [3]int{15, 15, 15}, Level: 30, FastMove: "FAST1", ChargedMoves: []string{"CH1"}},
+		{Species: speciesColossus, IV: [3]int{15, 15, 15}, Level: 1.0, FastMove: moveFast1, ChargedMoves: []string{moveCharged1}},
+		{Species: "b", IV: [3]int{15, 15, 15}, Level: 30, FastMove: moveFast1, ChargedMoves: []string{moveCharged1}},
+		{Species: "c", IV: [3]int{15, 15, 15}, Level: 30, FastMove: moveFast1, ChargedMoves: []string{moveCharged1}},
 	}
 
 	_, _, err = handler(t.Context(), nil, tools.TeamAnalysisParams{

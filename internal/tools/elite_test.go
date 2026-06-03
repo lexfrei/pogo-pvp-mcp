@@ -144,15 +144,15 @@ func TestTeamBuilder_DisallowEliteRejectsExplicit(t *testing.T) {
 	pool := []tools.Combatant{
 		{
 			Species: speciesQuagsire, IV: [3]int{15, 15, 15}, Level: 40,
-			FastMove: "MUD_SHOT", ChargedMoves: []string{moveAquaTail},
+			FastMove: moveMudShot, ChargedMoves: []string{moveAquaTail},
 		},
 		{
-			Species: "azumarill", IV: [3]int{15, 15, 15}, Level: 40,
-			FastMove: "BUBBLE", ChargedMoves: []string{"ICE_BEAM"},
+			Species: speciesAzumarill, IV: [3]int{15, 15, 15}, Level: 40,
+			FastMove: moveBubble, ChargedMoves: []string{moveIceBeam},
 		},
 		{
-			Species: "medicham", IV: [3]int{15, 15, 15}, Level: 40,
-			FastMove: "COUNTER", ChargedMoves: []string{"ICE_PUNCH"},
+			Species: speciesMedicham, IV: [3]int{15, 15, 15}, Level: 40,
+			FastMove: moveCounter, ChargedMoves: []string{moveIcePunch},
 		},
 	}
 
@@ -180,15 +180,15 @@ func TestTeamBuilder_DisallowLegacyAllowsEliteMoves(t *testing.T) {
 	pool := []tools.Combatant{
 		{
 			Species: speciesQuagsire, IV: [3]int{15, 15, 15}, Level: 40,
-			FastMove: "MUD_SHOT", ChargedMoves: []string{moveAquaTail},
+			FastMove: moveMudShot, ChargedMoves: []string{moveAquaTail},
 		},
 		{
-			Species: "azumarill", IV: [3]int{15, 15, 15}, Level: 40,
-			FastMove: "BUBBLE", ChargedMoves: []string{"ICE_BEAM"},
+			Species: speciesAzumarill, IV: [3]int{15, 15, 15}, Level: 40,
+			FastMove: moveBubble, ChargedMoves: []string{moveIceBeam},
 		},
 		{
-			Species: "medicham", IV: [3]int{15, 15, 15}, Level: 40,
-			FastMove: "COUNTER", ChargedMoves: []string{"ICE_PUNCH"},
+			Species: speciesMedicham, IV: [3]int{15, 15, 15}, Level: 40,
+			FastMove: moveCounter, ChargedMoves: []string{moveIcePunch},
 		},
 	}
 
@@ -220,15 +220,15 @@ func TestTeamBuilder_DisallowLegacyRejectsLegacyOnly(t *testing.T) {
 	pool := []tools.Combatant{
 		{
 			Species: speciesQuagsire, IV: [3]int{15, 15, 15}, Level: 40,
-			FastMove: "MUD_SHOT", ChargedMoves: []string{moveAquaTail},
+			FastMove: moveMudShot, ChargedMoves: []string{moveAquaTail},
 		},
 		{
-			Species: "azumarill", IV: [3]int{15, 15, 15}, Level: 40,
-			FastMove: "BUBBLE", ChargedMoves: []string{"ICE_BEAM"},
+			Species: speciesAzumarill, IV: [3]int{15, 15, 15}, Level: 40,
+			FastMove: moveBubble, ChargedMoves: []string{moveIceBeam},
 		},
 		{
-			Species: "medicham", IV: [3]int{15, 15, 15}, Level: 40,
-			FastMove: "COUNTER", ChargedMoves: []string{movePsychic},
+			Species: speciesMedicham, IV: [3]int{15, 15, 15}, Level: 40,
+			FastMove: moveCounter, ChargedMoves: []string{movePsychic},
 		},
 	}
 
@@ -255,15 +255,15 @@ func TestTeamBuilder_DisallowBothRejectsEitherCategory(t *testing.T) {
 	pool := []tools.Combatant{
 		{
 			Species: speciesQuagsire, IV: [3]int{15, 15, 15}, Level: 40,
-			FastMove: "MUD_SHOT", ChargedMoves: []string{moveAquaTail},
+			FastMove: moveMudShot, ChargedMoves: []string{moveAquaTail},
 		},
 		{
-			Species: "azumarill", IV: [3]int{15, 15, 15}, Level: 40,
-			FastMove: "BUBBLE", ChargedMoves: []string{"ICE_BEAM"},
+			Species: speciesAzumarill, IV: [3]int{15, 15, 15}, Level: 40,
+			FastMove: moveBubble, ChargedMoves: []string{moveIceBeam},
 		},
 		{
-			Species: "medicham", IV: [3]int{15, 15, 15}, Level: 40,
-			FastMove: "COUNTER", ChargedMoves: []string{"ICE_PUNCH"},
+			Species: speciesMedicham, IV: [3]int{15, 15, 15}, Level: 40,
+			FastMove: moveCounter, ChargedMoves: []string{moveIcePunch},
 		},
 	}
 
@@ -330,7 +330,7 @@ func TestSpeciesInfo_EliteMovesSurfaced(t *testing.T) {
 			if ref.Legacy {
 				t.Errorf("ChargedMoves[%s].Legacy = true, want false", ref.ID)
 			}
-		case "STONE_EDGE":
+		case moveStoneEdge:
 			if ref.Elite {
 				t.Errorf("ChargedMoves[%s].Elite = true, want false", ref.ID)
 			}
@@ -422,12 +422,12 @@ func TestTeamBuilder_DisallowEliteRejectsResolvedElite(t *testing.T) {
 	pool := []tools.Combatant{
 		{Species: speciesQuagsire, IV: [3]int{15, 15, 15}, Level: 40},
 		{
-			Species: "azumarill", IV: [3]int{15, 15, 15}, Level: 40,
-			FastMove: "BUBBLE", ChargedMoves: []string{"ICE_BEAM"},
+			Species: speciesAzumarill, IV: [3]int{15, 15, 15}, Level: 40,
+			FastMove: moveBubble, ChargedMoves: []string{moveIceBeam},
 		},
 		{
-			Species: "medicham", IV: [3]int{15, 15, 15}, Level: 40,
-			FastMove: "COUNTER", ChargedMoves: []string{"ICE_PUNCH"},
+			Species: speciesMedicham, IV: [3]int{15, 15, 15}, Level: 40,
+			FastMove: moveCounter, ChargedMoves: []string{moveIcePunch},
 		},
 	}
 
@@ -530,16 +530,16 @@ func TestTeamBuilder_BudgetETMChargedDropsOverBudget(t *testing.T) {
 
 	pool := []tools.Combatant{
 		{
-			Species: "quagsire", IV: [3]int{15, 15, 15}, Level: 40,
-			FastMove: "MUD_SHOT", ChargedMoves: []string{moveAquaTail},
+			Species: speciesQuagsire, IV: [3]int{15, 15, 15}, Level: 40,
+			FastMove: moveMudShot, ChargedMoves: []string{moveAquaTail},
 		},
 		{
-			Species: "azumarill", IV: [3]int{15, 15, 15}, Level: 40,
-			FastMove: "BUBBLE", ChargedMoves: []string{"HYDRO_PUMP"},
+			Species: speciesAzumarill, IV: [3]int{15, 15, 15}, Level: 40,
+			FastMove: moveBubble, ChargedMoves: []string{moveHydroPump},
 		},
 		{
 			Species: speciesMedicham, IV: [3]int{15, 15, 15}, Level: 40,
-			FastMove: "COUNTER", ChargedMoves: []string{"DYNAMIC_PUNCH"},
+			FastMove: moveCounter, ChargedMoves: []string{moveDynamicPunch},
 		},
 	}
 
@@ -602,16 +602,16 @@ func TestTeamBuilder_BudgetETMFastDropsOverBudget(t *testing.T) {
 	// needs exactly 1 EliteFastTM.)
 	pool := []tools.Combatant{
 		{
-			Species: "quagsire", IV: [3]int{15, 15, 15}, Level: 40,
-			FastMove: "MUD_SHOT", ChargedMoves: []string{"STONE_EDGE"},
+			Species: speciesQuagsire, IV: [3]int{15, 15, 15}, Level: 40,
+			FastMove: moveMudShot, ChargedMoves: []string{moveStoneEdge},
 		},
 		{
-			Species: "azumarill", IV: [3]int{15, 15, 15}, Level: 40,
-			FastMove: "BUBBLE", ChargedMoves: []string{"ICE_BEAM"},
+			Species: speciesAzumarill, IV: [3]int{15, 15, 15}, Level: 40,
+			FastMove: moveBubble, ChargedMoves: []string{moveIceBeam},
 		},
 		{
 			Species: speciesMedicham, IV: [3]int{15, 15, 15}, Level: 40,
-			FastMove: "PSYCHO_CUT", ChargedMoves: []string{"ICE_PUNCH"},
+			FastMove: movePsychoCut, ChargedMoves: []string{moveIcePunch},
 		},
 	}
 
@@ -635,15 +635,15 @@ func TestTeamBuilder_BudgetETMFastDropsOverBudget(t *testing.T) {
 	dupPool := []tools.Combatant{
 		{
 			Species: speciesMedicham, IV: [3]int{15, 15, 15}, Level: 40,
-			FastMove: "PSYCHO_CUT", ChargedMoves: []string{"ICE_PUNCH"},
+			FastMove: movePsychoCut, ChargedMoves: []string{moveIcePunch},
 		},
 		{
 			Species: speciesMedicham, IV: [3]int{14, 15, 15}, Level: 40,
-			FastMove: "PSYCHO_CUT", ChargedMoves: []string{"ICE_PUNCH"},
+			FastMove: movePsychoCut, ChargedMoves: []string{moveIcePunch},
 		},
 		{
-			Species: "quagsire", IV: [3]int{15, 15, 15}, Level: 40,
-			FastMove: "MUD_SHOT", ChargedMoves: []string{"STONE_EDGE"},
+			Species: speciesQuagsire, IV: [3]int{15, 15, 15}, Level: 40,
+			FastMove: moveMudShot, ChargedMoves: []string{moveStoneEdge},
 		},
 	}
 
@@ -686,16 +686,16 @@ func TestTeamBuilder_BudgetETMZeroTreatedAsOff(t *testing.T) {
 
 	pool := []tools.Combatant{
 		{
-			Species: "quagsire", IV: [3]int{15, 15, 15}, Level: 40,
-			FastMove: "MUD_SHOT", ChargedMoves: []string{moveAquaTail},
+			Species: speciesQuagsire, IV: [3]int{15, 15, 15}, Level: 40,
+			FastMove: moveMudShot, ChargedMoves: []string{moveAquaTail},
 		},
 		{
-			Species: "azumarill", IV: [3]int{15, 15, 15}, Level: 40,
-			FastMove: "BUBBLE", ChargedMoves: []string{"HYDRO_PUMP"},
+			Species: speciesAzumarill, IV: [3]int{15, 15, 15}, Level: 40,
+			FastMove: moveBubble, ChargedMoves: []string{moveHydroPump},
 		},
 		{
 			Species: speciesMedicham, IV: [3]int{15, 15, 15}, Level: 40,
-			FastMove: "COUNTER", ChargedMoves: []string{"DYNAMIC_PUNCH"},
+			FastMove: moveCounter, ChargedMoves: []string{moveDynamicPunch},
 		},
 	}
 
@@ -738,7 +738,7 @@ func TestCounterFinder_DisallowEliteFiltersMetaFallback(t *testing.T) {
 	_, result, err := handler(t.Context(), nil, tools.CounterFinderParams{
 		Target: tools.Combatant{
 			Species: speciesMedicham, IV: [3]int{15, 15, 15}, Level: 40,
-			FastMove: moveCounter, ChargedMoves: []string{"ICE_PUNCH"},
+			FastMove: moveCounter, ChargedMoves: []string{moveIcePunch},
 		},
 		League:        leagueGreat,
 		TopN:          5,
@@ -799,7 +799,7 @@ func TestRank_OptimalHasEliteDetected(t *testing.T) {
 	if result.NonEliteMoveset == nil {
 		t.Fatal("NonEliteMoveset = nil, want populated when optimal has elite")
 	}
-	if result.NonEliteMoveset.Fast != "MUD_SHOT" {
+	if result.NonEliteMoveset.Fast != moveMudShot {
 		t.Errorf("NonEliteMoveset.Fast = %q, want MUD_SHOT", result.NonEliteMoveset.Fast)
 	}
 	// Non-elite fallback should pick from {STONE_EDGE, MUD_BOMB},
@@ -826,12 +826,12 @@ func TestCounterFinder_DisallowEliteIgnoredForTarget(t *testing.T) {
 	_, result, err := handler(t.Context(), nil, tools.CounterFinderParams{
 		Target: tools.Combatant{
 			Species: speciesQuagsire, IV: [3]int{15, 15, 15}, Level: 40,
-			FastMove: "MUD_SHOT", ChargedMoves: []string{moveAquaTail},
+			FastMove: moveMudShot, ChargedMoves: []string{moveAquaTail},
 		},
 		FromPool: []tools.Combatant{
 			{
-				Species: "azumarill", IV: [3]int{15, 15, 15}, Level: 40,
-				FastMove: "BUBBLE", ChargedMoves: []string{"ICE_BEAM"},
+				Species: speciesAzumarill, IV: [3]int{15, 15, 15}, Level: 40,
+				FastMove: moveBubble, ChargedMoves: []string{moveIceBeam},
 			},
 		},
 		League:        leagueGreat,
@@ -843,7 +843,7 @@ func TestCounterFinder_DisallowEliteIgnoredForTarget(t *testing.T) {
 	if len(result.Counters) == 0 {
 		t.Fatal("Counters empty; expected azumarill to score against the elite-AQUA_TAIL quagsire target")
 	}
-	if result.Counters[0].Counter.Species != "azumarill" {
+	if result.Counters[0].Counter.Species != speciesAzumarill {
 		t.Errorf("Counters[0].Counter.Species = %q, want azumarill",
 			result.Counters[0].Counter.Species)
 	}
@@ -883,8 +883,8 @@ func TestCounterFinder_DisallowLegacyIgnoredForTargetAutoFill(t *testing.T) {
 		},
 		FromPool: []tools.Combatant{
 			{
-				Species: "machamp", IV: [3]int{15, 15, 15}, Level: 40,
-				FastMove: moveCounter, ChargedMoves: []string{"CROSS_CHOP"},
+				Species: speciesMachamp, IV: [3]int{15, 15, 15}, Level: 40,
+				FastMove: moveCounter, ChargedMoves: []string{moveCrossChop},
 			},
 		},
 		League:         leagueGreat,
@@ -921,8 +921,8 @@ func TestCounterFinder_DisallowEliteIgnoredForTargetAutoFill(t *testing.T) {
 		},
 		FromPool: []tools.Combatant{
 			{
-				Species: "azumarill", IV: [3]int{15, 15, 15}, Level: 40,
-				FastMove: "BUBBLE", ChargedMoves: []string{"ICE_BEAM"},
+				Species: speciesAzumarill, IV: [3]int{15, 15, 15}, Level: 40,
+				FastMove: moveBubble, ChargedMoves: []string{moveIceBeam},
 			},
 		},
 		League:        leagueGreat,
@@ -948,13 +948,13 @@ func TestCounterFinder_DisallowEliteRejectsFromPoolMember(t *testing.T) {
 
 	_, _, err := handler(t.Context(), nil, tools.CounterFinderParams{
 		Target: tools.Combatant{
-			Species: "azumarill", IV: [3]int{15, 15, 15}, Level: 40,
-			FastMove: "BUBBLE", ChargedMoves: []string{"ICE_BEAM"},
+			Species: speciesAzumarill, IV: [3]int{15, 15, 15}, Level: 40,
+			FastMove: moveBubble, ChargedMoves: []string{moveIceBeam},
 		},
 		FromPool: []tools.Combatant{
 			{
 				Species: speciesQuagsire, IV: [3]int{15, 15, 15}, Level: 40,
-				FastMove: "MUD_SHOT", ChargedMoves: []string{moveAquaTail},
+				FastMove: moveMudShot, ChargedMoves: []string{moveAquaTail},
 			},
 		},
 		League:        leagueGreat,
@@ -1026,15 +1026,15 @@ func TestTeamAnalysis_DisallowEliteExplicit(t *testing.T) {
 	team := []tools.Combatant{
 		{
 			Species: speciesQuagsire, IV: [3]int{15, 15, 15}, Level: 40,
-			FastMove: "MUD_SHOT", ChargedMoves: []string{moveAquaTail},
+			FastMove: moveMudShot, ChargedMoves: []string{moveAquaTail},
 		},
 		{
-			Species: "azumarill", IV: [3]int{15, 15, 15}, Level: 40,
-			FastMove: "BUBBLE", ChargedMoves: []string{"ICE_BEAM"},
+			Species: speciesAzumarill, IV: [3]int{15, 15, 15}, Level: 40,
+			FastMove: moveBubble, ChargedMoves: []string{moveIceBeam},
 		},
 		{
-			Species: "medicham", IV: [3]int{15, 15, 15}, Level: 40,
-			FastMove: "COUNTER", ChargedMoves: []string{"ICE_PUNCH"},
+			Species: speciesMedicham, IV: [3]int{15, 15, 15}, Level: 40,
+			FastMove: moveCounter, ChargedMoves: []string{moveIcePunch},
 		},
 	}
 

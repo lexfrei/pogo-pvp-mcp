@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
 	pogopvp "github.com/lexfrei/pogo-pvp-engine"
@@ -286,8 +287,8 @@ func walkPreEvolutionChain(
 	}
 
 	chain := make([]string, 0, len(reversed))
-	for i := len(reversed) - 1; i >= 0; i-- {
-		chain = append(chain, reversed[i])
+	for _, id := range slices.Backward(reversed) {
+		chain = append(chain, id)
 	}
 
 	return current, chain

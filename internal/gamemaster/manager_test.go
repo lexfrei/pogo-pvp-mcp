@@ -35,6 +35,10 @@ const minimalGamemaster = `{
   ]
 }`
 
+// testInvalidSource is an unreachable upstream used to assert managers
+// stay nil / fall back to local cache without hitting the network.
+const testInvalidSource = "http://example.invalid"
+
 func newTestServer(t *testing.T, payload string) *httptest.Server {
 	t.Helper()
 
@@ -81,7 +85,7 @@ func TestManager_CurrentNilBeforeRefresh(t *testing.T) {
 	t.Parallel()
 
 	mgr, err := gamemaster.NewManager(config.GamemasterConfig{
-		Source:    "http://example.invalid",
+		Source:    testInvalidSource,
 		LocalPath: filepath.Join(t.TempDir(), "gm.json"),
 	})
 	if err != nil {
@@ -114,7 +118,7 @@ func TestManager_RefreshPersistsLocalCopy(t *testing.T) {
 
 	// Second manager, no network — must load from local path.
 	mgr2, err := gamemaster.NewManager(config.GamemasterConfig{
-		Source:    "http://example.invalid",
+		Source:    testInvalidSource,
 		LocalPath: localPath,
 	})
 	if err != nil {

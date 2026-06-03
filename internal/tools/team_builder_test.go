@@ -65,8 +65,8 @@ func baseCombatant(id string) tools.Combatant {
 		Species:      id,
 		IV:           [3]int{15, 15, 15},
 		Level:        40,
-		FastMove:     "FAST1",
-		ChargedMoves: []string{"CH1"},
+		FastMove:     moveFast1,
+		ChargedMoves: []string{moveCharged1},
 	}
 }
 
@@ -747,7 +747,7 @@ func TestTeamBuilderTool_AlreadyAtTargetClamp(t *testing.T) {
 
 	member := tools.Combatant{
 		IV: [3]int{15, 15, 15}, Level: 20.0,
-		FastMove: "FAST1", ChargedMoves: []string{"CH1"},
+		FastMove: moveFast1, ChargedMoves: []string{moveCharged1},
 	}
 
 	ma, mb, mc := member, member, member
@@ -793,7 +793,7 @@ func TestTeamBuilderTool_PowerupStardustClimb(t *testing.T) {
 
 	member := tools.Combatant{
 		IV: [3]int{15, 15, 15}, Level: 1.0,
-		FastMove: "FAST1", ChargedMoves: []string{"CH1"},
+		FastMove: moveFast1, ChargedMoves: []string{moveCharged1},
 	}
 
 	ma, mb, mc := member, member, member
@@ -936,7 +936,7 @@ func TestTeamBuilderTool_InvalidMemberForLeague(t *testing.T) {
 	handler := tool.Handler()
 
 	pool := []tools.Combatant{
-		{Species: "colossus", IV: [3]int{15, 15, 15}, Level: 1.0, FastMove: "FAST1", ChargedMoves: []string{"CH1"}},
+		{Species: speciesColossus, IV: [3]int{15, 15, 15}, Level: 1.0, FastMove: moveFast1, ChargedMoves: []string{moveCharged1}},
 		baseCombatant("b"),
 		baseCombatant("c"),
 	}
@@ -966,7 +966,7 @@ func TestTeamBuilderTool_MasterLeagueCostBreakdown(t *testing.T) {
 
 	member := tools.Combatant{
 		IV: [3]int{15, 15, 15}, Level: 1.0,
-		FastMove: "FAST1", ChargedMoves: []string{"CH1"},
+		FastMove: moveFast1, ChargedMoves: []string{moveCharged1},
 	}
 
 	ma, mb, mc := member, member, member
@@ -976,7 +976,7 @@ func TestTeamBuilderTool_MasterLeagueCostBreakdown(t *testing.T) {
 
 	_, result, err := handler(t.Context(), nil, tools.TeamBuilderParams{
 		Pool:   []tools.Combatant{ma, mb, mc},
-		League: "master",
+		League: leagueMaster,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -1030,9 +1030,9 @@ func TestTeamBuilderTool_InvalidTargetLevel(t *testing.T) {
 		name   string
 		target float64
 	}{
-		{"off-grid target", 10.3},
-		{"above L50", 75.0},
-		{"negative", -1.0},
+		{labelOffGridTarget, 10.3},
+		{labelAboveL50, 75.0},
+		{labelNegative, -1.0},
 	}
 
 	for _, tc := range cases {
@@ -1148,7 +1148,7 @@ func TestTeamBuilderTool_AutoEvolveLinearChain(t *testing.T) {
 	handler := tool.Handler()
 
 	pool := []tools.Combatant{
-		{Species: "squirtle", IV: [3]int{15, 15, 15}, Level: 1, FastMove: "FAST1", ChargedMoves: []string{"CH_SQUIRT"}},
+		{Species: speciesSquirtle, IV: [3]int{15, 15, 15}, Level: 1, FastMove: moveFast1, ChargedMoves: []string{moveChSquirt}},
 		baseCombatant("b"),
 		baseCombatant("c"),
 	}
@@ -1200,7 +1200,7 @@ func TestTeamBuilderTool_AutoEvolveLinearChain(t *testing.T) {
 			evolvedMember.ChargedMoves)
 	}
 
-	if slices.Contains(evolvedMember.ChargedMoves, "CH_SQUIRT") {
+	if slices.Contains(evolvedMember.ChargedMoves, moveChSquirt) {
 		t.Errorf("ChargedMoves = %v; the original squirtle CH_SQUIRT must not survive promotion",
 			evolvedMember.ChargedMoves)
 	}
@@ -1231,7 +1231,7 @@ func TestTeamBuilderTool_AutoEvolveRequiredMatchesPostEvolve(t *testing.T) {
 	handler := tool.Handler()
 
 	pool := []tools.Combatant{
-		{Species: "squirtle", IV: [3]int{15, 15, 15}, Level: 1, FastMove: "FAST1", ChargedMoves: []string{"CH_SQUIRT"}},
+		{Species: speciesSquirtle, IV: [3]int{15, 15, 15}, Level: 1, FastMove: moveFast1, ChargedMoves: []string{moveChSquirt}},
 		baseCombatant("b"),
 		baseCombatant("c"),
 	}
@@ -1240,7 +1240,7 @@ func TestTeamBuilderTool_AutoEvolveRequiredMatchesPostEvolve(t *testing.T) {
 		Pool:       pool,
 		League:     leagueGreat,
 		AutoEvolve: true,
-		Required:   []string{"squirtle"},
+		Required:   []string{speciesSquirtle},
 	})
 	if !errors.Is(err, tools.ErrRequiredNotInPool) {
 		t.Errorf("error = %v, want wrapping ErrRequiredNotInPool (squirtle is no longer in the pool after auto-evolve)",
@@ -1274,22 +1274,22 @@ func TestTeamBuilderTool_AutoEvolveBanMatchesPreEvolveID(t *testing.T) {
 
 	// Four-member pool with squirtle banned by pre-evolve id.
 	// Without the autoEvolvedFrom ban check, blastoise would
-	// survive the filter (Species no longer == "squirtle") and
+	// survive the filter (Species no longer == speciesSquirtle) and
 	// land in teams. Since C(3, 3) = 1 triple, the ban working
 	// means squirtle/blastoise is dropped → pool of 3 = one
 	// non-banned triple, all three others compose the team.
 	pool := []tools.Combatant{
-		{Species: "squirtle", IV: [3]int{15, 15, 15}, Level: 1, FastMove: "FAST1", ChargedMoves: []string{"CH_SQUIRT"}},
+		{Species: speciesSquirtle, IV: [3]int{15, 15, 15}, Level: 1, FastMove: moveFast1, ChargedMoves: []string{moveChSquirt}},
 		baseCombatant("b"),
 		baseCombatant("c"),
-		{Species: "b", IV: [3]int{14, 14, 14}, Level: 39, FastMove: "FAST1", ChargedMoves: []string{"CH1"}},
+		{Species: "b", IV: [3]int{14, 14, 14}, Level: 39, FastMove: moveFast1, ChargedMoves: []string{moveCharged1}},
 	}
 
 	_, result, err := handler(t.Context(), nil, tools.TeamBuilderParams{
 		Pool:       pool,
 		League:     leagueGreat,
 		AutoEvolve: true,
-		Banned:     []string{"squirtle"},
+		Banned:     []string{speciesSquirtle},
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -1335,7 +1335,7 @@ func TestTeamBuilderTool_AutoEvolveShadowCarriesOver(t *testing.T) {
 
 	pool := []tools.Combatant{
 		{
-			Species: "squirtle", IV: [3]int{15, 15, 15}, Level: 1,
+			Species: speciesSquirtle, IV: [3]int{15, 15, 15}, Level: 1,
 			Options: tools.CombatantOptions{Shadow: true},
 		},
 		baseCombatant("b"),
@@ -1395,7 +1395,7 @@ func TestTeamBuilderTool_BudgetDropsOverBudgetTeam(t *testing.T) {
 
 	member := tools.Combatant{
 		IV: [3]int{15, 15, 15}, Level: 1.0,
-		FastMove: "FAST1", ChargedMoves: []string{"CH1"},
+		FastMove: moveFast1, ChargedMoves: []string{moveCharged1},
 	}
 	memberA := member
 	memberA.Species = "a"
@@ -1434,7 +1434,7 @@ func TestTeamBuilderTool_BudgetInToleranceKeptAndFlagged(t *testing.T) {
 
 	member := tools.Combatant{
 		IV: [3]int{15, 15, 15}, Level: 1.0,
-		FastMove: "FAST1", ChargedMoves: []string{"CH1"},
+		FastMove: moveFast1, ChargedMoves: []string{moveCharged1},
 	}
 	memberA := member
 	memberA.Species = "a"
@@ -1515,7 +1515,7 @@ func TestTeamBuilderTool_BudgetKeepsFittingTeam(t *testing.T) {
 
 	member := tools.Combatant{
 		IV: [3]int{15, 15, 15}, Level: 1.0,
-		FastMove: "FAST1", ChargedMoves: []string{"CH1"},
+		FastMove: moveFast1, ChargedMoves: []string{moveCharged1},
 	}
 	memberA := member
 	memberA.Species = "a"
@@ -1624,10 +1624,10 @@ func TestTeamBuilderTool_BudgetFilterRunsBeforeTrim(t *testing.T) {
 	handler := tool.Handler()
 
 	pool := []tools.Combatant{
-		{Species: "a", IV: [3]int{15, 15, 15}, Level: 40, FastMove: "FAST1", ChargedMoves: []string{"CH1"}},
-		{Species: "b", IV: [3]int{15, 15, 15}, Level: 40, FastMove: "FAST1", ChargedMoves: []string{"CH1"}},
-		{Species: "b", IV: [3]int{14, 15, 15}, Level: 40, FastMove: "FAST1", ChargedMoves: []string{"CH1"}},
-		{Species: "c", IV: [3]int{15, 15, 15}, Level: 40, FastMove: "FAST1", ChargedMoves: []string{"CH1"}},
+		{Species: "a", IV: [3]int{15, 15, 15}, Level: 40, FastMove: moveFast1, ChargedMoves: []string{moveCharged1}},
+		{Species: "b", IV: [3]int{15, 15, 15}, Level: 40, FastMove: moveFast1, ChargedMoves: []string{moveCharged1}},
+		{Species: "b", IV: [3]int{14, 15, 15}, Level: 40, FastMove: moveFast1, ChargedMoves: []string{moveCharged1}},
+		{Species: "c", IV: [3]int{15, 15, 15}, Level: 40, FastMove: moveFast1, ChargedMoves: []string{moveCharged1}},
 	}
 
 	// Warm-up with no budget confirms a c-triple tops the
@@ -1745,7 +1745,7 @@ func TestTeamBuilderTool_BudgetStubFieldsIgnored(t *testing.T) {
 
 	member := tools.Combatant{
 		IV: [3]int{15, 15, 15}, Level: 40,
-		FastMove: "FAST1", ChargedMoves: []string{"CH1"},
+		FastMove: moveFast1, ChargedMoves: []string{moveCharged1},
 	}
 	memberA := member
 	memberA.Species = "a"
@@ -1807,7 +1807,7 @@ func TestTeamBuilderTool_BudgetGuardsBypass(t *testing.T) {
 
 	member := tools.Combatant{
 		IV: [3]int{15, 15, 15}, Level: 1.0,
-		FastMove: "FAST1", ChargedMoves: []string{"CH1"},
+		FastMove: moveFast1, ChargedMoves: []string{moveCharged1},
 	}
 	memberA := member
 	memberA.Species = "a"
@@ -1864,7 +1864,7 @@ func TestTeamBuilderTool_BudgetNegativeToleranceClamped(t *testing.T) {
 
 	member := tools.Combatant{
 		IV: [3]int{15, 15, 15}, Level: 1.0,
-		FastMove: "FAST1", ChargedMoves: []string{"CH1"},
+		FastMove: moveFast1, ChargedMoves: []string{moveCharged1},
 	}
 	memberA := member
 	memberA.Species = "a"
@@ -1978,7 +1978,7 @@ func TestTeamBuilderTool_AutoEvolveLinearChainRequirement(t *testing.T) {
 	handler := tool.Handler()
 
 	pool := []tools.Combatant{
-		{Species: "scyther", IV: [3]int{15, 15, 15}, Level: 20, FastMove: "FAST1", ChargedMoves: []string{"CH1"}},
+		{Species: speciesScyther, IV: [3]int{15, 15, 15}, Level: 20, FastMove: moveFast1, ChargedMoves: []string{moveCharged1}},
 		baseCombatant("b"),
 		baseCombatant("c"),
 	}
@@ -2108,14 +2108,14 @@ func TestTeamBuilderTool_AutoEvolveLinearChainRequirementMultiHop(t *testing.T) 
 	handler := tool.Handler()
 
 	pool := []tools.Combatant{
-		{Species: "porygon", IV: [3]int{15, 15, 15}, Level: 20, FastMove: "FAST1", ChargedMoves: []string{"CH1"}},
+		{Species: speciesPorygon, IV: [3]int{15, 15, 15}, Level: 20, FastMove: moveFast1, ChargedMoves: []string{moveCharged1}},
 		baseCombatant("b"),
 		baseCombatant("c"),
 	}
 
 	_, result, err := handler(t.Context(), nil, tools.TeamBuilderParams{
 		Pool:       pool,
-		League:     "ultra",
+		League:     leagueUltra,
 		AutoEvolve: true,
 	})
 	if err != nil {
@@ -2227,7 +2227,7 @@ func TestTeamBuilderTool_AutoEvolveLinearChainRequirementOverCapPreserves(t *tes
 	handler := tool.Handler()
 
 	pool := []tools.Combatant{
-		{Species: "porygon", IV: [3]int{15, 15, 15}, Level: 15, FastMove: "FAST1", ChargedMoves: []string{"CH1"}},
+		{Species: speciesPorygon, IV: [3]int{15, 15, 15}, Level: 15, FastMove: moveFast1, ChargedMoves: []string{moveCharged1}},
 		baseCombatant("b"),
 		baseCombatant("c"),
 	}
@@ -2355,7 +2355,7 @@ func TestTeamBuilderTool_AutoEvolveShadowLinearChainRequirement(t *testing.T) {
 	pool := []tools.Combatant{
 		{
 			Species: speciesScyther, IV: [3]int{15, 15, 15}, Level: 20,
-			FastMove: "FAST1", ChargedMoves: []string{"CH1"},
+			FastMove: moveFast1, ChargedMoves: []string{moveCharged1},
 			Options: tools.CombatantOptions{Shadow: true},
 		},
 		baseCombatant("b"),
@@ -2398,7 +2398,7 @@ func TestTeamBuilderTool_AutoEvolveShadowLinearChainRequirement(t *testing.T) {
 
 // TestTeamBuilderTool_AutoEvolveShadowSuffixChainRequirement
 // pins the legacy "_shadow"-suffix caller convention: a pool
-// entry with Species="scyther_shadow" (and no Options.Shadow —
+// entry with Species=speciesScytherShadow (and no Options.Shadow —
 // id already disambiguates) walks the shadow chain
 // (scyther_shadow → scizor_shadow). The curated table keys on
 // non-shadow ids only, so the lookup strips "_shadow" before
@@ -2428,8 +2428,8 @@ func TestTeamBuilderTool_AutoEvolveShadowSuffixChainRequirement(t *testing.T) {
 
 	pool := []tools.Combatant{
 		{
-			Species: "scyther_shadow", IV: [3]int{15, 15, 15}, Level: 20,
-			FastMove: "FAST1", ChargedMoves: []string{"CH1"},
+			Species: speciesScytherShadow, IV: [3]int{15, 15, 15}, Level: 20,
+			FastMove: moveFast1, ChargedMoves: []string{moveCharged1},
 		},
 		baseCombatant("b"),
 		baseCombatant("c"),
@@ -2549,7 +2549,7 @@ func TestTeamBuilderTool_AutoEvolveLinearThenBranchingPreservesRequirements(t *t
 	handler := tool.Handler()
 
 	pool := []tools.Combatant{
-		{Species: "chainbase", IV: [3]int{15, 15, 15}, Level: 20, FastMove: "FAST1", ChargedMoves: []string{"CH1"}},
+		{Species: "chainbase", IV: [3]int{15, 15, 15}, Level: 20, FastMove: moveFast1, ChargedMoves: []string{moveCharged1}},
 		baseCombatant("b"),
 		baseCombatant("c"),
 	}
@@ -2613,7 +2613,7 @@ func TestTeamBuilderTool_AutoEvolveLinearChainNoItemRequirements(t *testing.T) {
 	handler := tool.Handler()
 
 	pool := []tools.Combatant{
-		{Species: "squirtle", IV: [3]int{15, 15, 15}, Level: 20, FastMove: "FAST1", ChargedMoves: []string{"CH_SQUIRT"}},
+		{Species: speciesSquirtle, IV: [3]int{15, 15, 15}, Level: 20, FastMove: moveFast1, ChargedMoves: []string{moveChSquirt}},
 		baseCombatant("b"),
 		baseCombatant("c"),
 	}
@@ -2712,7 +2712,7 @@ func TestTeamBuilderTool_AutoEvolveBranchingSkipped(t *testing.T) {
 	handler := tool.Handler()
 
 	pool := []tools.Combatant{
-		{Species: speciesEevee, IV: [3]int{15, 15, 15}, Level: 20, FastMove: "FAST1", ChargedMoves: []string{"CH1"}},
+		{Species: speciesEevee, IV: [3]int{15, 15, 15}, Level: 20, FastMove: moveFast1, ChargedMoves: []string{moveCharged1}},
 		baseCombatant("b"),
 		baseCombatant("c"),
 	}
@@ -2807,7 +2807,7 @@ func TestTeamBuilderTool_AutoEvolveBranchingAlternativesLeagueFit(t *testing.T) 
 	handler := tool.Handler()
 
 	pool := []tools.Combatant{
-		{Species: speciesEevee, IV: [3]int{15, 15, 15}, Level: 20, FastMove: "FAST1", ChargedMoves: []string{"CH1"}},
+		{Species: speciesEevee, IV: [3]int{15, 15, 15}, Level: 20, FastMove: moveFast1, ChargedMoves: []string{moveCharged1}},
 		baseCombatant("b"),
 		baseCombatant("c"),
 	}
@@ -2908,7 +2908,7 @@ func TestTeamBuilderTool_AutoEvolveItemGatedAlternativesRequirement(t *testing.T
 	handler := tool.Handler()
 
 	pool := []tools.Combatant{
-		{Species: "gloom", IV: [3]int{15, 15, 15}, Level: 20, FastMove: "FAST1", ChargedMoves: []string{"CH1"}},
+		{Species: speciesGloom, IV: [3]int{15, 15, 15}, Level: 20, FastMove: moveFast1, ChargedMoves: []string{moveCharged1}},
 		baseCombatant("b"),
 		baseCombatant("c"),
 	}
@@ -2928,7 +2928,7 @@ func TestTeamBuilderTool_AutoEvolveItemGatedAlternativesRequirement(t *testing.T
 
 	var alts []tools.EvolveAlternative
 	for i := range result.Teams[0].Members {
-		if result.Teams[0].Members[i].Species == "gloom" {
+		if result.Teams[0].Members[i].Species == speciesGloom {
 			alts = result.Teams[0].CostBreakdowns[i].AutoEvolveAlternatives
 
 			break
@@ -3047,7 +3047,7 @@ func TestTeamBuilderTool_AutoEvolveUnknownBranchRequirementNil(t *testing.T) {
 	handler := tool.Handler()
 
 	pool := []tools.Combatant{
-		{Species: "unknownbase", IV: [3]int{15, 15, 15}, Level: 20, FastMove: "FAST1", ChargedMoves: []string{"CH1"}},
+		{Species: speciesUnknownBase, IV: [3]int{15, 15, 15}, Level: 20, FastMove: moveFast1, ChargedMoves: []string{moveCharged1}},
 		baseCombatant("b"),
 		baseCombatant("c"),
 	}
@@ -3067,7 +3067,7 @@ func TestTeamBuilderTool_AutoEvolveUnknownBranchRequirementNil(t *testing.T) {
 
 	var alts []tools.EvolveAlternative
 	for i := range result.Teams[0].Members {
-		if result.Teams[0].Members[i].Species == "unknownbase" {
+		if result.Teams[0].Members[i].Species == speciesUnknownBase {
 			alts = result.Teams[0].CostBreakdowns[i].AutoEvolveAlternatives
 
 			break
@@ -3111,7 +3111,7 @@ func TestTeamBuilderTool_AutoEvolveBranchingAlternativesRequirement(t *testing.T
 	handler := tool.Handler()
 
 	pool := []tools.Combatant{
-		{Species: speciesEevee, IV: [3]int{15, 15, 15}, Level: 20, FastMove: "FAST1", ChargedMoves: []string{"CH1"}},
+		{Species: speciesEevee, IV: [3]int{15, 15, 15}, Level: 20, FastMove: moveFast1, ChargedMoves: []string{moveCharged1}},
 		baseCombatant("b"),
 		baseCombatant("c"),
 	}
@@ -3229,7 +3229,7 @@ func TestTeamBuilderTool_PoolIndicesAlignWithPoolMembers(t *testing.T) {
 		baseCombatant("c"),
 		{
 			Species: "c", IV: [3]int{14, 14, 15}, Level: 40,
-			FastMove: "FAST1", ChargedMoves: []string{"CH1"},
+			FastMove: moveFast1, ChargedMoves: []string{moveCharged1},
 		},
 	}
 
@@ -3295,7 +3295,7 @@ func TestTeamBuilderTool_PoolMembersDebugInfo(t *testing.T) {
 
 	pool := []tools.Combatant{
 		baseCombatant("b"), // kept, should appear in team
-		{Species: speciesEevee, IV: [3]int{15, 15, 15}, Level: 20, FastMove: "FAST1", ChargedMoves: []string{"CH1"}}, // branching skip
+		{Species: speciesEevee, IV: [3]int{15, 15, 15}, Level: 20, FastMove: moveFast1, ChargedMoves: []string{moveCharged1}}, // branching skip
 		baseCombatant("c"),        // kept, appears in team
 		baseCombatant("vaporeon"), // banned
 	}
@@ -3416,7 +3416,7 @@ func TestTeamBuilderTool_AutoEvolveFirstHopOverCap(t *testing.T) {
 	handler := tool.Handler()
 
 	pool := []tools.Combatant{
-		{Species: "tinybase", IV: [3]int{15, 15, 15}, Level: 20, FastMove: "FAST1", ChargedMoves: []string{"CH1"}},
+		{Species: speciesTinyBase, IV: [3]int{15, 15, 15}, Level: 20, FastMove: moveFast1, ChargedMoves: []string{moveCharged1}},
 		baseCombatant("b"),
 		baseCombatant("c"),
 	}
@@ -3439,7 +3439,7 @@ func TestTeamBuilderTool_AutoEvolveFirstHopOverCap(t *testing.T) {
 	var baseBreakdown *tools.MemberCostBreakdown
 
 	for i := range result.Teams[0].Members {
-		if result.Teams[0].Members[i].Species == "tinybase" {
+		if result.Teams[0].Members[i].Species == speciesTinyBase {
 			basePresent = true
 			baseBreakdown = &result.Teams[0].CostBreakdowns[i]
 
@@ -3525,7 +3525,7 @@ func TestTeamBuilderTool_AutoEvolvePartialWalkTerminalOverCap(t *testing.T) {
 	handler := tool.Handler()
 
 	pool := []tools.Combatant{
-		{Species: "stepbase", IV: [3]int{15, 15, 15}, Level: 1, FastMove: "FAST1", ChargedMoves: []string{"CH1"}},
+		{Species: "stepbase", IV: [3]int{15, 15, 15}, Level: 1, FastMove: moveFast1, ChargedMoves: []string{moveCharged1}},
 		baseCombatant("b"),
 		baseCombatant("c"),
 	}
@@ -3593,11 +3593,11 @@ func TestTeamBuilderTool_ParallelMatrixDeterministicAcrossRuns(t *testing.T) {
 		baseCombatant("c"),
 		{
 			Species: "b", IV: [3]int{14, 15, 15}, Level: 40,
-			FastMove: "FAST1", ChargedMoves: []string{"CH1"},
+			FastMove: moveFast1, ChargedMoves: []string{moveCharged1},
 		},
 		{
 			Species: "c", IV: [3]int{14, 14, 15}, Level: 40,
-			FastMove: "FAST1", ChargedMoves: []string{"CH1"},
+			FastMove: moveFast1, ChargedMoves: []string{moveCharged1},
 		},
 	}
 

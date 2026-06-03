@@ -167,7 +167,7 @@ func TestIntegration_ListTools(t *testing.T) {
 		t.Fatalf("server.Connect: %v", err)
 	}
 
-	client := mcp.NewClient(&mcp.Implementation{Name: "test-client", Version: "test"}, nil)
+	client := mcp.NewClient(&mcp.Implementation{Name: clientNameTest, Version: implVersionTest}, nil)
 
 	session, err := client.Connect(ctx, clientTransport, nil)
 	if err != nil {
@@ -187,28 +187,28 @@ func TestIntegration_ListTools(t *testing.T) {
 	}
 
 	expected := []string{
-		"pvp_rank",
-		"pvp_matchup",
-		"pvp_cp_limits",
-		"pvp_meta",
-		"pvp_team_analysis",
-		"pvp_team_builder",
-		"pvp_species_info",
-		"pvp_move_info",
-		"pvp_type_matchup",
-		"pvp_level_from_cp",
-		"pvp_counter_finder",
-		"pvp_evolution_preview",
-		"pvp_rank_batch",
-		"pvp_threat_coverage",
-		"pvp_weather_boost",
-		"pvp_encounter_cp_range",
-		"pvp_cup_rules",
-		"pvp_second_move_cost",
-		"pvp_powerup_cost",
-		"pvp_report_data_issue",
-		"pvp_pokedex_lookup",
-		"pvp_evolution_target",
+		toolRank,
+		toolMatchup,
+		toolCPLimits,
+		toolMeta,
+		toolTeamAnalysis,
+		toolTeamBuilder,
+		toolSpeciesInfo,
+		toolMoveInfo,
+		toolTypeMatchup,
+		toolLevelFromCP,
+		toolCounterFinder,
+		toolEvolutionPreview,
+		toolRankBatch,
+		toolThreatCoverage,
+		toolWeatherBoost,
+		toolEncounterCPRange,
+		toolCupRules,
+		toolSecondMoveCost,
+		toolPowerupCost,
+		toolReportDataIssue,
+		toolPokedexLookup,
+		toolEvolutionTarget,
 	}
 
 	for _, name := range expected {
@@ -234,7 +234,7 @@ func TestIntegration_CallRank(t *testing.T) {
 		t.Fatalf("server.Connect: %v", err)
 	}
 
-	client := mcp.NewClient(&mcp.Implementation{Name: "test-client", Version: "test"}, nil)
+	client := mcp.NewClient(&mcp.Implementation{Name: clientNameTest, Version: implVersionTest}, nil)
 
 	session, err := client.Connect(ctx, clientTransport, nil)
 	if err != nil {
@@ -243,13 +243,13 @@ func TestIntegration_CallRank(t *testing.T) {
 	defer session.Close()
 
 	args := map[string]any{
-		"species": integrationFixtureSpecies,
-		"iv":      []int{0, 15, 15},
-		"league":  "great",
+		argSpecies: integrationFixtureSpecies,
+		argIV:      []int{0, 15, 15},
+		argLeague:  leagueGreat,
 	}
 
 	result, err := session.CallTool(ctx, &mcp.CallToolParams{
-		Name:      "pvp_rank",
+		Name:      toolRank,
 		Arguments: args,
 	})
 	if err != nil {
@@ -302,7 +302,7 @@ func TestIntegration_CallReportDataIssue(t *testing.T) {
 		t.Fatalf("server.Connect: %v", err)
 	}
 
-	client := mcp.NewClient(&mcp.Implementation{Name: "test-client", Version: "test"}, nil)
+	client := mcp.NewClient(&mcp.Implementation{Name: clientNameTest, Version: implVersionTest}, nil)
 
 	session, err := client.Connect(ctx, clientTransport, nil)
 	if err != nil {
@@ -311,7 +311,7 @@ func TestIntegration_CallReportDataIssue(t *testing.T) {
 	defer session.Close()
 
 	result, err := session.CallTool(ctx, &mcp.CallToolParams{
-		Name:      "pvp_report_data_issue",
+		Name:      toolReportDataIssue,
 		Arguments: map[string]any{},
 	})
 	if err != nil {

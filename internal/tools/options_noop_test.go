@@ -145,7 +145,7 @@ func TestEvolutionPreview_LuckyPurifiedAreNoOp(t *testing.T) {
 	handler := tool.Handler()
 
 	base := tools.EvolutionPreviewParams{
-		Species: "squirtle",
+		Species: speciesSquirtle,
 		IV:      [3]int{15, 15, 15},
 		CP:      1500,
 		XL:      true,
@@ -306,7 +306,7 @@ func TestEvolutionPreview_ShadowMissingFallback(t *testing.T) {
 	handler := tool.Handler()
 
 	_, result, err := handler(t.Context(), nil, tools.EvolutionPreviewParams{
-		Species: "squirtle",
+		Species: speciesSquirtle,
 		IV:      [3]int{15, 15, 15},
 		CP:      1500,
 		XL:      true,
@@ -316,9 +316,9 @@ func TestEvolutionPreview_ShadowMissingFallback(t *testing.T) {
 		t.Fatalf("handler: %v", err)
 	}
 
-	if result.ResolvedSpeciesID != "squirtle" {
+	if result.ResolvedSpeciesID != speciesSquirtle {
 		t.Errorf("ResolvedSpeciesID = %q, want %q (fallback to base)",
-			result.ResolvedSpeciesID, "squirtle")
+			result.ResolvedSpeciesID, speciesSquirtle)
 	}
 
 	if !result.ShadowVariantMissing {

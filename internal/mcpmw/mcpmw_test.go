@@ -13,6 +13,10 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
+// testToolPvpRank is a representative non-heavy tool name reused
+// across the timeout / logging cases as the default-budget probe.
+const testToolPvpRank = "pvp_rank"
+
 // fakeHeavyToolCall builds a synthetic *mcp.CallToolRequest with
 // method="tools/call" and the given tool name, for driving the
 // middleware without spinning a full MCP Server.
@@ -87,7 +91,7 @@ func TestTimeout_ZeroBudgetDisables(t *testing.T) {
 	})
 
 	_, err := handler(t.Context(), "tools/call", &mcp.CallToolRequest{
-		Params: &mcp.CallToolParamsRaw{Name: "pvp_rank"},
+		Params: &mcp.CallToolParamsRaw{Name: testToolPvpRank},
 	})
 	if err != nil {
 		t.Errorf("handler err = %v, want nil", err)
@@ -113,7 +117,7 @@ func TestLogging_SuccessRecordsInfoLevel(t *testing.T) {
 	})
 
 	_, err := handler(t.Context(), "tools/call", &mcp.CallToolRequest{
-		Params: &mcp.CallToolParamsRaw{Name: "pvp_rank"},
+		Params: &mcp.CallToolParamsRaw{Name: testToolPvpRank},
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -236,7 +240,7 @@ func TestLogging_NilLoggerDefaults(t *testing.T) {
 	})
 
 	_, err := handler(t.Context(), "tools/call", &mcp.CallToolRequest{
-		Params: &mcp.CallToolParamsRaw{Name: "pvp_rank"},
+		Params: &mcp.CallToolParamsRaw{Name: testToolPvpRank},
 	})
 	if err != nil {
 		t.Errorf("handler err = %v, want nil", err)

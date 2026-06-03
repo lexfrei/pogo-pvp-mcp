@@ -8,7 +8,7 @@ import (
 
 // TestRank_CupFilterReturnsOnlyNamedCup pins R6.5: passing the
 // new Cup param narrows RankingsByCup to that single cup (here
-// "spring"), instead of emitting every published cup like the
+// cupSpring), instead of emitting every published cup like the
 // default empty-cup behaviour.
 func TestRank_CupFilterReturnsOnlyNamedCup(t *testing.T) {
 	t.Parallel()

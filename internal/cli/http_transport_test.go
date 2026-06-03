@@ -38,7 +38,7 @@ func TestMCPHTTPHandler_ListToolsOverHTTP(t *testing.T) {
 	httpServer := httptest.NewServer(handler)
 	t.Cleanup(httpServer.Close)
 
-	client := mcp.NewClient(&mcp.Implementation{Name: "http-test-client", Version: "test"}, nil)
+	client := mcp.NewClient(&mcp.Implementation{Name: clientNameHTTP, Version: implVersionTest}, nil)
 	transport := &mcp.StreamableClientTransport{
 		Endpoint: httpServer.URL,
 	}
@@ -64,28 +64,28 @@ func TestMCPHTTPHandler_ListToolsOverHTTP(t *testing.T) {
 	// HTTP transports. Using len() >= 22 would silently allow a tool
 	// rename (total count unchanged, but a specific name gone).
 	expected := []string{
-		"pvp_rank",
-		"pvp_matchup",
-		"pvp_cp_limits",
-		"pvp_meta",
-		"pvp_team_analysis",
-		"pvp_team_builder",
-		"pvp_species_info",
-		"pvp_move_info",
-		"pvp_type_matchup",
-		"pvp_level_from_cp",
-		"pvp_counter_finder",
-		"pvp_evolution_preview",
-		"pvp_rank_batch",
-		"pvp_threat_coverage",
-		"pvp_weather_boost",
-		"pvp_encounter_cp_range",
-		"pvp_cup_rules",
-		"pvp_second_move_cost",
-		"pvp_powerup_cost",
-		"pvp_report_data_issue",
-		"pvp_pokedex_lookup",
-		"pvp_evolution_target",
+		toolRank,
+		toolMatchup,
+		toolCPLimits,
+		toolMeta,
+		toolTeamAnalysis,
+		toolTeamBuilder,
+		toolSpeciesInfo,
+		toolMoveInfo,
+		toolTypeMatchup,
+		toolLevelFromCP,
+		toolCounterFinder,
+		toolEvolutionPreview,
+		toolRankBatch,
+		toolThreatCoverage,
+		toolWeatherBoost,
+		toolEncounterCPRange,
+		toolCupRules,
+		toolSecondMoveCost,
+		toolPowerupCost,
+		toolReportDataIssue,
+		toolPokedexLookup,
+		toolEvolutionTarget,
 	}
 
 	for _, name := range expected {
@@ -136,11 +136,11 @@ func TestMCPHTTPHandler_Phase2MiddlewareLogsEveryCall(t *testing.T) {
 	defer session.Close()
 
 	_, err = session.CallTool(t.Context(), &mcp.CallToolParams{
-		Name: "pvp_rank",
+		Name: toolRank,
 		Arguments: map[string]any{
-			"species": integrationFixtureSpecies,
-			"iv":      []int{0, 15, 15},
-			"league":  "great",
+			argSpecies: integrationFixtureSpecies,
+			argIV:      []int{0, 15, 15},
+			argLeague:  leagueGreat,
 		},
 	})
 	if err != nil {
@@ -224,10 +224,10 @@ func TestBuildMCPHTTPMiddlewareChain_SecurityHeadersPresent(t *testing.T) {
 	_ = resp.Body.Close()
 
 	expected := map[string]string{
-		"Strict-Transport-Security": "max-age=31536000; includeSubDomains",
-		"X-Content-Type-Options":    "nosniff",
-		"Referrer-Policy":           "no-referrer",
-		"Content-Security-Policy":   "default-src 'none'",
+		headerHSTS:               "max-age=31536000; includeSubDomains",
+		"X-Content-Type-Options": "nosniff",
+		"Referrer-Policy":        "no-referrer",
+		headerCSP:                "default-src 'none'",
 	}
 
 	for name, want := range expected {
@@ -280,11 +280,11 @@ func TestBuildMCPHTTPMiddlewareChain_SecurityHeadersOnRejectionResponse(t *testi
 		t.Fatalf("status = %d, want 413 (setup precondition)", resp.StatusCode)
 	}
 
-	if resp.Header.Get("Strict-Transport-Security") == "" {
+	if resp.Header.Get(headerHSTS) == "" {
 		t.Errorf("HSTS missing from 413 response — security headers must land before the rejection write")
 	}
 
-	if resp.Header.Get("Content-Security-Policy") == "" {
+	if resp.Header.Get(headerCSP) == "" {
 		t.Errorf("CSP missing from 413 response — security headers must land before the rejection write")
 	}
 }
@@ -467,7 +467,7 @@ func TestMCPHTTPHandler_CallToolOverHTTP(t *testing.T) {
 	httpServer := httptest.NewServer(handler)
 	t.Cleanup(httpServer.Close)
 
-	client := mcp.NewClient(&mcp.Implementation{Name: "http-test-client", Version: "test"}, nil)
+	client := mcp.NewClient(&mcp.Implementation{Name: clientNameHTTP, Version: implVersionTest}, nil)
 	transport := &mcp.StreamableClientTransport{
 		Endpoint: httpServer.URL,
 	}
@@ -479,11 +479,11 @@ func TestMCPHTTPHandler_CallToolOverHTTP(t *testing.T) {
 	defer session.Close()
 
 	result, err := session.CallTool(ctx, &mcp.CallToolParams{
-		Name: "pvp_rank",
+		Name: toolRank,
 		Arguments: map[string]any{
-			"species": integrationFixtureSpecies,
-			"iv":      []int{0, 15, 15},
-			"league":  "great",
+			argSpecies: integrationFixtureSpecies,
+			argIV:      []int{0, 15, 15},
+			argLeague:  leagueGreat,
 		},
 	})
 	if err != nil {

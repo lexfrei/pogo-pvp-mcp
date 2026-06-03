@@ -129,7 +129,7 @@ func TestMetaTool_AssignsRoles(t *testing.T) {
 	mgr := newMetaManagerWithRoles(t, overall, leadsRanking, switchesRanking, closersRanking)
 	handler := tools.NewMetaTool(mgr, nil).Handler()
 
-	_, result, err := handler(t.Context(), nil, tools.MetaParams{League: "great", TopN: 2})
+	_, result, err := handler(t.Context(), nil, tools.MetaParams{League: leagueGreat, TopN: 2})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
 	}
@@ -154,14 +154,14 @@ func TestMetaTool_ReturnsTopN(t *testing.T) {
 	handler := tools.NewMetaTool(mgr, nil).Handler()
 
 	_, result, err := handler(t.Context(), nil, tools.MetaParams{
-		League: "great",
+		League: leagueGreat,
 		TopN:   3,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
 	}
 
-	if result.League != "great" {
+	if result.League != leagueGreat {
 		t.Errorf("League = %q, want great", result.League)
 	}
 	if result.CPCap != 1500 {
@@ -184,7 +184,7 @@ func TestMetaTool_DefaultTopN(t *testing.T) {
 	mgr := newMetaTestManager(t, metaRankingsFixture)
 	handler := tools.NewMetaTool(mgr, nil).Handler()
 
-	_, result, err := handler(t.Context(), nil, tools.MetaParams{League: "great"})
+	_, result, err := handler(t.Context(), nil, tools.MetaParams{League: leagueGreat})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
 	}
@@ -201,7 +201,7 @@ func TestMetaTool_UnknownLeague(t *testing.T) {
 	mgr := newMetaTestManager(t, metaRankingsFixture)
 	handler := tools.NewMetaTool(mgr, nil).Handler()
 
-	_, _, err := handler(t.Context(), nil, tools.MetaParams{League: "marshmallow"})
+	_, _, err := handler(t.Context(), nil, tools.MetaParams{League: speciesMarshmallow})
 	if !errors.Is(err, tools.ErrUnknownLeague) {
 		t.Errorf("error = %v, want wrapping ErrUnknownLeague", err)
 	}
@@ -214,7 +214,7 @@ func TestMetaTool_NegativeTopN(t *testing.T) {
 	handler := tools.NewMetaTool(mgr, nil).Handler()
 
 	_, _, err := handler(t.Context(), nil, tools.MetaParams{
-		League: "great",
+		League: leagueGreat,
 		TopN:   -1,
 	})
 	if !errors.Is(err, tools.ErrInvalidTopN) {

@@ -274,7 +274,7 @@ func TestEvolutionPreview_TerminalSpecies(t *testing.T) {
 	handler := tool.Handler()
 
 	_, result, err := handler(t.Context(), nil, tools.EvolutionPreviewParams{
-		Species: "alakazam",
+		Species: speciesAlakazam,
 		IV:      [3]int{15, 15, 15},
 		CP:      1500,
 	})
@@ -294,7 +294,7 @@ func TestEvolutionPreview_TerminalSpecies(t *testing.T) {
 // TestEvolutionPreview_LeagueFitShape pins the CP → league bucket
 // mapping: a low-CP squirtle preview produces evolved forms whose
 // CP might still sit in the great league, so league_fit must
-// contain "great" and "ultra" and "master" in that order, and the
+// contain leagueGreat and leagueUltra and leagueMaster in that order, and the
 // order is deterministic.
 func TestEvolutionPreview_LeagueFitShape(t *testing.T) {
 	t.Parallel()
@@ -319,13 +319,13 @@ func TestEvolutionPreview_LeagueFitShape(t *testing.T) {
 		}
 
 		last := stage.LeagueFit[len(stage.LeagueFit)-1]
-		if last != "master" {
+		if last != leagueMaster {
 			t.Errorf("%s league_fit last element = %q, want 'master' (highest cap)", stage.Species, last)
 		}
 
-		if slices.Contains(stage.LeagueFit, "great") {
-			idxGreat := slices.Index(stage.LeagueFit, "great")
-			idxMaster := slices.Index(stage.LeagueFit, "master")
+		if slices.Contains(stage.LeagueFit, leagueGreat) {
+			idxGreat := slices.Index(stage.LeagueFit, leagueGreat)
+			idxMaster := slices.Index(stage.LeagueFit, leagueMaster)
 
 			if idxGreat >= idxMaster {
 				t.Errorf("%s league_fit = %v, want ascending cap order (great before master)",
@@ -343,7 +343,7 @@ func TestEvolutionPreview_UnknownSpecies(t *testing.T) {
 	handler := tool.Handler()
 
 	_, _, err := handler(t.Context(), nil, tools.EvolutionPreviewParams{
-		Species: "missingno",
+		Species: speciesMissingno,
 		IV:      [3]int{15, 15, 15},
 		CP:      500,
 	})
@@ -377,7 +377,7 @@ func TestEvolutionPreview_GamemasterNotLoaded(t *testing.T) {
 	t.Parallel()
 
 	gmMgr, err := gamemaster.NewManager(config.GamemasterConfig{
-		Source:    "http://127.0.0.1:1", // will never be reached; Refresh is not called
+		Source:    urlLoopback, // will never be reached; Refresh is not called
 		LocalPath: filepath.Join(t.TempDir(), "gm.json"),
 	})
 	if err != nil {
@@ -821,7 +821,7 @@ func TestEvolutionPreview_ShadowOptionResolvesToShadowEntry(t *testing.T) {
 	handler := tool.Handler()
 
 	_, result, err := handler(t.Context(), nil, tools.EvolutionPreviewParams{
-		Species: "scyther",
+		Species: speciesScyther,
 		IV:      [3]int{15, 15, 15},
 		CP:      2500,
 		XL:      true,
@@ -831,9 +831,9 @@ func TestEvolutionPreview_ShadowOptionResolvesToShadowEntry(t *testing.T) {
 		t.Fatalf("handler: %v", err)
 	}
 
-	if result.ResolvedSpeciesID != "scyther_shadow" {
+	if result.ResolvedSpeciesID != speciesScytherShadow {
 		t.Errorf("ResolvedSpeciesID = %q, want %q (Options.Shadow must flip lookup)",
-			result.ResolvedSpeciesID, "scyther_shadow")
+			result.ResolvedSpeciesID, speciesScytherShadow)
 	}
 
 	if result.ShadowVariantMissing {

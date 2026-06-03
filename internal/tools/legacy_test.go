@@ -133,16 +133,16 @@ func TestTeamBuilder_DisallowLegacyExplicit(t *testing.T) {
 
 	pool := []tools.Combatant{
 		{
-			Species: "medicham", IV: [3]int{15, 15, 15}, Level: 40,
-			FastMove: "COUNTER", ChargedMoves: []string{movePsychic},
+			Species: speciesMedicham, IV: [3]int{15, 15, 15}, Level: 40,
+			FastMove: moveCounter, ChargedMoves: []string{movePsychic},
 		},
 		{
-			Species: "azumarill", IV: [3]int{15, 15, 15}, Level: 40,
-			FastMove: "BUBBLE", ChargedMoves: []string{"ICE_BEAM"},
+			Species: speciesAzumarill, IV: [3]int{15, 15, 15}, Level: 40,
+			FastMove: moveBubble, ChargedMoves: []string{moveIceBeam},
 		},
 		{
-			Species: "machamp", IV: [3]int{15, 15, 15}, Level: 30,
-			FastMove: "COUNTER", ChargedMoves: []string{"CROSS_CHOP"},
+			Species: speciesMachamp, IV: [3]int{15, 15, 15}, Level: 30,
+			FastMove: moveCounter, ChargedMoves: []string{moveCrossChop},
 		},
 	}
 
@@ -179,14 +179,14 @@ func TestTeamBuilder_DisallowLegacyRejectsResolvedLegacy(t *testing.T) {
 	// from the rankings recommendation; DisallowLegacy must
 	// trip ErrLegacyConflict before simulation.
 	pool := []tools.Combatant{
-		{Species: "medicham", IV: [3]int{15, 15, 15}, Level: 40},
+		{Species: speciesMedicham, IV: [3]int{15, 15, 15}, Level: 40},
 		{
-			Species: "azumarill", IV: [3]int{15, 15, 15}, Level: 40,
-			FastMove: "BUBBLE", ChargedMoves: []string{"ICE_BEAM"},
+			Species: speciesAzumarill, IV: [3]int{15, 15, 15}, Level: 40,
+			FastMove: moveBubble, ChargedMoves: []string{moveIceBeam},
 		},
 		{
-			Species: "machamp", IV: [3]int{15, 15, 15}, Level: 30,
-			FastMove: "COUNTER", ChargedMoves: []string{"CROSS_CHOP"},
+			Species: speciesMachamp, IV: [3]int{15, 15, 15}, Level: 30,
+			FastMove: moveCounter, ChargedMoves: []string{moveCrossChop},
 		},
 	}
 
@@ -449,12 +449,12 @@ func TestTeamAnalysis_DisallowLegacyRejectsResolvedLegacy(t *testing.T) {
 	team := []tools.Combatant{
 		{Species: speciesMedicham, IV: [3]int{15, 15, 15}, Level: 40},
 		{
-			Species: "azumarill", IV: [3]int{15, 15, 15}, Level: 40,
-			FastMove: "BUBBLE", ChargedMoves: []string{"ICE_BEAM"},
+			Species: speciesAzumarill, IV: [3]int{15, 15, 15}, Level: 40,
+			FastMove: moveBubble, ChargedMoves: []string{moveIceBeam},
 		},
 		{
-			Species: "machamp", IV: [3]int{15, 15, 15}, Level: 30,
-			FastMove: "COUNTER", ChargedMoves: []string{"CROSS_CHOP"},
+			Species: speciesMachamp, IV: [3]int{15, 15, 15}, Level: 30,
+			FastMove: moveCounter, ChargedMoves: []string{moveCrossChop},
 		},
 	}
 
@@ -485,7 +485,7 @@ func TestRank_NonLegacyAbsentWhenOptimalClean(t *testing.T) {
 	handler := tool.Handler()
 
 	_, result, err := handler(t.Context(), nil, tools.RankParams{
-		Species: "azumarill",
+		Species: speciesAzumarill,
 		IV:      [3]int{0, 15, 15},
 		League:  leagueGreat,
 	})
@@ -549,15 +549,15 @@ func TestTeamAnalysis_DisallowLegacyExplicit(t *testing.T) {
 	team := []tools.Combatant{
 		{
 			Species: speciesMedicham, IV: [3]int{15, 15, 15}, Level: 40,
-			FastMove: "COUNTER", ChargedMoves: []string{movePsychic},
+			FastMove: moveCounter, ChargedMoves: []string{movePsychic},
 		},
 		{
-			Species: "azumarill", IV: [3]int{15, 15, 15}, Level: 40,
-			FastMove: "BUBBLE", ChargedMoves: []string{"ICE_BEAM"},
+			Species: speciesAzumarill, IV: [3]int{15, 15, 15}, Level: 40,
+			FastMove: moveBubble, ChargedMoves: []string{moveIceBeam},
 		},
 		{
-			Species: "machamp", IV: [3]int{15, 15, 15}, Level: 30,
-			FastMove: "COUNTER", ChargedMoves: []string{"CROSS_CHOP"},
+			Species: speciesMachamp, IV: [3]int{15, 15, 15}, Level: 30,
+			FastMove: moveCounter, ChargedMoves: []string{moveCrossChop},
 		},
 	}
 
@@ -653,16 +653,16 @@ func TestTeamBuilder_DisallowLegacyAllowsNonLegacy(t *testing.T) {
 
 	pool := []tools.Combatant{
 		{
-			Species: "medicham", IV: [3]int{15, 15, 15}, Level: 40,
-			FastMove: "COUNTER", ChargedMoves: []string{"ICE_PUNCH"},
+			Species: speciesMedicham, IV: [3]int{15, 15, 15}, Level: 40,
+			FastMove: moveCounter, ChargedMoves: []string{moveIcePunch},
 		},
 		{
-			Species: "azumarill", IV: [3]int{15, 15, 15}, Level: 40,
-			FastMove: "BUBBLE", ChargedMoves: []string{"ICE_BEAM"},
+			Species: speciesAzumarill, IV: [3]int{15, 15, 15}, Level: 40,
+			FastMove: moveBubble, ChargedMoves: []string{moveIceBeam},
 		},
 		{
-			Species: "machamp", IV: [3]int{15, 15, 15}, Level: 30,
-			FastMove: "COUNTER", ChargedMoves: []string{"CROSS_CHOP"},
+			Species: speciesMachamp, IV: [3]int{15, 15, 15}, Level: 30,
+			FastMove: moveCounter, ChargedMoves: []string{moveCrossChop},
 		},
 	}
 
@@ -676,7 +676,7 @@ func TestTeamBuilder_DisallowLegacyAllowsNonLegacy(t *testing.T) {
 	}
 }
 
-// shadowLegacyFixtureGamemaster publishes base "medicham" with
+// shadowLegacyFixtureGamemaster publishes base speciesMedicham with
 // ICE_PUNCH flagged legacy AND shadow "medicham_shadow" with PSYCHIC
 // flagged legacy — but NOT vice versa. The disjoint legacy lists
 // are the load-bearing signal: a shadow-aware legacy check must key
@@ -765,16 +765,16 @@ func TestTeamBuilder_DisallowLegacyShadowRejectsShadowSpecificLegacy(t *testing.
 	pool := []tools.Combatant{
 		{
 			Species: speciesMedicham, IV: [3]int{15, 15, 15}, Level: 40,
-			FastMove: "COUNTER", ChargedMoves: []string{"PSYCHIC"},
+			FastMove: moveCounter, ChargedMoves: []string{movePsychic},
 			Options: tools.CombatantOptions{Shadow: true},
 		},
 		{
-			Species: "azumarill", IV: [3]int{15, 15, 15}, Level: 40,
-			FastMove: "BUBBLE", ChargedMoves: []string{"ICE_BEAM"},
+			Species: speciesAzumarill, IV: [3]int{15, 15, 15}, Level: 40,
+			FastMove: moveBubble, ChargedMoves: []string{moveIceBeam},
 		},
 		{
-			Species: "machamp", IV: [3]int{15, 15, 15}, Level: 30,
-			FastMove: "COUNTER", ChargedMoves: []string{"CROSS_CHOP"},
+			Species: speciesMachamp, IV: [3]int{15, 15, 15}, Level: 30,
+			FastMove: moveCounter, ChargedMoves: []string{moveCrossChop},
 		},
 	}
 
@@ -804,16 +804,16 @@ func TestTeamBuilder_DisallowLegacyShadowAcceptsBaseOnlyLegacy(t *testing.T) {
 	pool := []tools.Combatant{
 		{
 			Species: speciesMedicham, IV: [3]int{15, 15, 15}, Level: 40,
-			FastMove: "COUNTER", ChargedMoves: []string{"ICE_PUNCH"},
+			FastMove: moveCounter, ChargedMoves: []string{moveIcePunch},
 			Options: tools.CombatantOptions{Shadow: true},
 		},
 		{
-			Species: "azumarill", IV: [3]int{15, 15, 15}, Level: 40,
-			FastMove: "BUBBLE", ChargedMoves: []string{"ICE_BEAM"},
+			Species: speciesAzumarill, IV: [3]int{15, 15, 15}, Level: 40,
+			FastMove: moveBubble, ChargedMoves: []string{moveIceBeam},
 		},
 		{
-			Species: "machamp", IV: [3]int{15, 15, 15}, Level: 30,
-			FastMove: "COUNTER", ChargedMoves: []string{"CROSS_CHOP"},
+			Species: speciesMachamp, IV: [3]int{15, 15, 15}, Level: 30,
+			FastMove: moveCounter, ChargedMoves: []string{moveCrossChop},
 		},
 	}
 

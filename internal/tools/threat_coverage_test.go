@@ -105,7 +105,7 @@ func TestThreatCoverage_HappyPath(t *testing.T) {
 
 	member := tools.Combatant{
 		IV: [3]int{15, 15, 15}, Level: 40,
-		FastMove: "FAST1", ChargedMoves: []string{"CH1"},
+		FastMove: moveFast1, ChargedMoves: []string{moveCharged1},
 	}
 	memberA := member
 	memberA.Species = "a"
@@ -148,7 +148,7 @@ func TestThreatCoverage_WrongTeamSize(t *testing.T) {
 	handler := tool.Handler()
 
 	_, _, err := handler(t.Context(), nil, tools.ThreatCoverageParams{
-		Team:   []tools.Combatant{{Species: "a", Level: 40, FastMove: "FAST1"}},
+		Team:   []tools.Combatant{{Species: "a", Level: 40, FastMove: moveFast1}},
 		League: leagueGreat,
 	})
 	if !errors.Is(err, tools.ErrTeamSizeMismatch) {
@@ -165,7 +165,7 @@ func TestThreatCoverage_PoolTooLarge(t *testing.T) {
 
 	valid := tools.Combatant{
 		Species: "a", IV: [3]int{15, 15, 15}, Level: 40,
-		FastMove: "FAST1", ChargedMoves: []string{"CH1"},
+		FastMove: moveFast1, ChargedMoves: []string{moveCharged1},
 	}
 	team := []tools.Combatant{valid, valid, valid}
 
@@ -191,12 +191,12 @@ func TestThreatCoverage_UnknownLeague(t *testing.T) {
 
 	valid := tools.Combatant{
 		Species: "a", IV: [3]int{15, 15, 15}, Level: 40,
-		FastMove: "FAST1", ChargedMoves: []string{"CH1"},
+		FastMove: moveFast1, ChargedMoves: []string{moveCharged1},
 	}
 	team := []tools.Combatant{valid, valid, valid}
 
 	_, _, err := handler(t.Context(), nil, tools.ThreatCoverageParams{
-		Team: team, League: "marshmallow",
+		Team: team, League: speciesMarshmallow,
 	})
 	if !errors.Is(err, tools.ErrUnknownLeague) {
 		t.Errorf("error = %v, want wrapping ErrUnknownLeague", err)
@@ -209,7 +209,7 @@ func TestThreatCoverage_GamemasterNotLoaded(t *testing.T) {
 	t.Parallel()
 
 	gmMgr, err := gamemaster.NewManager(config.GamemasterConfig{
-		Source:    "http://127.0.0.1:1",
+		Source:    urlLoopback,
 		LocalPath: filepath.Join(t.TempDir(), "gm.json"),
 	})
 	if err != nil {
@@ -234,7 +234,7 @@ func TestThreatCoverage_GamemasterNotLoaded(t *testing.T) {
 
 	valid := tools.Combatant{
 		Species: "a", IV: [3]int{15, 15, 15}, Level: 40,
-		FastMove: "FAST1", ChargedMoves: []string{"CH1"},
+		FastMove: moveFast1, ChargedMoves: []string{moveCharged1},
 	}
 
 	_, _, err = handler(t.Context(), nil, tools.ThreatCoverageParams{
@@ -259,11 +259,11 @@ func TestThreatCoverage_UncoveredThreatsSurfaceCandidates(t *testing.T) {
 
 	weak := tools.Combatant{
 		Species: "a", IV: [3]int{0, 0, 0}, Level: 1,
-		FastMove: "FAST1", ChargedMoves: []string{"CH1"},
+		FastMove: moveFast1, ChargedMoves: []string{moveCharged1},
 	}
 	strong := tools.Combatant{
 		Species: "c", IV: [3]int{15, 15, 15}, Level: 40,
-		FastMove: "FAST1", ChargedMoves: []string{"CH1"},
+		FastMove: moveFast1, ChargedMoves: []string{moveCharged1},
 	}
 
 	_, result, err := handler(t.Context(), nil, tools.ThreatCoverageParams{
@@ -367,7 +367,7 @@ func TestThreatCoverage_SkippedMetaSurfaced(t *testing.T) {
 
 	valid := tools.Combatant{
 		Species: "a", IV: [3]int{15, 15, 15}, Level: 40,
-		FastMove: "FAST1", ChargedMoves: []string{"CH1"},
+		FastMove: moveFast1, ChargedMoves: []string{moveCharged1},
 	}
 
 	_, result, err := handler(t.Context(), nil, tools.ThreatCoverageParams{
@@ -378,19 +378,19 @@ func TestThreatCoverage_SkippedMetaSurfaced(t *testing.T) {
 		t.Fatalf("handler: %v", err)
 	}
 
-	if !slices.Contains(result.SkippedMetaSpecies, "phantom") {
+	if !slices.Contains(result.SkippedMetaSpecies, speciesPhantom) {
 		t.Errorf("SkippedMetaSpecies = %v, want to contain \"phantom\"", result.SkippedMetaSpecies)
 	}
 
 	// phantom must not leak into TeamCoverage or UncoveredThreats —
 	// it was dropped before any simulation ran.
 	for _, entry := range result.UncoveredThreats {
-		if entry.Threat == "phantom" {
+		if entry.Threat == speciesPhantom {
 			t.Errorf("UncoveredThreats should not contain skipped species \"phantom\"")
 		}
 	}
 
-	if _, present := result.TeamCoverage["phantom"]; present {
+	if _, present := result.TeamCoverage[speciesPhantom]; present {
 		t.Errorf("TeamCoverage should not contain skipped species \"phantom\"")
 	}
 }
@@ -406,7 +406,7 @@ func TestThreatCoverage_ContextCanceled(t *testing.T) {
 
 	valid := tools.Combatant{
 		Species: "a", IV: [3]int{15, 15, 15}, Level: 40,
-		FastMove: "FAST1", ChargedMoves: []string{"CH1"},
+		FastMove: moveFast1, ChargedMoves: []string{moveCharged1},
 	}
 
 	ctx, cancel := context.WithCancel(t.Context())
@@ -431,7 +431,7 @@ func TestThreatCoverage_InvalidShieldsValue(t *testing.T) {
 
 	valid := tools.Combatant{
 		Species: "a", IV: [3]int{15, 15, 15}, Level: 40,
-		FastMove: "FAST1", ChargedMoves: []string{"CH1"},
+		FastMove: moveFast1, ChargedMoves: []string{moveCharged1},
 	}
 	team := []tools.Combatant{valid, valid, valid}
 

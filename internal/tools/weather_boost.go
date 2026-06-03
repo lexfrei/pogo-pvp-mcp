@@ -86,13 +86,13 @@ type weatherSpec struct {
 //
 //nolint:gochecknoglobals // fixed domain lookup table
 var weatherBoostTable = []weatherSpec{
-	{Weather: "cloudy", Display: "Cloudy", BoostedTypes: []string{"fairy", "fighting", "poison"}},
-	{Weather: "fog", Display: "Fog", BoostedTypes: []string{"dark", "ghost"}},
-	{Weather: "partly_cloudy", Display: "Partly Cloudy", BoostedTypes: []string{"normal", "rock"}},
-	{Weather: "rainy", Display: "Rainy", BoostedTypes: []string{"bug", "electric", "water"}},
-	{Weather: "snow", Display: "Snow", BoostedTypes: []string{"ice", "steel"}},
-	{Weather: "sunny", Display: "Sunny / Clear", BoostedTypes: []string{"fire", "grass", "ground"}},
-	{Weather: "windy", Display: "Windy", BoostedTypes: []string{"dragon", "flying", "psychic"}},
+	{Weather: "cloudy", Display: "Cloudy", BoostedTypes: []string{typeFairy, typeFighting, typePoison}},
+	{Weather: "fog", Display: "Fog", BoostedTypes: []string{typeDark, typeGhost}},
+	{Weather: "partly_cloudy", Display: "Partly Cloudy", BoostedTypes: []string{typeNormal, typeRock}},
+	{Weather: "rainy", Display: "Rainy", BoostedTypes: []string{typeBug, typeElectric, typeWater}},
+	{Weather: "snow", Display: "Snow", BoostedTypes: []string{typeIce, typeSteel}},
+	{Weather: "sunny", Display: "Sunny / Clear", BoostedTypes: []string{typeFire, typeGrass, typeGround}},
+	{Weather: "windy", Display: "Windy", BoostedTypes: []string{typeDragon, typeFlying, typePsychic}},
 }
 
 const weatherBoostToolDescription = "Look up Niantic's weather → boosted-types table (sunny/rainy/partly_cloudy/" +

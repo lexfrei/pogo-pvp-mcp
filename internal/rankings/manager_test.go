@@ -24,6 +24,11 @@ const testSpeciesMedicham = "medicham"
 // servers that need to dispatch this path share one literal.
 const springOverall1500URL = "/spring/overall/rankings-1500.json"
 
+// testInvalidBaseURL is the unreachable base URL used by the
+// fetch-failure cases; hoisted to a const for the goconst
+// two-references threshold.
+const testInvalidBaseURL = "http://example.invalid"
+
 // allOverall1500Path is the upstream URL tail the manager hits when no
 // cup is supplied (cup resolves to "all"). Factored so both the server
 // mux and the assertion read from one source of truth.
@@ -176,7 +181,7 @@ func TestManager_PersistsAndReloads(t *testing.T) {
 
 	// Fresh manager pointing at an unreachable upstream — must read from disk.
 	mgr2, err := rankings.NewManager(rankings.Config{
-		BaseURL:  "http://example.invalid",
+		BaseURL:  testInvalidBaseURL,
 		LocalDir: dir,
 	})
 	if err != nil {
@@ -428,7 +433,7 @@ func TestManager_GetCupIDInjection(t *testing.T) {
 	t.Parallel()
 
 	mgr, err := rankings.NewManager(rankings.Config{
-		BaseURL:  "http://example.invalid",
+		BaseURL:  testInvalidBaseURL,
 		LocalDir: filepath.Join(t.TempDir(), "rankings"),
 	})
 	if err != nil {
@@ -526,7 +531,7 @@ func TestManager_GetRespectsCancelledCtx(t *testing.T) {
 	t.Parallel()
 
 	mgr, err := rankings.NewManager(rankings.Config{
-		BaseURL:  "http://example.invalid",
+		BaseURL:  testInvalidBaseURL,
 		LocalDir: t.TempDir(),
 	})
 	if err != nil {

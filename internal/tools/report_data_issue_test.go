@@ -63,7 +63,7 @@ func TestReportDataIssue_MessageCoversDriftRationale(t *testing.T) {
 
 	msgLower := strings.ToLower(result.Message)
 
-	required := []string{"hardcoded", "niantic", "issue"}
+	required := []string{"hardcoded", "niantic", labelIssue}
 	for _, phrase := range required {
 		if !strings.Contains(msgLower, phrase) {
 			t.Errorf("Message missing required phrase %q: %q", phrase, result.Message)
@@ -86,7 +86,7 @@ func TestReportDataIssue_DescriptionSanity(t *testing.T) {
 
 	descLower := strings.ToLower(desc)
 
-	required := []string{"data", "issue", "github", "checklist"}
+	required := []string{"data", labelIssue, "github", "checklist"}
 	for _, phrase := range required {
 		if !strings.Contains(descLower, phrase) {
 			t.Errorf("description missing fragment %q: %q", phrase, desc)

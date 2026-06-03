@@ -102,12 +102,12 @@ func TestCounterFinder_FromPoolHappyPath(t *testing.T) {
 		},
 		FromPool: []tools.Combatant{
 			{
-				Species: "machamp", IV: [3]int{15, 15, 15}, Level: 40,
-				FastMove: moveCounter, ChargedMoves: []string{"CROSS_CHOP"},
+				Species: speciesMachamp, IV: [3]int{15, 15, 15}, Level: 40,
+				FastMove: moveCounter, ChargedMoves: []string{moveCrossChop},
 			},
 			{
-				Species: "azumarill", IV: [3]int{15, 15, 15}, Level: 40,
-				FastMove: "BUBBLE", ChargedMoves: []string{"ICE_BEAM"},
+				Species: speciesAzumarill, IV: [3]int{15, 15, 15}, Level: 40,
+				FastMove: moveBubble, ChargedMoves: []string{moveIceBeam},
 			},
 		},
 		League: leagueGreat,
@@ -200,8 +200,8 @@ func TestCounterFinder_PoolTooLarge(t *testing.T) {
 	pool := make([]tools.Combatant, tools.MaxPoolSize+1)
 	for i := range pool {
 		pool[i] = tools.Combatant{
-			Species: "machamp", IV: [3]int{15, 15, 15}, Level: 40,
-			FastMove: moveCounter, ChargedMoves: []string{"CROSS_CHOP"},
+			Species: speciesMachamp, IV: [3]int{15, 15, 15}, Level: 40,
+			FastMove: moveCounter, ChargedMoves: []string{moveCrossChop},
 		}
 	}
 
@@ -233,8 +233,8 @@ func TestCounterFinder_InvalidShields(t *testing.T) {
 		},
 		FromPool: []tools.Combatant{
 			{
-				Species: "machamp", IV: [3]int{15, 15, 15}, Level: 40,
-				FastMove: moveCounter, ChargedMoves: []string{"CROSS_CHOP"},
+				Species: speciesMachamp, IV: [3]int{15, 15, 15}, Level: 40,
+				FastMove: moveCounter, ChargedMoves: []string{moveCrossChop},
 			},
 		},
 		League:  leagueGreat,
@@ -261,8 +261,8 @@ func TestCounterFinder_MultiScenarioAveraging(t *testing.T) {
 		},
 		FromPool: []tools.Combatant{
 			{
-				Species: "machamp", IV: [3]int{15, 15, 15}, Level: 40,
-				FastMove: moveCounter, ChargedMoves: []string{"CROSS_CHOP"},
+				Species: speciesMachamp, IV: [3]int{15, 15, 15}, Level: 40,
+				FastMove: moveCounter, ChargedMoves: []string{moveCrossChop},
 			},
 		},
 		League:  leagueGreat,
@@ -299,7 +299,7 @@ func TestCounterFinder_GamemasterNotLoaded(t *testing.T) {
 	t.Parallel()
 
 	mgr, err := gamemaster.NewManager(config.GamemasterConfig{
-		Source:    "http://example.invalid",
+		Source:    urlExampleInvalid,
 		LocalPath: filepath.Join(t.TempDir(), "gm.json"),
 	})
 	if err != nil {
@@ -335,8 +335,8 @@ func TestCounterFinder_TopNLargerThanCandidates(t *testing.T) {
 		},
 		FromPool: []tools.Combatant{
 			{
-				Species: "machamp", IV: [3]int{15, 15, 15}, Level: 40,
-				FastMove: moveCounter, ChargedMoves: []string{"CROSS_CHOP"},
+				Species: speciesMachamp, IV: [3]int{15, 15, 15}, Level: 40,
+				FastMove: moveCounter, ChargedMoves: []string{moveCrossChop},
 			},
 		},
 		League: leagueGreat,
@@ -370,8 +370,8 @@ func TestCounterFinder_DisallowLegacyIgnoredForTarget(t *testing.T) {
 		},
 		FromPool: []tools.Combatant{
 			{
-				Species: "machamp", IV: [3]int{15, 15, 15}, Level: 40,
-				FastMove: moveCounter, ChargedMoves: []string{"CROSS_CHOP"},
+				Species: speciesMachamp, IV: [3]int{15, 15, 15}, Level: 40,
+				FastMove: moveCounter, ChargedMoves: []string{moveCrossChop},
 			},
 		},
 		League:         leagueGreat,
@@ -386,7 +386,7 @@ func TestCounterFinder_DisallowLegacyIgnoredForTarget(t *testing.T) {
 	if len(result.Counters) == 0 {
 		t.Fatal("Counters empty; expected machamp to be scored against the legacy-PSYCHIC medicham target")
 	}
-	if result.Counters[0].Counter.Species != "machamp" {
+	if result.Counters[0].Counter.Species != speciesMachamp {
 		t.Errorf("Counters[0].Counter.Species = %q, want machamp",
 			result.Counters[0].Counter.Species)
 	}
@@ -420,8 +420,8 @@ func TestCounterFinder_DisallowLegacyFiltersMetaFallback(t *testing.T) {
 
 	_, result, err := handler(t.Context(), nil, tools.CounterFinderParams{
 		Target: tools.Combatant{
-			Species: "machamp", IV: [3]int{15, 15, 15}, Level: 40,
-			FastMove: moveCounter, ChargedMoves: []string{"CROSS_CHOP"},
+			Species: speciesMachamp, IV: [3]int{15, 15, 15}, Level: 40,
+			FastMove: moveCounter, ChargedMoves: []string{moveCrossChop},
 		},
 		League:         leagueGreat,
 		TopN:           5,
@@ -459,8 +459,8 @@ func TestCounterFinder_DisallowLegacyRejectsFromPoolMember(t *testing.T) {
 
 	_, _, err := handler(t.Context(), nil, tools.CounterFinderParams{
 		Target: tools.Combatant{
-			Species: "machamp", IV: [3]int{15, 15, 15}, Level: 40,
-			FastMove: moveCounter, ChargedMoves: []string{"CROSS_CHOP"},
+			Species: speciesMachamp, IV: [3]int{15, 15, 15}, Level: 40,
+			FastMove: moveCounter, ChargedMoves: []string{moveCrossChop},
 		},
 		FromPool: []tools.Combatant{
 			{
@@ -490,8 +490,8 @@ func TestCounterFinder_InvalidTopN(t *testing.T) {
 		},
 		FromPool: []tools.Combatant{
 			{
-				Species: "machamp", IV: [3]int{15, 15, 15}, Level: 40,
-				FastMove: moveCounter, ChargedMoves: []string{"CROSS_CHOP"},
+				Species: speciesMachamp, IV: [3]int{15, 15, 15}, Level: 40,
+				FastMove: moveCounter, ChargedMoves: []string{moveCrossChop},
 			},
 		},
 		League: leagueGreat,
