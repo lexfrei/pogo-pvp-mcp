@@ -11,12 +11,22 @@ import (
 	"github.com/lexfrei/pogo-pvp-mcp/internal/logging"
 )
 
+// testLogLevelInfo is the slog level string shared across the
+// logger-construction cases; hoisted to a const for the goconst
+// two-references threshold.
+const testLogLevelInfo = "info"
+
+// testLogFormatText is the text-handler format string shared across
+// the logger-construction cases; hoisted to a const for the same
+// goconst reason.
+const testLogFormatText = "text"
+
 func TestNewLogger_TextHandler(t *testing.T) {
 	t.Parallel()
 
 	var buf bytes.Buffer
 
-	logger, err := logging.NewLogger(config.LogConfig{Level: "info", Format: "text"}, &buf)
+	logger, err := logging.NewLogger(config.LogConfig{Level: testLogLevelInfo, Format: testLogFormatText}, &buf)
 	if err != nil {
 		t.Fatalf("NewLogger: %v", err)
 	}
@@ -37,7 +47,7 @@ func TestNewLogger_JSONHandler(t *testing.T) {
 
 	var buf bytes.Buffer
 
-	logger, err := logging.NewLogger(config.LogConfig{Level: "info", Format: "json"}, &buf)
+	logger, err := logging.NewLogger(config.LogConfig{Level: testLogLevelInfo, Format: "json"}, &buf)
 	if err != nil {
 		t.Fatalf("NewLogger: %v", err)
 	}
@@ -58,7 +68,7 @@ func TestNewLogger_LevelFilters(t *testing.T) {
 
 	var buf bytes.Buffer
 
-	logger, err := logging.NewLogger(config.LogConfig{Level: "warn", Format: "text"}, &buf)
+	logger, err := logging.NewLogger(config.LogConfig{Level: "warn", Format: testLogFormatText}, &buf)
 	if err != nil {
 		t.Fatalf("NewLogger: %v", err)
 	}
@@ -85,7 +95,7 @@ func TestNewLogger_InvalidLevel(t *testing.T) {
 
 	var buf bytes.Buffer
 
-	_, err := logging.NewLogger(config.LogConfig{Level: "trace", Format: "text"}, &buf)
+	_, err := logging.NewLogger(config.LogConfig{Level: "trace", Format: testLogFormatText}, &buf)
 	if !errors.Is(err, logging.ErrInvalidLogConfig) {
 		t.Errorf("NewLogger error = %v, want wrapping ErrInvalidLogConfig", err)
 	}
@@ -96,7 +106,7 @@ func TestNewLogger_InvalidFormat(t *testing.T) {
 
 	var buf bytes.Buffer
 
-	_, err := logging.NewLogger(config.LogConfig{Level: "info", Format: "xml"}, &buf)
+	_, err := logging.NewLogger(config.LogConfig{Level: testLogLevelInfo, Format: "xml"}, &buf)
 	if !errors.Is(err, logging.ErrInvalidLogConfig) {
 		t.Errorf("NewLogger error = %v, want wrapping ErrInvalidLogConfig", err)
 	}

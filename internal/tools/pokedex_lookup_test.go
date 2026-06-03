@@ -109,8 +109,8 @@ func TestPokedexLookup_DexNumber(t *testing.T) {
 // query matches a species id verbatim, that species comes first in
 // the response; substring matches follow. Also locks the dedup
 // invariant: the substring phase of matchesByNameOrID would
-// otherwise emit farigiraf a second time (substring "farigiraf" ⊂
-// id "farigiraf"), so the single-entry result is the only signal
+// otherwise emit farigiraf a second time (substring speciesFarigiraf ⊂
+// id speciesFarigiraf), so the single-entry result is the only signal
 // that the dedup filter actually runs.
 func TestPokedexLookup_ExactSpeciesID(t *testing.T) {
 	t.Parallel()
@@ -118,7 +118,7 @@ func TestPokedexLookup_ExactSpeciesID(t *testing.T) {
 	mgr := newManagerWithFixture(t, pokedexLookupFixtureGamemaster)
 	handler := tools.NewPokedexLookupTool(mgr).Handler()
 
-	_, result, err := handler(t.Context(), nil, tools.PokedexLookupParams{Query: "farigiraf"})
+	_, result, err := handler(t.Context(), nil, tools.PokedexLookupParams{Query: speciesFarigiraf})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
 	}
@@ -128,7 +128,7 @@ func TestPokedexLookup_ExactSpeciesID(t *testing.T) {
 			len(result.Matches))
 	}
 
-	if result.Matches[0].SpeciesID != "farigiraf" {
+	if result.Matches[0].SpeciesID != speciesFarigiraf {
 		t.Errorf("Matches[0].SpeciesID = %q, want \"farigiraf\" (exact match first)",
 			result.Matches[0].SpeciesID)
 	}
@@ -153,7 +153,7 @@ func TestPokedexLookup_Substring(t *testing.T) {
 	}
 
 	// Both entries share the same dex; the substring path sorts
-	// by (Dex, SpeciesID) so "scyther" must come before
+	// by (Dex, SpeciesID) so speciesScyther must come before
 	// "scyther_galarian" alphabetically. This pins the sort
 	// comparator against a silent regression.
 	if result.Matches[0].SpeciesID != speciesScyther {
@@ -183,7 +183,7 @@ func TestPokedexLookup_ShadowExcludedByDefault(t *testing.T) {
 	mgr := newManagerWithFixture(t, pokedexLookupFixtureGamemaster)
 	handler := tools.NewPokedexLookupTool(mgr).Handler()
 
-	_, withoutShadow, err := handler(t.Context(), nil, tools.PokedexLookupParams{Query: "medicham"})
+	_, withoutShadow, err := handler(t.Context(), nil, tools.PokedexLookupParams{Query: speciesMedicham})
 	if err != nil {
 		t.Fatalf("handler (no shadow): %v", err)
 	}
@@ -195,7 +195,7 @@ func TestPokedexLookup_ShadowExcludedByDefault(t *testing.T) {
 	}
 
 	_, withShadow, err := handler(t.Context(), nil, tools.PokedexLookupParams{
-		Query:         "medicham",
+		Query:         speciesMedicham,
 		IncludeShadow: true,
 	})
 	if err != nil {
@@ -293,7 +293,7 @@ func TestPokedexLookup_TruncatedAtLimit(t *testing.T) {
 	mgr := newManagerWithFixture(t, buildBulkFixture(11))
 	handler := tools.NewPokedexLookupTool(mgr).Handler()
 
-	_, result, err := handler(t.Context(), nil, tools.PokedexLookupParams{Query: "bulk_species"})
+	_, result, err := handler(t.Context(), nil, tools.PokedexLookupParams{Query: speciesBulk})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
 	}
@@ -321,7 +321,7 @@ func TestPokedexLookup_ExactlyAtLimit(t *testing.T) {
 	mgr := newManagerWithFixture(t, buildBulkFixture(10))
 	handler := tools.NewPokedexLookupTool(mgr).Handler()
 
-	_, result, err := handler(t.Context(), nil, tools.PokedexLookupParams{Query: "bulk_species"})
+	_, result, err := handler(t.Context(), nil, tools.PokedexLookupParams{Query: speciesBulk})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
 	}
@@ -347,7 +347,7 @@ func TestPokedexLookup_GamemasterNotLoaded(t *testing.T) {
 	t.Parallel()
 
 	mgr, err := gamemaster.NewManager(config.GamemasterConfig{
-		Source:    "http://example.invalid",
+		Source:    urlExampleInvalid,
 		LocalPath: filepath.Join(t.TempDir(), "gm.json"),
 	})
 	if err != nil {

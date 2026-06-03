@@ -69,7 +69,7 @@ func TestRankTool_KnownSpecies(t *testing.T) {
 	_, result, err := handler(t.Context(), nil, tools.RankParams{
 		Species: speciesMedicham,
 		IV:      [3]int{0, 15, 15},
-		League:  "great",
+		League:  leagueGreat,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -144,9 +144,9 @@ func TestRankTool_OptimalMovesetFromRankings(t *testing.T) {
 	handler := tools.NewRankTool(gm, ranks).Handler()
 
 	_, result, err := handler(t.Context(), nil, tools.RankParams{
-		Species: "medicham",
+		Species: speciesMedicham,
 		IV:      [3]int{0, 15, 15},
-		League:  "great",
+		League:  leagueGreat,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -161,10 +161,10 @@ func TestRankTool_OptimalMovesetFromRankings(t *testing.T) {
 	if len(result.OptimalMoveset.Charged) != 2 {
 		t.Fatalf("Charged len = %d, want 2", len(result.OptimalMoveset.Charged))
 	}
-	if result.OptimalMoveset.Charged[0] != "ICE_PUNCH" {
+	if result.OptimalMoveset.Charged[0] != moveIcePunch {
 		t.Errorf("Charged[0] = %q, want ICE_PUNCH", result.OptimalMoveset.Charged[0])
 	}
-	if result.OptimalMoveset.Charged[1] != "PSYCHIC" {
+	if result.OptimalMoveset.Charged[1] != movePsychic {
 		t.Errorf("Charged[1] = %q, want PSYCHIC", result.OptimalMoveset.Charged[1])
 	}
 }
@@ -188,9 +188,9 @@ func TestRankTool_OptimalMovesetAbsentForUnknownInRanking(t *testing.T) {
 	handler := tools.NewRankTool(gm, ranks).Handler()
 
 	_, result, err := handler(t.Context(), nil, tools.RankParams{
-		Species: "medicham",
+		Species: speciesMedicham,
 		IV:      [3]int{0, 15, 15},
-		League:  "great",
+		League:  leagueGreat,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -214,9 +214,9 @@ func TestRankTool_HundoComparisonPresent(t *testing.T) {
 	handler := tools.NewRankTool(mgr, nil).Handler()
 
 	_, great, err := handler(t.Context(), nil, tools.RankParams{
-		Species: "medicham",
+		Species: speciesMedicham,
 		IV:      [3]int{15, 15, 15},
-		League:  "great",
+		League:  leagueGreat,
 	})
 	if err != nil {
 		t.Fatalf("great: %v", err)
@@ -235,9 +235,9 @@ func TestRankTool_HundoComparisonPresent(t *testing.T) {
 	}
 
 	_, master, err := handler(t.Context(), nil, tools.RankParams{
-		Species: "medicham",
+		Species: speciesMedicham,
 		IV:      [3]int{0, 15, 15},
-		League:  "master",
+		League:  leagueMaster,
 	})
 	if err != nil {
 		t.Fatalf("master: %v", err)
@@ -255,9 +255,9 @@ func TestRankTool_UnknownSpecies(t *testing.T) {
 	handler := tools.NewRankTool(mgr, nil).Handler()
 
 	_, _, err := handler(t.Context(), nil, tools.RankParams{
-		Species: "missingno",
+		Species: speciesMissingno,
 		IV:      [3]int{15, 15, 15},
-		League:  "great",
+		League:  leagueGreat,
 	})
 	if !errors.Is(err, tools.ErrUnknownSpecies) {
 		t.Errorf("error = %v, want wrapping ErrUnknownSpecies", err)
@@ -271,9 +271,9 @@ func TestRankTool_UnknownLeague(t *testing.T) {
 	handler := tools.NewRankTool(mgr, nil).Handler()
 
 	_, _, err := handler(t.Context(), nil, tools.RankParams{
-		Species: "medicham",
+		Species: speciesMedicham,
 		IV:      [3]int{15, 15, 15},
-		League:  "marshmallow",
+		League:  speciesMarshmallow,
 	})
 	if !errors.Is(err, tools.ErrUnknownLeague) {
 		t.Errorf("error = %v, want wrapping ErrUnknownLeague", err)
@@ -287,9 +287,9 @@ func TestRankTool_InvalidIV(t *testing.T) {
 	handler := tools.NewRankTool(mgr, nil).Handler()
 
 	_, _, err := handler(t.Context(), nil, tools.RankParams{
-		Species: "medicham",
+		Species: speciesMedicham,
 		IV:      [3]int{16, 0, 0},
-		League:  "great",
+		League:  leagueGreat,
 	})
 	if err == nil {
 		t.Fatal("expected error for out-of-range IV")
@@ -300,7 +300,7 @@ func TestRankTool_NoGamemasterLoaded(t *testing.T) {
 	t.Parallel()
 
 	mgr, err := gamemaster.NewManager(config.GamemasterConfig{
-		Source:    "http://example.invalid",
+		Source:    urlExampleInvalid,
 		LocalPath: filepath.Join(t.TempDir(), "gm.json"),
 	})
 	if err != nil {
@@ -310,9 +310,9 @@ func TestRankTool_NoGamemasterLoaded(t *testing.T) {
 	handler := tools.NewRankTool(mgr, nil).Handler()
 
 	_, _, err = handler(t.Context(), nil, tools.RankParams{
-		Species: "medicham",
+		Species: speciesMedicham,
 		IV:      [3]int{15, 15, 15},
-		League:  "great",
+		League:  leagueGreat,
 	})
 	if !errors.Is(err, tools.ErrGamemasterNotLoaded) {
 		t.Errorf("error = %v, want wrapping ErrGamemasterNotLoaded", err)
@@ -339,9 +339,9 @@ func TestRankTool_UnreachableCapSurfacesCleanly(t *testing.T) {
 	// CP cap 1 is below the minimum CP any species can reach: every
 	// IV/level hits the cp=10 floor, so no legal spread fits.
 	_, _, err := handler(t.Context(), nil, tools.RankParams{
-		Species: "medicham",
+		Species: speciesMedicham,
 		IV:      [3]int{0, 0, 0},
-		League:  "great",
+		League:  leagueGreat,
 		CPCap:   1,
 	})
 	if err == nil {
@@ -356,9 +356,9 @@ func TestRankTool_NegativeCPCapRejected(t *testing.T) {
 	handler := tools.NewRankTool(mgr, nil).Handler()
 
 	_, _, err := handler(t.Context(), nil, tools.RankParams{
-		Species: "medicham",
+		Species: speciesMedicham,
 		IV:      [3]int{15, 15, 15},
-		League:  "great",
+		League:  leagueGreat,
 		CPCap:   -1500,
 	})
 	if !errors.Is(err, tools.ErrInvalidCPCap) {
@@ -376,7 +376,7 @@ func TestRankTool_CPCapOverride(t *testing.T) {
 	_, result, err := handler(t.Context(), nil, tools.RankParams{
 		Species: speciesMedicham,
 		IV:      [3]int{0, 0, 0},
-		League:  "great",
+		League:  leagueGreat,
 		CPCap:   100,
 	})
 	if err != nil {
@@ -407,7 +407,7 @@ func TestRankTool_CPCapOverrideEmptyRankingsByCup(t *testing.T) {
 	_, result, err := handler(t.Context(), nil, tools.RankParams{
 		Species: speciesMedicham,
 		IV:      [3]int{15, 15, 15},
-		League:  "ultra",
+		League:  leagueUltra,
 		CPCap:   2000, // non-standard: pvpoke does not publish rankings at this cap
 	})
 	if err != nil {
@@ -550,7 +550,7 @@ func newRankingsManagerMultiCup(t *testing.T, openLeague, spring string) *rankin
 
 // TestRankTool_RankingsByCupIncludesOpenAndNamedCups pins the
 // contract: when the species is ranked in both the open-league
-// ("all") slice and a named cup ("spring"), RankingsByCup returns
+// ("all") slice and a named cup (cupSpring), RankingsByCup returns
 // two entries in that order. Open-league is always first per
 // cupIDsForLookup's stable ordering.
 func TestRankTool_RankingsByCupIncludesOpenAndNamedCups(t *testing.T) {
@@ -574,9 +574,9 @@ func TestRankTool_RankingsByCupIncludesOpenAndNamedCups(t *testing.T) {
 	handler := tools.NewRankTool(gm, ranks).Handler()
 
 	_, result, err := handler(t.Context(), nil, tools.RankParams{
-		Species: "medicham",
+		Species: speciesMedicham,
 		IV:      [3]int{0, 15, 15},
-		League:  "great",
+		League:  leagueGreat,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -635,9 +635,9 @@ func TestRankTool_RankingsByCupSkipsUnrankedCups(t *testing.T) {
 	handler := tools.NewRankTool(gm, ranks).Handler()
 
 	_, result, err := handler(t.Context(), nil, tools.RankParams{
-		Species: "medicham",
+		Species: speciesMedicham,
 		IV:      [3]int{15, 15, 15},
-		League:  "great",
+		League:  leagueGreat,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -674,9 +674,9 @@ func TestRankTool_RankingsByCupMovesetPopulated(t *testing.T) {
 	handler := tools.NewRankTool(gm, ranks).Handler()
 
 	_, result, err := handler(t.Context(), nil, tools.RankParams{
-		Species: "medicham",
+		Species: speciesMedicham,
 		IV:      [3]int{15, 15, 15},
-		League:  "great",
+		League:  leagueGreat,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -692,11 +692,11 @@ func TestRankTool_RankingsByCupMovesetPopulated(t *testing.T) {
 		t.Fatal("openEntry.Moveset is nil; want populated Moveset")
 	}
 
-	if openEntry.Moveset.Fast != "COUNTER" {
+	if openEntry.Moveset.Fast != moveCounter {
 		t.Errorf("Fast = %q, want COUNTER", openEntry.Moveset.Fast)
 	}
 
-	wantCharged := []string{"PSYCHIC", "ICE_PUNCH"}
+	wantCharged := []string{movePsychic, moveIcePunch}
 	if !slices.Equal(openEntry.Moveset.Charged, wantCharged) {
 		t.Errorf("Charged = %v, want %v", openEntry.Moveset.Charged, wantCharged)
 	}
@@ -749,9 +749,9 @@ func TestRankTool_RankingsByCupLegacyTagged(t *testing.T) {
 	handler := tools.NewRankTool(gm, ranks).Handler()
 
 	_, result, err := handler(t.Context(), nil, tools.RankParams{
-		Species: "medicham",
+		Species: speciesMedicham,
 		IV:      [3]int{15, 15, 15},
-		League:  "great",
+		League:  leagueGreat,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -825,9 +825,9 @@ func TestRankTool_RankingsByCupNonZeroLevelCapCup(t *testing.T) {
 	handler := tools.NewRankTool(gm, ranks).Handler()
 
 	_, result, err := handler(t.Context(), nil, tools.RankParams{
-		Species: "medicham",
+		Species: speciesMedicham,
 		IV:      [3]int{15, 15, 15},
-		League:  "great",
+		League:  leagueGreat,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -891,9 +891,9 @@ func TestRankTool_RankingsByCupCachesNotFound(t *testing.T) {
 	handler := tools.NewRankTool(gm, ranks).Handler()
 
 	params := tools.RankParams{
-		Species: "medicham",
+		Species: speciesMedicham,
 		IV:      [3]int{15, 15, 15},
-		League:  "great",
+		League:  leagueGreat,
 	}
 
 	_, _, err = handler(t.Context(), nil, params)

@@ -10,9 +10,22 @@ import (
 	"github.com/lexfrei/pogo-pvp-mcp/internal/gamemaster"
 )
 
-// testSpeciesMedicham keeps the id literal out of repeated test
-// assertions — matches the convention used in rankings_test.
-const testSpeciesMedicham = "medicham"
+// Test fixture literals hoisted to constants so goconst stays quiet —
+// these ids and type names repeat across multiple diff assertions.
+const (
+	testSpeciesMedicham  = "medicham"
+	testSpeciesAzumarill = "azumarill"
+	testSpeciesWhiscash  = "whiscash"
+
+	testTypeFighting = "fighting"
+	testTypePsychic  = "psychic"
+	testTypeWater    = "water"
+	testTypeGround   = "ground"
+
+	testMoveCounter  = "COUNTER"
+	testMoveIcePunch = "ICE_PUNCH"
+	testMoveMudShot  = "MUD_SHOT"
+)
 
 // smallFixture is the shared base gamemaster for differ tests. Every
 // scenario mutates a copy of this value and diffs it against the
@@ -21,28 +34,28 @@ func smallFixture() *pogopvp.Gamemaster {
 	return &pogopvp.Gamemaster{
 		Version: "2026-04-19",
 		Pokemon: map[string]pogopvp.Species{
-			"medicham": {
-				ID: "medicham", Dex: 308, Name: "Medicham",
+			testSpeciesMedicham: {
+				ID: testSpeciesMedicham, Dex: 308, Name: "Medicham",
 				BaseStats:    pogopvp.BaseStats{Atk: 121, Def: 152, HP: 155},
-				Types:        []string{"fighting", "psychic"},
-				FastMoves:    []string{"COUNTER", "PSYCHO_CUT"},
-				ChargedMoves: []string{"ICE_PUNCH", "PSYCHIC"},
+				Types:        []string{testTypeFighting, testTypePsychic},
+				FastMoves:    []string{testMoveCounter, "PSYCHO_CUT"},
+				ChargedMoves: []string{testMoveIcePunch, "PSYCHIC"},
 			},
-			"azumarill": {
-				ID: "azumarill", Dex: 184, Name: "Azumarill",
+			testSpeciesAzumarill: {
+				ID: testSpeciesAzumarill, Dex: 184, Name: "Azumarill",
 				BaseStats:    pogopvp.BaseStats{Atk: 112, Def: 152, HP: 225},
-				Types:        []string{"water", "fairy"},
+				Types:        []string{testTypeWater, "fairy"},
 				FastMoves:    []string{"BUBBLE"},
 				ChargedMoves: []string{"ICE_BEAM", "PLAY_ROUGH"},
 			},
 		},
 		Moves: map[string]pogopvp.Move{
-			"COUNTER": {
-				ID: "COUNTER", Type: "fighting",
+			testMoveCounter: {
+				ID: testMoveCounter, Type: testTypeFighting,
 				Power: 8, Energy: 0, EnergyGain: 7, Cooldown: 1000, Turns: 2,
 			},
-			"ICE_PUNCH": {
-				ID: "ICE_PUNCH", Type: "ice",
+			testMoveIcePunch: {
+				ID: testMoveIcePunch, Type: "ice",
 				Power: 55, Energy: 40, Cooldown: 500,
 			},
 		},
@@ -69,29 +82,29 @@ func TestDiffGamemasters_AddsRemovesChanges(t *testing.T) {
 
 	// Species: add "whiscash", remove "azumarill", change medicham's
 	// charged moves.
-	after.Pokemon["whiscash"] = pogopvp.Species{
-		ID: "whiscash", Dex: 340, Name: "Whiscash",
+	after.Pokemon[testSpeciesWhiscash] = pogopvp.Species{
+		ID: testSpeciesWhiscash, Dex: 340, Name: "Whiscash",
 		BaseStats:    pogopvp.BaseStats{Atk: 151, Def: 142, HP: 188},
-		Types:        []string{"water", "ground"},
-		FastMoves:    []string{"MUD_SHOT"},
+		Types:        []string{testTypeWater, testTypeGround},
+		FastMoves:    []string{testMoveMudShot},
 		ChargedMoves: []string{"BLIZZARD"},
 	}
-	delete(after.Pokemon, "azumarill")
+	delete(after.Pokemon, testSpeciesAzumarill)
 
-	changed := after.Pokemon["medicham"]
-	changed.ChargedMoves = []string{"ICE_PUNCH", "DYNAMIC_PUNCH"}
-	after.Pokemon["medicham"] = changed
+	changed := after.Pokemon[testSpeciesMedicham]
+	changed.ChargedMoves = []string{testMoveIcePunch, "DYNAMIC_PUNCH"}
+	after.Pokemon[testSpeciesMedicham] = changed
 
 	// Moves: add MUD_SHOT, remove ICE_PUNCH, change COUNTER's power.
-	after.Moves["MUD_SHOT"] = pogopvp.Move{
-		ID: "MUD_SHOT", Type: "ground",
+	after.Moves[testMoveMudShot] = pogopvp.Move{
+		ID: testMoveMudShot, Type: testTypeGround,
 		Power: 3, Energy: 0, EnergyGain: 9, Cooldown: 1000, Turns: 2,
 	}
-	delete(after.Moves, "ICE_PUNCH")
+	delete(after.Moves, testMoveIcePunch)
 
-	counter := after.Moves["COUNTER"]
+	counter := after.Moves[testMoveCounter]
 	counter.Power = 10
-	after.Moves["COUNTER"] = counter
+	after.Moves[testMoveCounter] = counter
 
 	diff := gamemaster.DiffGamemasters(before, after)
 
@@ -145,7 +158,7 @@ func TestDiffGamemasters_TypesChangeDetected(t *testing.T) {
 
 	// Clone medicham and flip its secondary type fighting -> dark.
 	medicham := after.Pokemon[testSpeciesMedicham]
-	medicham.Types = []string{"dark", "psychic"}
+	medicham.Types = []string{"dark", testTypePsychic}
 	after.Pokemon[testSpeciesMedicham] = medicham
 
 	diff := gamemaster.DiffGamemasters(before, after)

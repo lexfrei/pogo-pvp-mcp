@@ -87,8 +87,8 @@ func TestEncounterCPRange_FullTable(t *testing.T) {
 	}
 
 	for _, name := range []string{
-		"wild_unboosted", "wild_boosted", "research", "raid", "raid_boosted",
-		"gbl_reward", "hatch_egg", "rocket_shadow",
+		"wild_unboosted", "wild_boosted", "research", encounterRaid, "raid_boosted",
+		"gbl_reward", encounterHatchEgg, "rocket_shadow",
 	} {
 		if !seen[name] {
 			t.Errorf("missing encounter type %q from Ranges", name)
@@ -105,7 +105,7 @@ func TestEncounterCPRange_SingleType(t *testing.T) {
 
 	_, result, err := handler(t.Context(), nil, tools.EncounterCPRangeParams{
 		Species:       speciesMedicham,
-		EncounterType: "raid",
+		EncounterType: encounterRaid,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -116,7 +116,7 @@ func TestEncounterCPRange_SingleType(t *testing.T) {
 	}
 
 	raid := result.Ranges[0]
-	if raid.EncounterType != "raid" {
+	if raid.EncounterType != encounterRaid {
 		t.Errorf("EncounterType = %q, want \"raid\"", raid.EncounterType)
 	}
 
@@ -145,7 +145,7 @@ func TestEncounterCPRange_CaseInsensitive(t *testing.T) {
 	}
 
 	_, lower, err := handler(t.Context(), nil, tools.EncounterCPRangeParams{
-		Species: speciesMedicham, EncounterType: "raid",
+		Species: speciesMedicham, EncounterType: encounterRaid,
 	})
 	if err != nil {
 		t.Fatalf("lower-case handler: %v", err)
@@ -179,7 +179,7 @@ func TestEncounterCPRange_UnknownSpecies(t *testing.T) {
 	tool := newEncounterCPRangeTool(t)
 	handler := tool.Handler()
 
-	_, _, err := handler(t.Context(), nil, tools.EncounterCPRangeParams{Species: "missingno"})
+	_, _, err := handler(t.Context(), nil, tools.EncounterCPRangeParams{Species: speciesMissingno})
 	if !errors.Is(err, tools.ErrUnknownSpecies) {
 		t.Errorf("error = %v, want wrapping ErrUnknownSpecies", err)
 	}
@@ -208,7 +208,7 @@ func TestEncounterCPRange_RaidBoostedIsHigherThanRaid(t *testing.T) {
 		rangesByType[r.EncounterType] = r
 	}
 
-	raid := rangesByType["raid"]
+	raid := rangesByType[encounterRaid]
 	raidBoosted := rangesByType["raid_boosted"]
 
 	if raidBoosted.MaxCP <= raid.MaxCP {
@@ -228,7 +228,7 @@ func TestEncounterCPRange_GamemasterNotLoaded(t *testing.T) {
 	t.Parallel()
 
 	gmMgr, err := gamemaster.NewManager(config.GamemasterConfig{
-		Source:    "http://127.0.0.1:1",
+		Source:    urlLoopback,
 		LocalPath: filepath.Join(t.TempDir(), "gm.json"),
 	})
 	if err != nil {
@@ -271,7 +271,7 @@ func TestEncounterCPRange_HatchEggCoversAllTiers(t *testing.T) {
 	handler := tool.Handler()
 
 	_, result, err := handler(t.Context(), nil, tools.EncounterCPRangeParams{
-		Species: speciesMedicham, EncounterType: "hatch_egg",
+		Species: speciesMedicham, EncounterType: encounterHatchEgg,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)

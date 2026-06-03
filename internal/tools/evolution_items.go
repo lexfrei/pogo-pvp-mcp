@@ -65,58 +65,64 @@ const (
 //nolint:gochecknoglobals // hardcoded canonical table; Niantic changes these ~never
 var evolutionItemRequirements = map[string]EvolutionItemRequirement{
 	// Gloom split (Sun Stone vs no-item).
-	"vileplume": {Candy: evolveCandy100},
-	"bellossom": {Item: "sun_stone", Candy: evolveCandy100},
+	speciesVileplume: {Candy: evolveCandy100},
+	speciesBellossom: {Item: itemSunStone, Candy: evolveCandy100},
 
 	// Slowpoke split (King's Rock vs no-item).
-	"slowbro":  {Candy: evolveCandy50},
-	"slowking": {Item: "king_rock", Candy: evolveCandy50},
+	speciesSlowbro:  {Candy: evolveCandy50},
+	speciesSlowking: {Item: itemKingRock, Candy: evolveCandy50},
 
 	// Poliwhirl split (King's Rock vs no-item).
-	"poliwrath": {Candy: evolveCandy100},
-	"politoed":  {Item: "king_rock", Candy: evolveCandy100},
+	speciesPoliwrath: {Candy: evolveCandy100},
+	speciesPolitoed:  {Item: itemKingRock, Candy: evolveCandy100},
 
 	// Clamperl split — pure RNG in Pokémon GO (no item, unlike
 	// mainline games' Deep Sea Tooth / Deep Sea Scale).
-	"huntail":  {Candy: evolveCandy50, Notes: "random pick (no item in Pokémon GO, unlike mainline)"},
-	"gorebyss": {Candy: evolveCandy50, Notes: "random pick (no item in Pokémon GO, unlike mainline)"},
+	speciesHuntail:  {Candy: evolveCandy50, Notes: notesClamperlRandom},
+	speciesGorebyss: {Candy: evolveCandy50, Notes: notesClamperlRandom},
 
 	// Eevee branches — all eight descendants reach this table
 	// because eevee is the canonical multi-branch chain in pvpoke.
-	"vaporeon": {Candy: evolveCandy25, Notes: "random pick unless name-trick used (Rainer)"},
-	"jolteon":  {Candy: evolveCandy25, Notes: "random pick unless name-trick used (Sparky)"},
-	"flareon":  {Candy: evolveCandy25, Notes: "random pick unless name-trick used (Pyro)"},
+	speciesVaporeon: {Candy: evolveCandy25, Notes: "random pick unless name-trick used (Rainer)"},
+	speciesJolteon:  {Candy: evolveCandy25, Notes: "random pick unless name-trick used (Sparky)"},
+	speciesFlareon:  {Candy: evolveCandy25, Notes: "random pick unless name-trick used (Pyro)"},
 	// Espeon / Umbreon: 25 candy plus the 10 km-buddy + time-of-day
 	// gate. The name-trick bypass works once per account.
-	"espeon":  {Candy: evolveCandy25, Notes: "walk 10 km as buddy + evolve during the day (one per name-trick Sakura)"},
-	"umbreon": {Candy: evolveCandy25, Notes: "walk 10 km as buddy + evolve during the night (one per name-trick Tamao)"},
-	"leafeon": {Item: "mossy_lure", Candy: evolveCandy25, Notes: "evolve near a Mossy Lure module (one per name-trick Linnea)"},
-	"glaceon": {Item: "glacial_lure", Candy: evolveCandy25, Notes: "evolve near a Glacial Lure module (one per name-trick Rea)"},
-	"sylveon": {Candy: evolveCandy25, Notes: "earn 70 buddy hearts (one per name-trick Kira)"},
+	speciesEspeon:  {Candy: evolveCandy25, Notes: "walk 10 km as buddy + evolve during the day (one per name-trick Sakura)"},
+	speciesUmbreon: {Candy: evolveCandy25, Notes: "walk 10 km as buddy + evolve during the night (one per name-trick Tamao)"},
+	speciesLeafeon: {
+		Item: itemMossyLure, Candy: evolveCandy25,
+		Notes: "evolve near a Mossy Lure module (one per name-trick Linnea)",
+	},
+	speciesGlaceon: {
+		Item: itemGlacialLure, Candy: evolveCandy25,
+		Notes: "evolve near a Glacial Lure module (one per name-trick Rea)",
+	},
+	speciesSylveon: {Candy: evolveCandy25, Notes: "earn 70 buddy hearts (one per name-trick Kira)"},
 
 	// Tyrogue split (stat-based, no item).
-	"hitmonlee":  {Candy: evolveCandy25, Notes: "highest ATK IV selects hitmonlee"},
-	"hitmonchan": {Candy: evolveCandy25, Notes: "highest DEF IV selects hitmonchan"},
-	"hitmontop":  {Candy: evolveCandy25, Notes: "highest HP IV selects hitmontop"},
+	speciesHitmonlee:  {Candy: evolveCandy25, Notes: "highest ATK IV selects hitmonlee"},
+	speciesHitmonchan: {Candy: evolveCandy25, Notes: "highest DEF IV selects hitmonchan"},
+	speciesHitmontop:  {Candy: evolveCandy25, Notes: "highest HP IV selects hitmontop"},
 
 	// R7.P2 — linear item-gated steps. walkEvolutionChain picks up
 	// the requirement while traversing a single-child chain (no
 	// branching decision by the player, but the evolve-button still
 	// demands an item on top of candy).
-	"sunflora":   {Item: "sun_stone", Candy: evolveCandy50},
-	"kingdra":    {Item: "dragon_scale", Candy: evolveCandy100},
-	"scizor":     {Item: "metal_coat", Candy: evolveCandy50},
-	"steelix":    {Item: "metal_coat", Candy: evolveCandy50},
-	"porygon2":   {Item: "up_grade", Candy: evolveCandy50},
-	"porygon_z":  {Item: "sinnoh_stone", Candy: evolveCandy100},
-	"rhyperior":  {Item: "sinnoh_stone", Candy: evolveCandy100},
-	"electivire": {Item: "sinnoh_stone", Candy: evolveCandy100},
-	"magmortar":  {Item: "sinnoh_stone", Candy: evolveCandy100},
-	"gliscor":    {Item: "sinnoh_stone", Candy: evolveCandy100},
-	"dusknoir":   {Item: "sinnoh_stone", Candy: evolveCandy100},
-	"togekiss":   {Item: "sinnoh_stone", Candy: evolveCandy100},
-	"magnezone":  {Item: "magnetic_lure", Candy: evolveCandy100, Notes: "evolve near a Magnetic Lure module"},
-	"probopass":  {Item: "magnetic_lure", Candy: evolveCandy50, Notes: "evolve near a Magnetic Lure module"},
+	speciesSunflora:   {Item: itemSunStone, Candy: evolveCandy50},
+	speciesKingdra:    {Item: itemDragonScale, Candy: evolveCandy100},
+	speciesScizor:     {Item: itemMetalCoat, Candy: evolveCandy50},
+	speciesSteelix:    {Item: itemMetalCoat, Candy: evolveCandy50},
+	speciesPorygon2:   {Item: itemUpGrade, Candy: evolveCandy50},
+	speciesPorygonZ:   {Item: itemSinnohStone, Candy: evolveCandy100},
+	speciesRhyperior:  {Item: itemSinnohStone, Candy: evolveCandy100},
+	speciesElectivire: {Item: itemSinnohStone, Candy: evolveCandy100},
+	speciesMagmortar:  {Item: itemSinnohStone, Candy: evolveCandy100},
+	speciesGliscor:    {Item: itemSinnohStone, Candy: evolveCandy100},
+	speciesDusknoir:   {Item: itemSinnohStone, Candy: evolveCandy100},
+	speciesTogekiss:   {Item: itemSinnohStone, Candy: evolveCandy100},
+	speciesMagnezone:  {Item: itemMagneticLure, Candy: evolveCandy100, Notes: notesMagneticLure},
+	speciesProbopass:  {Item: itemMagneticLure, Candy: evolveCandy50, Notes: notesMagneticLure},
 }
 
 // evolutionRequirementFor returns the curated requirement for

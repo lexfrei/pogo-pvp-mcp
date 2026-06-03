@@ -227,7 +227,7 @@ func TestLevelFromCP_TooLow(t *testing.T) {
 	handler := tools.NewLevelFromCPTool(mgr).Handler()
 
 	_, _, err := handler(t.Context(), nil, tools.LevelFromCPParams{
-		Species: "dragonite",
+		Species: speciesDragonite,
 		IV:      [3]int{15, 15, 15},
 		CP:      5,
 	})

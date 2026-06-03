@@ -19,6 +19,11 @@ const spoofedClientIP = "203.0.113.45"
 // peer address; hoisted to a const for the same goconst reason.
 const loopbackIP = "127.0.0.1"
 
+// testTrustedCIDR is the loopback CIDR fed to ParseTrustedProxies
+// across the RealIP and rate-limit tests (both in package
+// httpmw_test); hoisted to a const for the same goconst reason.
+const testTrustedCIDR = "127.0.0.0/8"
+
 // TestRealIP_TrustedChainReturnsLeftmostUntrusted pins the secure
 // walk: when every proxy in the chain is in the trusted set, XFF
 // walking right-to-left lands on the left-most untrusted entry —
@@ -30,7 +35,7 @@ func TestRealIP_TrustedChainReturnsLeftmostUntrusted(t *testing.T) {
 	// 127.0.0.0/8 covers the httptest local peer (proxy_a closest
 	// to us). 198.51.100.0/24 covers the hypothetical proxy_b
 	// appearing earlier in the chain.
-	trusted, err := httpmw.ParseTrustedProxies([]string{"127.0.0.0/8", "198.51.100.0/24"})
+	trusted, err := httpmw.ParseTrustedProxies([]string{testTrustedCIDR, "198.51.100.0/24"})
 	if err != nil {
 		t.Fatalf("ParseTrustedProxies: %v", err)
 	}
@@ -77,7 +82,7 @@ func TestRealIP_TrustedChainReturnsLeftmostUntrusted(t *testing.T) {
 func TestRealIP_AttackerPrefixedXFFDoesNotSpoof(t *testing.T) {
 	t.Parallel()
 
-	trusted, err := httpmw.ParseTrustedProxies([]string{"127.0.0.0/8"})
+	trusted, err := httpmw.ParseTrustedProxies([]string{testTrustedCIDR})
 	if err != nil {
 		t.Fatalf("ParseTrustedProxies: %v", err)
 	}
@@ -178,7 +183,7 @@ func TestRealIP_UntrustedProxyIgnoresXForwardedFor(t *testing.T) {
 func TestRealIP_TrustedPeerNoXFFKeysOnPeer(t *testing.T) {
 	t.Parallel()
 
-	trusted, err := httpmw.ParseTrustedProxies([]string{"127.0.0.0/8"})
+	trusted, err := httpmw.ParseTrustedProxies([]string{testTrustedCIDR})
 	if err != nil {
 		t.Fatalf("ParseTrustedProxies: %v", err)
 	}

@@ -20,7 +20,7 @@ const (
 	cupAllLabel = "all"
 	// cupSpringLabel is the pvpoke id for the Spring Cup, exercised
 	// by several cup_rules tests.
-	cupSpringLabel = "spring"
+	cupSpringLabel = cupSpring
 )
 
 const cupRulesFixtureGamemaster = `{
@@ -135,7 +135,7 @@ func TestCupRules_SingleCup(t *testing.T) {
 		t.Fatalf("Include len = %d, want 1 (single type filter)", len(spring.Include))
 	}
 
-	wantTypes := []string{"water", "grass", "fairy"}
+	wantTypes := []string{typeWater, typeGrass, typeFairy}
 	if !slices.Equal(spring.Include[0].Values, wantTypes) {
 		t.Errorf("Include[0].Values = %v, want %v", spring.Include[0].Values, wantTypes)
 	}
@@ -152,7 +152,7 @@ func TestCupRules_UnknownCup(t *testing.T) {
 	tool := newCupRulesTool(t)
 	handler := tool.Handler()
 
-	_, _, err := handler(t.Context(), nil, tools.CupRulesParams{Cup: "phantom"})
+	_, _, err := handler(t.Context(), nil, tools.CupRulesParams{Cup: speciesPhantom})
 	if !errors.Is(err, tools.ErrUnknownCupRule) {
 		t.Errorf("error = %v, want wrapping ErrUnknownCupRule", err)
 	}
@@ -163,7 +163,7 @@ func TestCupRules_GamemasterNotLoaded(t *testing.T) {
 	t.Parallel()
 
 	gmMgr, err := gamemaster.NewManager(config.GamemasterConfig{
-		Source:    "http://127.0.0.1:1",
+		Source:    urlLoopback,
 		LocalPath: filepath.Join(t.TempDir(), "gm.json"),
 	})
 	if err != nil {
@@ -188,14 +188,14 @@ func TestCupRules_ResultIsDefensivelyCloned(t *testing.T) {
 	tool := newCupRulesTool(t)
 	handler := tool.Handler()
 
-	_, first, err := handler(t.Context(), nil, tools.CupRulesParams{Cup: "spring"})
+	_, first, err := handler(t.Context(), nil, tools.CupRulesParams{Cup: cupSpring})
 	if err != nil {
 		t.Fatalf("first: %v", err)
 	}
 
 	first.Entries[0].Include[0].Values[0] = "MUTATED"
 
-	_, second, err := handler(t.Context(), nil, tools.CupRulesParams{Cup: "spring"})
+	_, second, err := handler(t.Context(), nil, tools.CupRulesParams{Cup: cupSpring})
 	if err != nil {
 		t.Fatalf("second: %v", err)
 	}

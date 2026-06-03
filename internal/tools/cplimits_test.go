@@ -88,9 +88,9 @@ func TestCPLimitsTool_MedichamThreeLeagues(t *testing.T) {
 	}
 
 	want := map[string]int{
-		"little": 500,
-		"great":  1500,
-		"ultra":  2500,
+		"little":    500,
+		leagueGreat: 1500,
+		leagueUltra: 2500,
 	}
 
 	for _, entry := range result.Leagues {
@@ -141,22 +141,22 @@ func TestCPLimitsTool_MonotonicAcrossCaps(t *testing.T) {
 		byLeague[entry.League] = entry
 	}
 
-	if byLeague["great"].MaxCP <= byLeague["little"].MaxCP {
+	if byLeague[leagueGreat].MaxCP <= byLeague["little"].MaxCP {
 		t.Errorf("great MaxCP (%d) should exceed little (%d)",
-			byLeague["great"].MaxCP, byLeague["little"].MaxCP)
+			byLeague[leagueGreat].MaxCP, byLeague["little"].MaxCP)
 	}
-	if byLeague["ultra"].MaxCP < byLeague["great"].MaxCP {
+	if byLeague[leagueUltra].MaxCP < byLeague[leagueGreat].MaxCP {
 		t.Errorf("ultra MaxCP (%d) regressed vs great (%d)",
-			byLeague["ultra"].MaxCP, byLeague["great"].MaxCP)
+			byLeague[leagueUltra].MaxCP, byLeague[leagueGreat].MaxCP)
 	}
 
-	if byLeague["great"].MaxLevel < byLeague["little"].MaxLevel {
+	if byLeague[leagueGreat].MaxLevel < byLeague["little"].MaxLevel {
 		t.Errorf("great MaxLevel regressed vs little: %f < %f",
-			byLeague["great"].MaxLevel, byLeague["little"].MaxLevel)
+			byLeague[leagueGreat].MaxLevel, byLeague["little"].MaxLevel)
 	}
-	if byLeague["ultra"].MaxLevel < byLeague["great"].MaxLevel {
+	if byLeague[leagueUltra].MaxLevel < byLeague[leagueGreat].MaxLevel {
 		t.Errorf("ultra MaxLevel regressed vs great: %f < %f",
-			byLeague["ultra"].MaxLevel, byLeague["great"].MaxLevel)
+			byLeague[leagueUltra].MaxLevel, byLeague[leagueGreat].MaxLevel)
 	}
 }
 
@@ -172,7 +172,7 @@ func TestCPLimitsTool_DragoniteHigherLevelInUltra(t *testing.T) {
 	handler := tools.NewCPLimitsTool(mgr).Handler()
 
 	_, result, err := handler(t.Context(), nil, tools.CPLimitsParams{
-		Species: "dragonite",
+		Species: speciesDragonite,
 		IV:      [3]int{15, 15, 15},
 	})
 	if err != nil {
@@ -191,9 +191,9 @@ func TestCPLimitsTool_DragoniteHigherLevelInUltra(t *testing.T) {
 		}
 	}
 
-	if byLeague["ultra"].MaxLevel <= byLeague["great"].MaxLevel {
+	if byLeague[leagueUltra].MaxLevel <= byLeague[leagueGreat].MaxLevel {
 		t.Errorf("dragonite ultra.MaxLevel (%.1f) should exceed great (%.1f)",
-			byLeague["ultra"].MaxLevel, byLeague["great"].MaxLevel)
+			byLeague[leagueUltra].MaxLevel, byLeague[leagueGreat].MaxLevel)
 	}
 }
 
@@ -243,19 +243,19 @@ func TestCPLimitsTool_XLFlagRaisesCeiling(t *testing.T) {
 		byLeagueXL[entry.League] = entry
 	}
 
-	if byLeagueNoXL["ultra"].MaxLevel != 40.0 {
+	if byLeagueNoXL[leagueUltra].MaxLevel != 40.0 {
 		t.Errorf("noXL ultra.MaxLevel = %.1f, want 40.0 (hard cap without XL candy)",
-			byLeagueNoXL["ultra"].MaxLevel)
+			byLeagueNoXL[leagueUltra].MaxLevel)
 	}
 
-	if byLeagueXL["ultra"].MaxLevel <= byLeagueNoXL["ultra"].MaxLevel {
+	if byLeagueXL[leagueUltra].MaxLevel <= byLeagueNoXL[leagueUltra].MaxLevel {
 		t.Errorf("XL ultra.MaxLevel (%.1f) should exceed noXL (%.1f)",
-			byLeagueXL["ultra"].MaxLevel, byLeagueNoXL["ultra"].MaxLevel)
+			byLeagueXL[leagueUltra].MaxLevel, byLeagueNoXL[leagueUltra].MaxLevel)
 	}
 
-	if byLeagueXL["ultra"].MaxCP <= byLeagueNoXL["ultra"].MaxCP {
+	if byLeagueXL[leagueUltra].MaxCP <= byLeagueNoXL[leagueUltra].MaxCP {
 		t.Errorf("XL ultra.MaxCP (%d) should exceed noXL (%d)",
-			byLeagueXL["ultra"].MaxCP, byLeagueNoXL["ultra"].MaxCP)
+			byLeagueXL[leagueUltra].MaxCP, byLeagueNoXL[leagueUltra].MaxCP)
 	}
 }
 
@@ -266,7 +266,7 @@ func TestCPLimitsTool_UnknownSpecies(t *testing.T) {
 	handler := tools.NewCPLimitsTool(mgr).Handler()
 
 	_, _, err := handler(t.Context(), nil, tools.CPLimitsParams{
-		Species: "missingno",
+		Species: speciesMissingno,
 		IV:      [3]int{15, 15, 15},
 	})
 	if !errors.Is(err, tools.ErrUnknownSpecies) {
@@ -293,7 +293,7 @@ func TestCPLimitsTool_NoGamemasterLoaded(t *testing.T) {
 	t.Parallel()
 
 	mgr, err := gamemaster.NewManager(config.GamemasterConfig{
-		Source:    "http://example.invalid",
+		Source:    urlExampleInvalid,
 		LocalPath: filepath.Join(t.TempDir(), "gm.json"),
 	})
 	if err != nil {

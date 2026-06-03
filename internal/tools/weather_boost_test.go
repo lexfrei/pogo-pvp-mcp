@@ -50,8 +50,6 @@ func TestWeatherBoost_FullTable(t *testing.T) {
 func TestWeatherBoost_SingleWeather(t *testing.T) {
 	t.Parallel()
 
-	const weatherSunny = "sunny"
-
 	tool := tools.NewWeatherBoostTool()
 	handler := tool.Handler()
 
@@ -76,10 +74,10 @@ func TestWeatherBoost_SingleWeather(t *testing.T) {
 	if !slices.Contains(sunny.BoostedTypes, "fire") {
 		t.Errorf("BoostedTypes = %v, want to contain \"fire\"", sunny.BoostedTypes)
 	}
-	if !slices.Contains(sunny.BoostedTypes, "grass") {
+	if !slices.Contains(sunny.BoostedTypes, typeGrass) {
 		t.Errorf("BoostedTypes = %v, want to contain \"grass\"", sunny.BoostedTypes)
 	}
-	if !slices.Contains(sunny.BoostedTypes, "ground") {
+	if !slices.Contains(sunny.BoostedTypes, typeGround) {
 		t.Errorf("BoostedTypes = %v, want to contain \"ground\"", sunny.BoostedTypes)
 	}
 }
@@ -120,9 +118,9 @@ func TestWeatherBoost_AllTypesCovered(t *testing.T) {
 	}
 
 	canonicalTypes := []string{
-		"normal", "fighting", "flying", "poison", "ground", "rock",
-		"bug", "ghost", "steel", "fire", "water", "grass",
-		"electric", "psychic", "ice", "dragon", "dark", "fairy",
+		"normal", "fighting", "flying", "poison", typeGround, typeRock,
+		"bug", "ghost", "steel", "fire", typeWater, typeGrass,
+		"electric", "psychic", "ice", "dragon", "dark", typeFairy,
 	}
 
 	for _, typeName := range canonicalTypes {
@@ -139,7 +137,7 @@ func TestWeatherBoost_AllTypesCovered(t *testing.T) {
 }
 
 // TestWeatherBoost_CaseInsensitive pins that "Sunny" (mixed-case
-// LLM output) resolves identically to "sunny", matching
+// LLM output) resolves identically to weatherSunny, matching
 // pvp_type_matchup's case-folding behaviour.
 func TestWeatherBoost_CaseInsensitive(t *testing.T) {
 	t.Parallel()
@@ -152,7 +150,7 @@ func TestWeatherBoost_CaseInsensitive(t *testing.T) {
 		t.Fatalf("mixed-case handler: %v", err)
 	}
 
-	_, lowerCase, err := handler(t.Context(), nil, tools.WeatherBoostParams{Weather: "sunny"})
+	_, lowerCase, err := handler(t.Context(), nil, tools.WeatherBoostParams{Weather: weatherSunny})
 	if err != nil {
 		t.Fatalf("lower-case handler: %v", err)
 	}
@@ -172,7 +170,7 @@ func TestWeatherBoost_SingleWeatherCarriesDisclaimer(t *testing.T) {
 	tool := tools.NewWeatherBoostTool()
 	handler := tool.Handler()
 
-	_, result, err := handler(t.Context(), nil, tools.WeatherBoostParams{Weather: "sunny"})
+	_, result, err := handler(t.Context(), nil, tools.WeatherBoostParams{Weather: weatherSunny})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
 	}
@@ -202,14 +200,14 @@ func TestWeatherBoost_ResultIsDefensivelyCloned(t *testing.T) {
 	tool := tools.NewWeatherBoostTool()
 	handler := tool.Handler()
 
-	_, first, err := handler(t.Context(), nil, tools.WeatherBoostParams{Weather: "rainy"})
+	_, first, err := handler(t.Context(), nil, tools.WeatherBoostParams{Weather: weatherRainy})
 	if err != nil {
 		t.Fatalf("first: %v", err)
 	}
 
 	first.Entries[0].BoostedTypes[0] = mutationSentinel
 
-	_, second, err := handler(t.Context(), nil, tools.WeatherBoostParams{Weather: "rainy"})
+	_, second, err := handler(t.Context(), nil, tools.WeatherBoostParams{Weather: weatherRainy})
 	if err != nil {
 		t.Fatalf("second: %v", err)
 	}

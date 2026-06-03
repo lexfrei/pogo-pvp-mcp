@@ -19,19 +19,29 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
+// Heavy-tool method names. These get the longer Timeout budget
+// because team-sweep tools legitimately run tens of seconds on
+// realistic pools; everything else should finish in single-digit
+// seconds.
+const (
+	toolTeamBuilder    = "pvp_team_builder"
+	toolTeamAnalysis   = "pvp_team_analysis"
+	toolThreatCoverage = "pvp_threat_coverage"
+	toolCounterFinder  = "pvp_counter_finder"
+	toolRankBatch      = "pvp_rank_batch"
+)
+
 // heavyTools is the hard-coded set of method names that get the
-// longer Timeout budget. Team-sweep tools legitimately run tens of
-// seconds on realistic pools; everything else should finish in
-// single-digit seconds. Kept as a map (not a slice) so the lookup
+// longer Timeout budget. Kept as a map (not a slice) so the lookup
 // stays O(1) on the hot path.
 //
 //nolint:gochecknoglobals // read-only lookup table
 var heavyTools = map[string]struct{}{
-	"pvp_team_builder":    {},
-	"pvp_team_analysis":   {},
-	"pvp_threat_coverage": {},
-	"pvp_counter_finder":  {},
-	"pvp_rank_batch":      {},
+	toolTeamBuilder:    {},
+	toolTeamAnalysis:   {},
+	toolThreatCoverage: {},
+	toolCounterFinder:  {},
+	toolRankBatch:      {},
 }
 
 // Timeout returns a Middleware that wraps every incoming method

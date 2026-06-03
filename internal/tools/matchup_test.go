@@ -78,18 +78,18 @@ func TestMatchupTool_ReturnsBattleResult(t *testing.T) {
 
 	_, result, err := handler(t.Context(), nil, tools.MatchupParams{
 		Attacker: tools.Combatant{
-			Species:      "medicham",
+			Species:      speciesMedicham,
 			IV:           [3]int{15, 15, 15},
 			Level:        40,
-			FastMove:     "COUNTER",
-			ChargedMoves: []string{"ICE_PUNCH"},
+			FastMove:     moveCounter,
+			ChargedMoves: []string{moveIcePunch},
 		},
 		Defender: tools.Combatant{
-			Species:      "machamp",
+			Species:      speciesMachamp,
 			IV:           [3]int{10, 10, 10},
 			Level:        30,
-			FastMove:     "COUNTER",
-			ChargedMoves: []string{"CROSS_CHOP"},
+			FastMove:     moveCounter,
+			ChargedMoves: []string{moveCrossChop},
 		},
 		Shields: [2]int{2, 2},
 	})
@@ -113,16 +113,16 @@ func TestMatchupTool_UnknownSpecies(t *testing.T) {
 
 	_, _, err := handler(t.Context(), nil, tools.MatchupParams{
 		Attacker: tools.Combatant{
-			Species:  "missingno",
+			Species:  speciesMissingno,
 			IV:       [3]int{15, 15, 15},
 			Level:    40,
-			FastMove: "COUNTER",
+			FastMove: moveCounter,
 		},
 		Defender: tools.Combatant{
-			Species:  "machamp",
+			Species:  speciesMachamp,
 			IV:       [3]int{10, 10, 10},
 			Level:    30,
-			FastMove: "COUNTER",
+			FastMove: moveCounter,
 		},
 	})
 	if !errors.Is(err, tools.ErrUnknownSpecies) {
@@ -138,16 +138,16 @@ func TestMatchupTool_UnknownFastMove(t *testing.T) {
 
 	_, _, err := handler(t.Context(), nil, tools.MatchupParams{
 		Attacker: tools.Combatant{
-			Species:  "medicham",
+			Species:  speciesMedicham,
 			IV:       [3]int{15, 15, 15},
 			Level:    40,
-			FastMove: "NOT_A_MOVE",
+			FastMove: moveNotAMove,
 		},
 		Defender: tools.Combatant{
-			Species:  "machamp",
+			Species:  speciesMachamp,
 			IV:       [3]int{10, 10, 10},
 			Level:    30,
-			FastMove: "COUNTER",
+			FastMove: moveCounter,
 		},
 	})
 	if !errors.Is(err, tools.ErrUnknownMove) {
@@ -163,17 +163,17 @@ func TestMatchupTool_FastMoveUsedAsCharged(t *testing.T) {
 
 	_, _, err := handler(t.Context(), nil, tools.MatchupParams{
 		Attacker: tools.Combatant{
-			Species:      "medicham",
+			Species:      speciesMedicham,
 			IV:           [3]int{15, 15, 15},
 			Level:        40,
-			FastMove:     "COUNTER",
-			ChargedMoves: []string{"COUNTER"}, // COUNTER is a fast move
+			FastMove:     moveCounter,
+			ChargedMoves: []string{moveCounter}, // COUNTER is a fast move
 		},
 		Defender: tools.Combatant{
-			Species:  "machamp",
+			Species:  speciesMachamp,
 			IV:       [3]int{10, 10, 10},
 			Level:    30,
-			FastMove: "COUNTER",
+			FastMove: moveCounter,
 		},
 	})
 	if !errors.Is(err, tools.ErrMoveCategoryMismatch) {
@@ -189,16 +189,16 @@ func TestMatchupTool_ChargedMoveUsedAsFast(t *testing.T) {
 
 	_, _, err := handler(t.Context(), nil, tools.MatchupParams{
 		Attacker: tools.Combatant{
-			Species:  "medicham",
+			Species:  speciesMedicham,
 			IV:       [3]int{15, 15, 15},
 			Level:    40,
-			FastMove: "ICE_PUNCH", // ICE_PUNCH is a charged move
+			FastMove: moveIcePunch, // ICE_PUNCH is a charged move
 		},
 		Defender: tools.Combatant{
-			Species:  "machamp",
+			Species:  speciesMachamp,
 			IV:       [3]int{10, 10, 10},
 			Level:    30,
-			FastMove: "COUNTER",
+			FastMove: moveCounter,
 		},
 	})
 	if !errors.Is(err, tools.ErrMoveCategoryMismatch) {
@@ -214,18 +214,18 @@ func TestMatchupTool_ShieldsCountedInResult(t *testing.T) {
 
 	_, result, err := handler(t.Context(), nil, tools.MatchupParams{
 		Attacker: tools.Combatant{
-			Species:      "medicham",
+			Species:      speciesMedicham,
 			IV:           [3]int{15, 15, 15},
 			Level:        40,
-			FastMove:     "COUNTER",
-			ChargedMoves: []string{"ICE_PUNCH"},
+			FastMove:     moveCounter,
+			ChargedMoves: []string{moveIcePunch},
 		},
 		Defender: tools.Combatant{
-			Species:      "machamp",
+			Species:      speciesMachamp,
 			IV:           [3]int{10, 10, 10},
 			Level:        30,
-			FastMove:     "COUNTER",
-			ChargedMoves: []string{"CROSS_CHOP"},
+			FastMove:     moveCounter,
+			ChargedMoves: []string{moveCrossChop},
 		},
 		Shields: [2]int{1, 2},
 	})
@@ -283,16 +283,16 @@ func TestMatchupTool_ShadowOptionResolvesToShadowEntry(t *testing.T) {
 			Species:  speciesMedicham,
 			IV:       [3]int{15, 15, 15},
 			Level:    40,
-			FastMove: "COUNTER", ChargedMoves: []string{"ICE_PUNCH"},
+			FastMove: moveCounter, ChargedMoves: []string{moveIcePunch},
 			Options: tools.CombatantOptions{Shadow: true},
 		},
 		Defender: tools.Combatant{
-			Species:  "machamp",
+			Species:  speciesMachamp,
 			IV:       [3]int{15, 15, 15},
 			Level:    40,
-			FastMove: "COUNTER", ChargedMoves: []string{"CROSS_CHOP"},
+			FastMove: moveCounter, ChargedMoves: []string{moveCrossChop},
 		},
-		League:  "great",
+		League:  leagueGreat,
 		Shields: [2]int{1, 1},
 	})
 	if err != nil {
@@ -358,7 +358,7 @@ func TestMatchupTool_ShadowMultipliersAffectDamage(t *testing.T) {
 		Species:  speciesMedicham,
 		IV:       [3]int{15, 15, 15},
 		Level:    40,
-		FastMove: "COUNTER", ChargedMoves: []string{"ICE_PUNCH"},
+		FastMove: moveCounter, ChargedMoves: []string{moveIcePunch},
 	}
 	defender := attacker
 
@@ -366,7 +366,7 @@ func TestMatchupTool_ShadowMultipliersAffectDamage(t *testing.T) {
 	_, baseline, err := handler(t.Context(), nil, tools.MatchupParams{
 		Attacker: attacker,
 		Defender: defender,
-		League:   "great",
+		League:   leagueGreat,
 		Shields:  [2]int{0, 0},
 	})
 	if err != nil {
@@ -383,7 +383,7 @@ func TestMatchupTool_ShadowMultipliersAffectDamage(t *testing.T) {
 	_, withShadow, err := handler(t.Context(), nil, tools.MatchupParams{
 		Attacker: shadowAttacker,
 		Defender: defender,
-		League:   "great",
+		League:   leagueGreat,
 		Shields:  [2]int{0, 0},
 	})
 	if err != nil {
@@ -412,23 +412,23 @@ func TestMatchupTool_ShadowOptionFallsBackWhenVariantMissing(t *testing.T) {
 			Species:  speciesMedicham,
 			IV:       [3]int{15, 15, 15},
 			Level:    40,
-			FastMove: "COUNTER", ChargedMoves: []string{"ICE_PUNCH"},
+			FastMove: moveCounter, ChargedMoves: []string{moveIcePunch},
 			Options: tools.CombatantOptions{Shadow: true},
 		},
 		Defender: tools.Combatant{
-			Species:  "machamp",
+			Species:  speciesMachamp,
 			IV:       [3]int{15, 15, 15},
 			Level:    40,
-			FastMove: "COUNTER", ChargedMoves: []string{"CROSS_CHOP"},
+			FastMove: moveCounter, ChargedMoves: []string{moveCrossChop},
 		},
-		League:  "great",
+		League:  leagueGreat,
 		Shields: [2]int{1, 1},
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
 	}
 
-	if result.Attacker.ResolvedSpeciesID != "medicham" {
+	if result.Attacker.ResolvedSpeciesID != speciesMedicham {
 		t.Errorf("Attacker.ResolvedSpeciesID = %q, want base \"medicham\" (fallback)",
 			result.Attacker.ResolvedSpeciesID)
 	}
@@ -443,7 +443,7 @@ func TestMatchupTool_ShadowOptionFallsBackWhenVariantMissing(t *testing.T) {
 // empty, ResolveMoveset must key on the shadow species id so the
 // caller gets pvpoke's shadow-form recommended build, not the base
 // species' moveset. The fixture ranks "medicham_shadow" with a
-// distinct moveset (COUNTER + PSYCHIC) vs "medicham" (COUNTER +
+// distinct moveset (COUNTER + PSYCHIC) vs speciesMedicham (COUNTER +
 // ICE_PUNCH) — the auto-resolve must pick the shadow row.
 func TestMatchupTool_ShadowAutoResolvesShadowRankings(t *testing.T) {
 	t.Parallel()
@@ -501,19 +501,19 @@ func TestMatchupTool_ShadowAutoResolvesShadowRankings(t *testing.T) {
 			Options: tools.CombatantOptions{Shadow: true},
 		},
 		Defender: tools.Combatant{
-			Species:  "machamp",
+			Species:  speciesMachamp,
 			IV:       [3]int{15, 15, 15},
 			Level:    40,
-			FastMove: "COUNTER", ChargedMoves: []string{"CROSS_CHOP"},
+			FastMove: moveCounter, ChargedMoves: []string{moveCrossChop},
 		},
-		League:  "great",
+		League:  leagueGreat,
 		Shields: [2]int{1, 1},
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
 	}
 
-	wantCharged := []string{"PSYCHIC"}
+	wantCharged := []string{movePsychic}
 	if len(result.Attacker.ChargedMoves) != 1 ||
 		result.Attacker.ChargedMoves[0] != wantCharged[0] {
 		t.Errorf("Attacker.ChargedMoves = %v, want %v (resolved from shadow rankings row)",
@@ -572,16 +572,16 @@ func TestMatchupTool_ShadowOptionToleratesShadowSuffixedSpecies(t *testing.T) {
 			Species:  speciesMedichamShadow,
 			IV:       [3]int{15, 15, 15},
 			Level:    40,
-			FastMove: "COUNTER", ChargedMoves: []string{"ICE_PUNCH"},
+			FastMove: moveCounter, ChargedMoves: []string{moveIcePunch},
 			Options: tools.CombatantOptions{Shadow: true},
 		},
 		Defender: tools.Combatant{
-			Species:  "machamp",
+			Species:  speciesMachamp,
 			IV:       [3]int{15, 15, 15},
 			Level:    40,
-			FastMove: "COUNTER", ChargedMoves: []string{"CROSS_CHOP"},
+			FastMove: moveCounter, ChargedMoves: []string{moveCrossChop},
 		},
-		League:  "great",
+		League:  leagueGreat,
 		Shields: [2]int{1, 1},
 	})
 	if err != nil {
@@ -616,15 +616,15 @@ func TestMatchupTool_PurifiedIsNoOpOnBattle(t *testing.T) {
 		Species:      speciesMedicham,
 		IV:           [3]int{15, 15, 15},
 		Level:        40,
-		FastMove:     "COUNTER",
-		ChargedMoves: []string{"ICE_PUNCH"},
+		FastMove:     moveCounter,
+		ChargedMoves: []string{moveIcePunch},
 	}
 	defender := tools.Combatant{
-		Species:      "machamp",
+		Species:      speciesMachamp,
 		IV:           [3]int{10, 10, 10},
 		Level:        30,
-		FastMove:     "COUNTER",
-		ChargedMoves: []string{"CROSS_CHOP"},
+		FastMove:     moveCounter,
+		ChargedMoves: []string{moveCrossChop},
 	}
 
 	_, withoutPurified, err := handler(t.Context(), nil, tools.MatchupParams{

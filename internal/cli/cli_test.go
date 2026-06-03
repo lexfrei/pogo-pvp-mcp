@@ -56,7 +56,7 @@ func TestNewRootCommand_FetchGMHappyPath(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 
 	root := cli.NewRootCommand(&stdout, &stderr)
-	root.SetArgs([]string{"fetch-gm"})
+	root.SetArgs([]string{cmdFetchGM})
 
 	err := root.Execute()
 	if err != nil {
@@ -86,7 +86,7 @@ func TestNewRootCommand_FetchGMUpstreamError(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 
 	root := cli.NewRootCommand(&stdout, &stderr)
-	root.SetArgs([]string{"fetch-gm"})
+	root.SetArgs([]string{cmdFetchGM})
 
 	err := root.Execute()
 	if err == nil {
@@ -103,7 +103,7 @@ func TestNewRootCommand_NonexistentConfigFlag(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 
 	root := cli.NewRootCommand(&stdout, &stderr)
-	root.SetArgs([]string{"--config", "/definitely/not/here.yaml", "fetch-gm"})
+	root.SetArgs([]string{"--config", "/definitely/not/here.yaml", cmdFetchGM})
 
 	err := root.Execute()
 	if err == nil {
@@ -123,7 +123,7 @@ func TestNewRootCommand_ConfigEnvDefault(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 
 	root := cli.NewRootCommand(&stdout, &stderr)
-	root.SetArgs([]string{"fetch-gm"})
+	root.SetArgs([]string{cmdFetchGM})
 
 	err := root.Execute()
 	if err == nil {
@@ -157,7 +157,7 @@ func TestNewRootCommand_DiffGMNoChanges(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 
 	root := cli.NewRootCommand(&stdout, &stderr)
-	root.SetArgs([]string{"diff-gm"})
+	root.SetArgs([]string{cmdDiffGM})
 
 	err = root.Execute()
 	if err != nil {
@@ -213,7 +213,7 @@ func TestNewRootCommand_DiffGMDetectsDrift(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 
 	root := cli.NewRootCommand(&stdout, &stderr)
-	root.SetArgs([]string{"diff-gm"})
+	root.SetArgs([]string{cmdDiffGM})
 
 	err = root.Execute()
 	if !errors.Is(err, cli.ErrDiffDirty) {
@@ -257,7 +257,7 @@ func TestNewRootCommand_DiffGMAgainstMissingFileErrors(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 
 	root := cli.NewRootCommand(&stdout, &stderr)
-	root.SetArgs([]string{"diff-gm", "--against", "/definitely/not/here.json"})
+	root.SetArgs([]string{cmdDiffGM, "--against", "/definitely/not/here.json"})
 
 	err = root.Execute()
 	if err == nil {
@@ -311,7 +311,7 @@ func TestNewRootCommand_DiffGMRespectsContextDeadline(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 
 	root := cli.NewRootCommand(&stdout, &stderr)
-	root.SetArgs([]string{"diff-gm"})
+	root.SetArgs([]string{cmdDiffGM})
 
 	ctx, cancel := context.WithTimeout(t.Context(), 500*time.Millisecond)
 	defer cancel()

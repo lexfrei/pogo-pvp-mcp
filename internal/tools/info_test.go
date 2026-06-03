@@ -91,7 +91,7 @@ func TestSpeciesInfo_HappyPath(t *testing.T) {
 	if result.PreEvolution != "meditite" {
 		t.Errorf("PreEvolution = %q, want meditite", result.PreEvolution)
 	}
-	if !slices.Equal(result.LegacyMoves, []string{"PSYCHIC"}) {
+	if !slices.Equal(result.LegacyMoves, []string{movePsychic}) {
 		t.Errorf("LegacyMoves = %v, want [PSYCHIC]", result.LegacyMoves)
 	}
 
@@ -117,7 +117,7 @@ func TestSpeciesInfo_UnknownSpecies(t *testing.T) {
 	handler := tools.NewSpeciesInfoTool(mgr, nil).Handler()
 
 	_, _, err := handler(t.Context(), nil, tools.SpeciesInfoParams{
-		Species: "missingno",
+		Species: speciesMissingno,
 	})
 	if !errors.Is(err, tools.ErrUnknownSpecies) {
 		t.Errorf("error = %v, want wrapping ErrUnknownSpecies", err)
@@ -146,7 +146,7 @@ func TestMoveInfo_HappyPath(t *testing.T) {
 	if result.Power != 90 {
 		t.Errorf("Power = %d, want 90", result.Power)
 	}
-	if !slices.Equal(result.LegacyOnSpecies, []string{"medicham"}) {
+	if !slices.Equal(result.LegacyOnSpecies, []string{speciesMedicham}) {
 		t.Errorf("LegacyOnSpecies = %v, want [medicham] (only species with PSYCHIC legacy)",
 			result.LegacyOnSpecies)
 	}
@@ -158,7 +158,7 @@ func TestMoveInfo_UnknownMove(t *testing.T) {
 	mgr := newManagerWithFixture(t, infoFixtureGamemaster)
 	handler := tools.NewMoveInfoTool(mgr).Handler()
 
-	_, _, err := handler(t.Context(), nil, tools.MoveInfoParams{MoveID: "NOT_A_MOVE"})
+	_, _, err := handler(t.Context(), nil, tools.MoveInfoParams{MoveID: moveNotAMove})
 	if !errors.Is(err, tools.ErrUnknownMove) {
 		t.Errorf("error = %v, want wrapping ErrUnknownMove", err)
 	}
@@ -172,8 +172,8 @@ func TestTypeMatchup_DoubleResistance(t *testing.T) {
 	// Grass vs Water(1.6) × Ground(1.6) = 2.56 — classic Swampert-
 	// over-Water pattern used as a sanity check for the chart math.
 	_, result, err := handler(t.Context(), nil, tools.TypeMatchupParams{
-		AttackerType:  "grass",
-		DefenderTypes: []string{"water", "ground"},
+		AttackerType:  typeGrass,
+		DefenderTypes: []string{typeWater, typeGround},
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -190,7 +190,7 @@ func TestTypeMatchup_MissingAttackerType(t *testing.T) {
 	handler := tools.NewTypeMatchupTool().Handler()
 
 	_, _, err := handler(t.Context(), nil, tools.TypeMatchupParams{
-		DefenderTypes: []string{"water"},
+		DefenderTypes: []string{typeWater},
 	})
 	if !errors.Is(err, tools.ErrMissingAttackerType) {
 		t.Errorf("error = %v, want wrapping ErrMissingAttackerType", err)
@@ -207,7 +207,7 @@ func TestTypeMatchup_UnknownAttackerType(t *testing.T) {
 
 	_, _, err := handler(t.Context(), nil, tools.TypeMatchupParams{
 		AttackerType:  "cosmic",
-		DefenderTypes: []string{"water"},
+		DefenderTypes: []string{typeWater},
 	})
 	if !errors.Is(err, tools.ErrUnknownType) {
 		t.Errorf("error = %v, want wrapping ErrUnknownType", err)
@@ -223,8 +223,8 @@ func TestTypeMatchup_UnknownDefenderType(t *testing.T) {
 	handler := tools.NewTypeMatchupTool().Handler()
 
 	_, _, err := handler(t.Context(), nil, tools.TypeMatchupParams{
-		AttackerType:  "grass",
-		DefenderTypes: []string{"water", "krypton"},
+		AttackerType:  typeGrass,
+		DefenderTypes: []string{typeWater, "krypton"},
 	})
 	if !errors.Is(err, tools.ErrUnknownType) {
 		t.Errorf("error = %v, want wrapping ErrUnknownType", err)
@@ -247,11 +247,11 @@ func TestTypeMatchup_CasingNormalized(t *testing.T) {
 		t.Fatalf("handler: %v", err)
 	}
 
-	if result.AttackerType != "grass" {
+	if result.AttackerType != typeGrass {
 		t.Errorf("AttackerType = %q, want grass", result.AttackerType)
 	}
 
-	wantDefenders := []string{"water", "ground"}
+	wantDefenders := []string{typeWater, typeGround}
 	if !slices.Equal(result.DefenderTypes, wantDefenders) {
 		t.Errorf("DefenderTypes = %v, want %v", result.DefenderTypes, wantDefenders)
 	}
@@ -265,7 +265,7 @@ func TestSpeciesInfo_NoGamemasterLoaded(t *testing.T) {
 	t.Parallel()
 
 	mgr, err := gamemaster.NewManager(config.GamemasterConfig{
-		Source:    "http://example.invalid",
+		Source:    urlExampleInvalid,
 		LocalPath: filepath.Join(t.TempDir(), "gm.json"),
 	})
 	if err != nil {
@@ -286,7 +286,7 @@ func TestMoveInfo_NoGamemasterLoaded(t *testing.T) {
 	t.Parallel()
 
 	mgr, err := gamemaster.NewManager(config.GamemasterConfig{
-		Source:    "http://example.invalid",
+		Source:    urlExampleInvalid,
 		LocalPath: filepath.Join(t.TempDir(), "gm.json"),
 	})
 	if err != nil {
@@ -295,7 +295,7 @@ func TestMoveInfo_NoGamemasterLoaded(t *testing.T) {
 
 	handler := tools.NewMoveInfoTool(mgr).Handler()
 
-	_, _, err = handler(t.Context(), nil, tools.MoveInfoParams{MoveID: "COUNTER"})
+	_, _, err = handler(t.Context(), nil, tools.MoveInfoParams{MoveID: moveCounter})
 	if !errors.Is(err, tools.ErrGamemasterNotLoaded) {
 		t.Errorf("error = %v, want wrapping ErrGamemasterNotLoaded", err)
 	}
@@ -314,7 +314,7 @@ func TestMoveInfo_NonLegacyMoveEmptySlice(t *testing.T) {
 
 	// COUNTER is not legacy on any fixture species (PSYCHIC is the
 	// only legacy-flagged move on medicham).
-	_, result, err := handler(t.Context(), nil, tools.MoveInfoParams{MoveID: "COUNTER"})
+	_, result, err := handler(t.Context(), nil, tools.MoveInfoParams{MoveID: moveCounter})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
 	}
@@ -376,7 +376,7 @@ func TestSpeciesInfo_EmptyListsNotNull(t *testing.T) {
 	mgr := newManagerWithFixture(t, bareFixture)
 	handler := tools.NewSpeciesInfoTool(mgr, nil).Handler()
 
-	_, result, err := handler(t.Context(), nil, tools.SpeciesInfoParams{Species: "ditto"})
+	_, result, err := handler(t.Context(), nil, tools.SpeciesInfoParams{Species: speciesDitto})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
 	}
@@ -418,8 +418,8 @@ func TestTypeMatchup_TooManyDefenderTypes(t *testing.T) {
 	handler := tools.NewTypeMatchupTool().Handler()
 
 	_, _, err := handler(t.Context(), nil, tools.TypeMatchupParams{
-		AttackerType:  "grass",
-		DefenderTypes: []string{"water", "ground", "rock"},
+		AttackerType:  typeGrass,
+		DefenderTypes: []string{typeWater, typeGround, typeRock},
 	})
 	if !errors.Is(err, tools.ErrTooManyDefenderTypes) {
 		t.Errorf("error = %v, want wrapping ErrTooManyDefenderTypes", err)

@@ -146,14 +146,14 @@ func TestEvolutionTargetTool_OrphanPreEvolution(t *testing.T) {
 	handler := tool.Handler()
 
 	_, result, err := handler(t.Context(), nil, tools.EvolutionTargetParams{
-		TargetSpecies: "alakazam",
+		TargetSpecies: speciesAlakazam,
 		League:        leagueGreat,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
 	}
 
-	if result.FromSpecies != "alakazam" {
+	if result.FromSpecies != speciesAlakazam {
 		t.Errorf("FromSpecies = %q, want alakazam (walk truncated at orphan PreEvolution)",
 			result.FromSpecies)
 	}
@@ -192,7 +192,7 @@ func TestEvolutionTargetTool_UnknownSpecies(t *testing.T) {
 	handler := tool.Handler()
 
 	_, _, err := handler(t.Context(), nil, tools.EvolutionTargetParams{
-		TargetSpecies: "farigiraf",
+		TargetSpecies: speciesFarigiraf,
 		League:        leagueGreat,
 	})
 	if !errors.Is(err, tools.ErrUnknownSpecies) {
@@ -230,7 +230,7 @@ func TestEvolutionTargetTool_InvalidTargetPercent(t *testing.T) {
 		name    string
 		percent float64
 	}{
-		{"negative", -1},
+		{labelNegative, -1},
 		{"above_100", 101},
 	}
 
@@ -408,7 +408,7 @@ func TestEvolutionTargetTool_XLAllowedShiftsCeiling(t *testing.T) {
 
 	_, noXL, err := handler(t.Context(), nil, tools.EvolutionTargetParams{
 		TargetSpecies: speciesBlastoise,
-		League:        "master",
+		League:        leagueMaster,
 		XL:            false,
 	})
 	if err != nil {
@@ -417,7 +417,7 @@ func TestEvolutionTargetTool_XLAllowedShiftsCeiling(t *testing.T) {
 
 	_, withXL, err := handler(t.Context(), nil, tools.EvolutionTargetParams{
 		TargetSpecies: speciesBlastoise,
-		League:        "master",
+		League:        leagueMaster,
 		XL:            true,
 	})
 	if err != nil {
@@ -508,7 +508,7 @@ func TestEvolutionTargetTool_MaxRootCPAtEvolvedLevelContract(t *testing.T) {
 
 	_, result, err := handler(t.Context(), nil, tools.EvolutionTargetParams{
 		TargetSpecies: speciesBlastoise,
-		League:        "master",
+		League:        leagueMaster,
 		XL:            true,
 	})
 	if err != nil {

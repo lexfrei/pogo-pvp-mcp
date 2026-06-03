@@ -12,6 +12,11 @@ import (
 
 const transportStdio = "stdio"
 
+// testMCPListenAddr is the HTTP listen address asserted across the
+// MCP-HTTP config cases; hoisted to a const for the goconst
+// two-references threshold.
+const testMCPListenAddr = "0.0.0.0:8080"
+
 func TestLoad_Defaults(t *testing.T) {
 	t.Parallel()
 
@@ -115,7 +120,7 @@ engine:
 func TestLoad_EnvOverride(t *testing.T) {
 	t.Setenv("POGO_PVP_LOG_LEVEL", "warn")
 	t.Setenv("POGO_PVP_SERVER_HTTP_PORT", "9999")
-	t.Setenv("POGO_PVP_SERVER_MCP_HTTP_LISTEN", "0.0.0.0:8080")
+	t.Setenv("POGO_PVP_SERVER_MCP_HTTP_LISTEN", testMCPListenAddr)
 
 	cfg, err := config.Load("")
 	if err != nil {
@@ -128,7 +133,7 @@ func TestLoad_EnvOverride(t *testing.T) {
 	if cfg.Server.HTTPPort != 9999 {
 		t.Errorf("Server.HTTPPort = %d, want 9999 (from env)", cfg.Server.HTTPPort)
 	}
-	if cfg.Server.MCPHTTPListen != "0.0.0.0:8080" {
+	if cfg.Server.MCPHTTPListen != testMCPListenAddr {
 		t.Errorf("Server.MCPHTTPListen = %q, want \"0.0.0.0:8080\" (from env)",
 			cfg.Server.MCPHTTPListen)
 	}
@@ -226,7 +231,7 @@ func TestValidate_AcceptableMCPHTTPListen(t *testing.T) {
 
 	cases := []string{
 		":8080",
-		"0.0.0.0:8080",
+		testMCPListenAddr,
 		"127.0.0.1:18080",
 		"[::]:8080",
 		"[::1]:8080",

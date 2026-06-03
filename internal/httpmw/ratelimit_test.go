@@ -24,7 +24,7 @@ func TestRateLimit_BurstExhaustion(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	})
 
-	trusted, err := httpmw.ParseTrustedProxies([]string{"127.0.0.0/8"})
+	trusted, err := httpmw.ParseTrustedProxies([]string{testTrustedCIDR})
 	if err != nil {
 		t.Fatalf("ParseTrustedProxies: %v", err)
 	}

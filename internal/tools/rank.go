@@ -46,15 +46,24 @@ const (
 	masterLeagueCap = 10000
 )
 
+// Canonical league-name strings used as pvpoke gamemaster keys and as
+// the LeagueCP / standardLeagues lookup keys.
+const (
+	leagueLittle = "little"
+	leagueGreat  = "great"
+	leagueUltra  = "ultra"
+	leagueMaster = "master"
+)
+
 // LeagueCP maps league names to their default CP caps. Exposed so
 // callers (the cobra CLI, benchmark harness) can render the same table.
 //
 //nolint:gochecknoglobals // domain-constant lookup table
 var LeagueCP = map[string]int{
-	"little": littleLeagueCap,
-	"great":  greatLeagueCap,
-	"ultra":  ultraLeagueCap,
-	"master": masterLeagueCap,
+	leagueLittle: littleLeagueCap,
+	leagueGreat:  greatLeagueCap,
+	leagueUltra:  ultraLeagueCap,
+	leagueMaster: masterLeagueCap,
 }
 
 // leagueSpec pairs a league's display name with its CP cap. Shared
@@ -71,10 +80,10 @@ type leagueSpec struct {
 //
 //nolint:gochecknoglobals // ordered domain table, no reassignment
 var standardLeagues = []leagueSpec{
-	{"little", littleLeagueCap},
-	{"great", greatLeagueCap},
-	{"ultra", ultraLeagueCap},
-	{"master", masterLeagueCap},
+	{leagueLittle, littleLeagueCap},
+	{leagueGreat, greatLeagueCap},
+	{leagueUltra, ultraLeagueCap},
+	{leagueMaster, masterLeagueCap},
 }
 
 // RankParams is the JSON input contract for the pvp_rank tool. Shadow

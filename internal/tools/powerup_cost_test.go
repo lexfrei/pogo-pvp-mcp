@@ -279,7 +279,7 @@ func TestPowerupCost_NoteExplainsCandyOmission(t *testing.T) {
 		t.Fatalf("handler: %v", err)
 	}
 
-	if !strings.Contains(strings.ToLower(result.Note), "candy") {
+	if !strings.Contains(strings.ToLower(result.Note), fieldCandy) {
 		t.Errorf("Note missing candy disclaimer; got %q", result.Note)
 	}
 }
@@ -316,10 +316,10 @@ func TestPowerupCost_JSONShape(t *testing.T) {
 	}
 
 	wantKeys := []string{
-		"from_level", "to_level", "steps",
-		"stardust_cost", "baseline_stardust_cost",
-		"cost_multiplier", "stardust_multiplier",
-		"note",
+		fieldFromLevel, fieldToLevel, fieldSteps,
+		fieldStardustCost, fieldBaselineStardust,
+		fieldCostMultiplier, fieldStardustMultiplier,
+		fieldNote,
 	}
 
 	gotKeys := make([]string, 0, len(decoded))
@@ -384,7 +384,7 @@ func TestPowerupCost_DescriptionSanity(t *testing.T) {
 
 	descLower := strings.ToLower(desc)
 
-	wantFragments := []string{"l1-l50", "xl", "candy", "shadow", "purified", "lucky"}
+	wantFragments := []string{"l1-l50", "xl", fieldCandy, "shadow", "purified", "lucky"}
 	for _, frag := range wantFragments {
 		if !strings.Contains(descLower, frag) {
 			t.Errorf("description missing fragment %q; got %q", frag, desc)
@@ -706,7 +706,7 @@ func TestPowerupCost_NoteAccurate(t *testing.T) {
 		}
 	}
 
-	requiredLower := []string{"candy", "self-consistent"}
+	requiredLower := []string{fieldCandy, "self-consistent"}
 
 	noteLower := strings.ToLower(result.Note)
 	for _, r := range requiredLower {
@@ -748,11 +748,11 @@ func TestPowerupCost_JSONShapeXLEra(t *testing.T) {
 	}
 
 	wantKeys := []string{
-		"from_level", "to_level", "steps",
-		"stardust_cost", "baseline_stardust_cost",
-		"cost_multiplier", "stardust_multiplier",
+		fieldFromLevel, fieldToLevel, fieldSteps,
+		fieldStardustCost, fieldBaselineStardust,
+		fieldCostMultiplier, fieldStardustMultiplier,
 		"crosses_xl_boundary", "xl_steps_included",
-		"note",
+		fieldNote,
 	}
 
 	gotKeys := make([]string, 0, len(decoded))

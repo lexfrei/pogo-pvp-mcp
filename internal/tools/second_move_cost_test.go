@@ -302,7 +302,7 @@ func TestSecondMoveCost_MissingBuddyDistance(t *testing.T) {
 	handler := tool.Handler()
 
 	_, result, err := handler(t.Context(), nil, tools.SecondMoveCostParams{
-		Species: "ditto",
+		Species: speciesDitto,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -545,7 +545,7 @@ func TestSecondMoveCost_UnknownSpecies(t *testing.T) {
 	tool := newSecondMoveCostTool(t)
 	handler := tool.Handler()
 
-	_, _, err := handler(t.Context(), nil, tools.SecondMoveCostParams{Species: "missingno"})
+	_, _, err := handler(t.Context(), nil, tools.SecondMoveCostParams{Species: speciesMissingno})
 	if !errors.Is(err, tools.ErrUnknownSpecies) {
 		t.Errorf("error = %v, want wrapping ErrUnknownSpecies", err)
 	}
@@ -569,7 +569,7 @@ func TestSecondMoveCost_GamemasterNotLoaded(t *testing.T) {
 	t.Parallel()
 
 	gmMgr, err := gamemaster.NewManager(config.GamemasterConfig{
-		Source:    "http://127.0.0.1:1",
+		Source:    urlLoopback,
 		LocalPath: filepath.Join(t.TempDir(), "gm.json"),
 	})
 	if err != nil {
