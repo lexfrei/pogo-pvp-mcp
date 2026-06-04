@@ -22,7 +22,7 @@
 # Image digest deliberately omitted while we're not yet cutting
 # releases; renovate/dependabot will pin once the first ghcr.io tag
 # ships. 1.26.2 matches the go.mod toolchain floor.
-FROM docker.io/library/golang:1.26.2-alpine AS builder
+FROM docker.io/library/golang:1.26.4-alpine AS builder
 
 ARG VERSION=development
 ARG REVISION=unknown
