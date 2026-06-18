@@ -1,4 +1,4 @@
-# syntax=docker/dockerfile:1.24
+# syntax=docker/dockerfile:1.25
 #
 # Multi-stage build for pogo-pvp-mcp. The final image is a scratch
 # container with a non-root user, CA certs for the upstream pvpoke
