@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 
@@ -149,11 +150,10 @@ func TestMCPHTTPHandler_Phase2MiddlewareLogsEveryCall(t *testing.T) {
 
 	got := buf.String()
 
-	// initialize call + tools/call pvp_rank — both must surface
-	// through the Logging middleware attached to the same server
-	// that NewMCPHTTPHandler dispatches to.
+	// handshake + tools/call pvp_rank — both must surface through the Logging
+	// middleware attached to the same server that NewMCPHTTPHandler dispatches
+	// to.
 	wants := []string{
-		"method=initialize",
 		"tool=pvp_rank",
 		"duration_ms=",
 	}
@@ -162,6 +162,17 @@ func TestMCPHTTPHandler_Phase2MiddlewareLogsEveryCall(t *testing.T) {
 		if !strings.Contains(got, want) {
 			t.Errorf("server log missing %q; full log:\n%s", want, got)
 		}
+	}
+
+	// The handshake method is named by the protocol the two sides settle on, so
+	// pinning one name pins a protocol version. SEP-2575 removed the
+	// initialize/initialized exchange in 2026-07-28 and put server/discover in
+	// its place, with initialize kept as the fallback for older peers. What this
+	// test is actually about is that the handshake gets logged at all, so it
+	// accepts whichever one ran.
+	handshakes := []string{"method=server/discover", "method=initialize"}
+	if !slices.ContainsFunc(handshakes, func(m string) bool { return strings.Contains(got, m) }) {
+		t.Errorf("server log missing a handshake method %v; full log:\n%s", handshakes, got)
 	}
 }
 
